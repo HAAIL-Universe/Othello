@@ -62,20 +62,21 @@ def get_runtime_config_snapshot():
     }
     return snapshot
 
-# Minimal auth endpoints
-def _debug_config_allowed():
-    # Only allow if authed session AND DEBUG_CONFIG=1
-    if not session.get("authed"):
-        return False
-    return os.environ.get("DEBUG_CONFIG") == "1"
 
+# Debug config endpoint registration (to avoid import-order issues)
+def register_debug_routes(app):
+    from flask import session, jsonify, request
+    def _debug_config_allowed():
+        # Only allow if authed session AND DEBUG_CONFIG=1
+        if not session.get("authed"):
+            return False
+        return os.environ.get("DEBUG_CONFIG") == "1"
 
-# --- Debug config endpoint ---
-@app.route("/api/debug/config", methods=["GET"])
-def debug_config():
-    if not _debug_config_allowed():
-        return ("Not found", 404)
-    return jsonify(get_runtime_config_snapshot())
+    @app.route("/api/debug/config", methods=["GET"])
+    def debug_config():
+        if not _debug_config_allowed():
+            return ("Not found", 404)
+        return jsonify(get_runtime_config_snapshot())
 
 import logging
 import os
@@ -291,6 +292,7 @@ def parse_goal_selection_request(text: str) -> Optional[int]:
 
 
 
+
 app = Flask(__name__)
 CORS(app)  # Allow requests from frontend
 # Harden SECRET_KEY handling for production
@@ -300,6 +302,9 @@ if not secret:
         logging.warning("[API] WARNING: SECRET_KEY is not set in environment! Using insecure default. Set SECRET_KEY in Render environment variables.")
     secret = "dev-secret-key"
 app.config["SECRET_KEY"] = secret
+
+# Register debug routes after app/session setup
+register_debug_routes(app)
 
 
 # Minimal auth config (compat bridge)
