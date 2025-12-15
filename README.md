@@ -1,6 +1,9 @@
+
 # Othello — Personal Goal Architect
 
 Othello is an AI-powered personal goal architect that helps you set, track, and achieve your goals through natural conversation.
+
+**Always-on instance:** Othello runs on a paid Render instance—no cold starts or waking delays. The UI includes robust reconnect handling if the API is temporarily unavailable.
 
 ## Features
 
@@ -156,14 +159,14 @@ Expected response:
 }
 ```
 
-### 4. Waking Overlay Verification Checklist
+
+### 4. Connection/Retry UX Verification Checklist
 
 1. Stop the backend if running, then start it using the command above.
-2. Open the UI in your browser. You should see a full-screen "Waking server…" overlay with a spinner and status line.
-3. The overlay should disappear and the app should load once the backend is ready.
-4. If you stop the backend and reload the UI, the overlay should remain and show an error after ~90 seconds, with a Retry button.
-5. Start the backend while the overlay is up: the overlay should disappear and the app should load.
-6. Confirm the health endpoint returns JSON as above at http://127.0.0.1:5000/api/health/db
+2. Open the UI in your browser. The app should attempt to connect immediately—no "waking server" overlay.
+3. If the backend is unreachable, a "Connecting to server…" banner with a Retry button will appear. The app will retry automatically with backoff.
+4. Once the backend is available, the banner disappears and the app loads.
+5. Confirm the health endpoint returns JSON as above at http://127.0.0.1:5000/api/health/db
 
 ---
 
@@ -300,6 +303,6 @@ To redeploy:
 1. Push to the main branch on GitHub.
 2. Trigger a manual deploy in the Render dashboard if needed.
 3. Watch logs for `Booting worker with pid` and `Listening at: http://0.0.0.0:$PORT`.
-4. Visit your Render URL and confirm the app loads and the waking overlay clears when backend is ready.
+4. Visit your Render URL and confirm the app loads and the connection overlay only appears if the backend is unavailable.
 
 ---

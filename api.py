@@ -326,10 +326,11 @@ def require_auth(f):
         return f(*args, **kwargs)
     return decorated
 
-# Fast, LLM-free health endpoint
+
+# Always-on health endpoint for connection checks (does not check DB)
 @app.route("/api/health", methods=["GET"])
 def health_check():
-    return jsonify({"status": "ok"})
+    return jsonify({"ok": True})
 
 # Minimal auth endpoints
 @app.route("/api/auth/login", methods=["POST"])

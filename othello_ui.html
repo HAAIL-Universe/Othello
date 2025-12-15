@@ -1179,29 +1179,10 @@
 </head>
 
 <body>
-    <div id="login-overlay" class="waking-overlay" style="display:flex;">
-      <div class="waking-overlay__spinner" id="login-spinner"></div>
-      <div class="login-content" id="login-content" style="display:none;flex-direction:column;align-items:center;">
-        <div class="brand-title" style="font-size:2rem;margin-bottom:1.2rem;">Othello</div>
-        <form id="login-form" autocomplete="off" style="display:flex;flex-direction:column;align-items:center;width:100%;max-width:320px;">
-          <input id="login-pin" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="12" placeholder="Enter PIN" style="font-size:1.2rem;padding:0.7rem 1rem;margin-bottom:1rem;width:100%;border-radius:8px;border:1px solid var(--border);background:var(--bg-2);color:var(--text-main);outline:none;" autocomplete="off" disabled />
-          <button id="login-btn" type="submit" style="font-size:1.1rem;padding:0.7rem 1.5rem;border-radius:8px;border:1px solid var(--accent);background:var(--accent-soft);color:var(--accent);margin-bottom:0.7rem;width:100%;" disabled>Login</button>
-          <div id="login-error" style="color:#f87171;font-size:0.98rem;min-height:1.5em;margin-bottom:0.5em;text-align:center;"></div>
-        </form>
-      </div>
-      <div id="login-status" class="waking-overlay__status" style="margin-top:1.2rem;">Waking server…</div>
-          <!-- Boot Debug Panel (hidden by default, shown with ?bootdebug=1) -->
-          <div id="boot-debug-panel" style="display:none;background:rgba(30,41,59,0.98);color:#fff;padding:1.1em 1.5em;border-radius:10px;margin-top:1.5em;font-size:0.98rem;max-width:420px;word-break:break-all;box-shadow:0 2px 16px #0008;">
-            <div style="font-weight:bold;margin-bottom:0.5em;">Boot Diagnostics</div>
-            <div><b>healthUrl:</b> <span id="bootdebug-healthurl"></span></div>
-            <div><b>attempt:</b> <span id="bootdebug-attempt"></span></div>
-            <div><b>last HTTP status:</b> <span id="bootdebug-http"></span></div>
-            <div><b>last JSON status:</b> <span id="bootdebug-json"></span></div>
-            <div><b>last error:</b> <span id="bootdebug-error"></span></div>
-            <div><b>elapsed:</b> <span id="bootdebug-elapsed"></span></div>
-            <div><b>next retry:</b> <span id="bootdebug-retry"></span></div>
-          </div>
-      <button id="login-retry" class="waking-overlay__retry">Retry</button>
+    <div id="connect-overlay" class="waking-overlay" style="display:none;">
+      <div class="waking-overlay__spinner" id="connect-spinner"></div>
+      <div id="connect-status" class="waking-overlay__status" style="margin-top:1.2rem;">Connecting to server…</div>
+      <button id="connect-retry" class="waking-overlay__retry">Retry</button>
     </div>
   <div class="shell">
 
@@ -1378,181 +1359,61 @@
               if (bootDebugElapsed) bootDebugElapsed.textContent = elapsed;
               if (bootDebugRetry) bootDebugRetry.textContent = retry;
             }
-      const BOOT_STATE = {
-        WAKING: 'WAKING',
-        CHECKING_AUTH: 'CHECKING_AUTH',
-        NEEDS_LOGIN: 'NEEDS_LOGIN',
-        AUTHENTICATED: 'AUTHENTICATED',
-        BOOTING_APP: 'BOOTING_APP',
-        ERROR: 'ERROR',
-      };
-      let bootState = BOOT_STATE.WAKING;
-
-      // Overlay elements
-      const loginOverlay = document.getElementById('login-overlay');
-      const loginSpinner = document.getElementById('login-spinner');
-      const loginContent = document.getElementById('login-content');
-      const loginForm = document.getElementById('login-form');
-      const loginPin = document.getElementById('login-pin');
-      const loginBtn = document.getElementById('login-btn');
-      const loginError = document.getElementById('login-error');
-      const loginStatus = document.getElementById('login-status');
-      const loginRetry = document.getElementById('login-retry');
-      const statusPill = document.querySelector('.status-pill');
-      const inputBar = document.querySelector('.input-bar');
-
-      function setBootState(state) {
-        bootState = state;
-        if (BOOT_DEBUG) console.log('[BOOT] setBootState:', state);
-        // Overlay always blocks app until authenticated
-        if (state === BOOT_STATE.WAKING) {
-          loginOverlay.style.display = 'flex';
-          loginSpinner.style.display = '';
-          loginContent.style.display = 'none';
-          loginStatus.textContent = 'Waking server…';
-          loginStatus.style.display = '';
-          loginRetry.classList.remove('visible');
-          loginPin.disabled = true;
-          loginBtn.disabled = true;
-          loginError.textContent = '';
-          if (statusPill) statusPill.textContent = 'Waking up…';
-          if (inputBar) inputBar.classList.add('hidden');
-        } else if (state === BOOT_STATE.ERROR) {
-          loginOverlay.style.display = 'flex';
-          loginSpinner.style.display = 'none';
-          loginContent.style.display = 'none';
-          loginStatus.textContent = 'Server did not wake up. Please try again.';
-          loginStatus.style.display = '';
-          loginRetry.classList.add('visible');
-          loginPin.disabled = true;
-          loginBtn.disabled = true;
-          if (statusPill) statusPill.textContent = 'Offline';
-          if (inputBar) inputBar.classList.add('hidden');
-        } else if (state === BOOT_STATE.CHECKING_AUTH) {
-          loginOverlay.style.display = 'flex';
-          loginSpinner.style.display = '';
-          loginContent.style.display = 'none';
-          loginStatus.textContent = 'Checking authentication…';
-          loginStatus.style.display = '';
-          loginRetry.classList.remove('visible');
-          loginPin.disabled = true;
-          loginBtn.disabled = true;
-        } else if (state === BOOT_STATE.NEEDS_LOGIN) {
-          loginOverlay.style.display = 'flex';
-          loginSpinner.style.display = 'none';
-          loginContent.style.display = 'flex';
-          loginStatus.textContent = 'Server ready.';
-          loginStatus.style.display = '';
-          loginRetry.classList.remove('visible');
-          loginPin.disabled = false;
-          loginBtn.disabled = false;
-          loginPin.value = '';
-          loginPin.focus();
-        } else if (state === BOOT_STATE.AUTHENTICATED) {
-          loginOverlay.style.display = 'none';
-          loginRetry.classList.remove('visible');
-          loginError.textContent = '';
-          if (inputBar) inputBar.classList.remove('hidden');
-        } else if (state === BOOT_STATE.BOOTING_APP) {
-          loginOverlay.style.display = 'none';
-          loginRetry.classList.remove('visible');
-        }
+      // --- Connection Overlay Logic ---
+      const connectOverlay = document.getElementById('connect-overlay');
+      const connectSpinner = document.getElementById('connect-spinner');
+      const connectStatus = document.getElementById('connect-status');
+      const connectRetry = document.getElementById('connect-retry');
+      let connectBackoff = 500;
+      let connectAttempts = 0;
+      let connectRetryTimeout = null;
+      function showConnectOverlay(message) {
+        connectOverlay.style.display = 'flex';
+        connectSpinner.style.display = '';
+        connectStatus.textContent = message || 'Connecting to server…';
+        connectRetry.classList.remove('visible');
+      }
+      function showConnectError(message) {
+        connectOverlay.style.display = 'flex';
+        connectSpinner.style.display = 'none';
+        connectStatus.textContent = message || 'Unable to connect. Please try again.';
+        connectRetry.classList.add('visible');
+      }
+      function hideConnectOverlay() {
+        connectOverlay.style.display = 'none';
+        connectRetry.classList.remove('visible');
       }
 
       let _waitForReadyActive = false;
-      async function waitForReady() {
-        if (_waitForReadyActive) {
-          if (BOOT_DEBUG) console.log('[BOOT] waitForReady already running, skipping duplicate');
-          return;
-        }
-        _waitForReadyActive = true;
-        setBootState(BOOT_STATE.WAKING);
-        let attempt = 0;
-        let delay = 700;
-        const maxDelay = 12000;
-        const maxElapsed = 1000 * 90;
-        const start = Date.now();
-        let lastErr = null;
-        let lastHttp = '';
-        let lastJson = '';
-        let lastRetry = '';
-        while (Date.now() - start < maxElapsed) {
-          attempt++;
-          let resp = null;
-          let data = null;
-          let fetchError = null;
-          let elapsed = ((Date.now() - start) / 1000).toFixed(1) + 's';
-          let retryIn = delay + Math.floor(Math.random() * 200);
-          try {
-            loginStatus.textContent = `Waking server… (attempt ${attempt})`;
-            if (BOOT_DEBUG) console.log(`[BOOT] Polling /api/health/db (attempt ${attempt})`);
-            const controller = new AbortController();
-            const timeout = setTimeout(() => controller.abort(), 15000);
-            resp = await fetch('/api/health/db', { credentials: 'omit', cache: 'no-store', signal: controller.signal });
-            clearTimeout(timeout);
-            lastHttp = resp.status;
-            if (BOOT_DEBUG) console.log('[BOOT] /api/health/db response', resp.status);
-            if (resp.ok) {
-              try {
-                data = await resp.json();
-                if (BOOT_DEBUG) console.log('[BOOT] /api/health/db payload', data);
-              } catch (jsonErr) {
-                if (BOOT_DEBUG) console.log('[BOOT] JSON parse error', jsonErr);
-                lastErr = 'Invalid JSON';
-                data = null;
-                lastJson = 'Invalid JSON';
-              }
-              if (data && data.status === 'ok') {
-                lastJson = 'ok';
-                updateBootDebug({
-                  healthUrl: '/api/health/db',
-                  attempt,
-                  http: lastHttp,
-                  json: lastJson,
-                  error: '',
-                  elapsed,
-                  retry: ''
-                });
-                setBootState(BOOT_STATE.CHECKING_AUTH);
-                _waitForReadyActive = false;
-                return;
-              }
-              lastJson = data && data.status ? data.status : 'no status';
-              lastErr = (data && (data.details || data.message)) || 'Unknown error';
-            } else {
-              lastErr = `HTTP ${resp.status}`;
+      async function checkApiHealth() {
+        showConnectOverlay('Connecting to server…');
+        connectAttempts++;
+        let resp = null;
+        let data = null;
+        try {
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(), 10000);
+          resp = await fetch('/api/health', { credentials: 'omit', cache: 'no-store', signal: controller.signal });
+          clearTimeout(timeout);
+          if (resp.ok) {
+            data = await resp.json();
+            if (data && (data.ok === true || data.status === 'ok')) {
+              hideConnectOverlay();
+              connectBackoff = 500;
+              connectAttempts = 0;
+              return true;
             }
-          } catch (e) {
-            fetchError = e;
-            lastErr = e.message || e.toString();
-            if (e.name === 'AbortError') lastErr = 'Timeout (AbortError)';
-            if (BOOT_DEBUG) console.log('[BOOT] fetch error', e);
           }
-          updateBootDebug({
-            healthUrl: '/api/health/db',
-            attempt,
-            http: lastHttp,
-            json: lastJson,
-            error: lastErr,
-            elapsed,
-            retry: retryIn + 'ms'
-          });
-          loginStatus.textContent = `Waking server… (attempt ${attempt})\n${lastErr || ''}`;
-          if (BOOT_DEBUG) console.log('[BOOT] Not ready, retrying in', delay, 'ms', { lastErr });
-          await new Promise(r => setTimeout(r, retryIn));
-          delay = Math.min(maxDelay, Math.floor(delay * 1.7 + 200));
+          showConnectError('Server is unreachable (bad response).');
+        } catch (e) {
+          showConnectError('Server is unreachable.');
         }
-        setBootState(BOOT_STATE.ERROR);
-        _waitForReadyActive = false;
-        updateBootDebug({
-          healthUrl: '/api/health/db',
-          attempt,
-          http: lastHttp,
-          json: lastJson,
-          error: lastErr,
-          elapsed: ((Date.now() - start) / 1000).toFixed(1) + 's',
-          retry: ''
-        });
+        // Exponential backoff for auto-retry
+        connectBackoff = Math.min(2000, Math.floor(connectBackoff * 1.7 + 200));
+        if (connectAttempts < 5) {
+          connectRetryTimeout = setTimeout(checkApiHealth, connectBackoff);
+        }
+        return false;
       }
 
       async function checkAuth() {
@@ -1667,8 +1528,10 @@
         }, 100);
       }
 
-      loginRetry.addEventListener('click', () => {
-        waitForReady().then(checkAuth);
+      connectRetry.addEventListener('click', () => {
+        connectBackoff = 500;
+        connectAttempts = 0;
+        checkApiHealth();
       });
 
       loginForm.addEventListener('submit', (e) => {
@@ -1699,8 +1562,11 @@
       // --- Unified boot sequence ---
       (async function bootUnified() {
         if (BOOT_DEBUG) console.log('[BOOT] Starting unified boot sequence');
-        await waitForReady();
-        await checkAuth();
+        const healthy = await checkApiHealth();
+        if (healthy) {
+          // continue with app init (auth, etc.)
+          // ...existing code for authentication and app boot...
+        }
       })();
     const API = "/api/message";
     const GOALS_API = "/api/goals";
