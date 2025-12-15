@@ -1,0 +1,2582 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Othello — Personal Goal Architect</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+
+  <style>
+    :root {
+      --bg-1: #020617;
+      --bg-2: #0b1120;
+      --card-bg: rgba(15, 23, 42, 0.85);
+      --border: rgba(148, 163, 184, 0.25);
+      --text-main: #e5e7eb;
+      --text-soft: #9ca3af;
+      --accent: #7dd3fc;
+      --accent-soft: rgba(125, 211, 252, 0.15);
+      --glow: 0 0 22px rgba(125, 211, 252, 0.5);
+      
+      /* Safe area insets for notched devices */
+      --safe-top: env(safe-area-inset-top);
+      --safe-bottom: env(safe-area-inset-bottom);
+      --safe-left: env(safe-area-inset-left);
+      --safe-right: env(safe-area-inset-right);
+      
+      /* Mobile-first spacing */
+      --input-height: 60px;
+      --header-height: 56px;
+      --tab-bar-height: 50px;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    html {
+      height: 100%;
+      overflow: hidden;
+    }
+
+    body {
+      background: radial-gradient(circle at 20% 0%, var(--bg-1) 0, var(--bg-2) 70%);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+      color: var(--text-main);
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      position: fixed;
+      width: 100%;
+      top: 0;
+      left: 0;
+    }
+
+    .shell {
+      width: 100%;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      background: rgba(2, 6, 23, 0.85);
+      overflow: hidden;
+    }
+
+    /* Header */
+    header {
+      padding: max(var(--safe-top), 0.75rem) var(--safe-right) 0.75rem var(--safe-left);
+      border-bottom: 1px solid var(--border);
+      background: linear-gradient(to right, var(--bg-1), var(--bg-1), var(--bg-2));
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-shrink: 0;
+      min-height: var(--header-height);
+    }
+
+    .brand {
+      display: flex;
+      flex-direction: column;
+      gap: 0.15rem;
+    }
+
+    .brand-row {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .brand-title {
+      font-size: 1.1rem;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+    }
+
+    .brand-subtitle {
+      font-size: 0.7rem;
+      color: var(--text-soft);
+      letter-spacing: 0.02em;
+    }
+
+    .status-pill {
+      padding: 0.45rem 0.75rem;
+      border-radius: 999px;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      background: var(--accent-soft);
+      border: 1px solid var(--accent);
+      font-size: 0.75rem;
+      color: var(--accent);
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 999px;
+      background: #22c55e;
+      box-shadow: 0 0 10px #22c55e;
+    }
+
+    /* Mode switcher */
+    .mode-switch {
+      position: relative;
+    }
+
+    .mode-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      padding: 0.35rem 0.65rem;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: rgba(148, 163, 184, 0.08);
+      color: var(--text-main);
+      font-size: 0.8rem;
+      cursor: pointer;
+      transition: border-color 0.2s ease, background 0.2s ease;
+    }
+
+    .mode-pill:hover {
+      border-color: var(--accent);
+      background: rgba(148, 163, 184, 0.12);
+    }
+
+    .mode-pill .chevron {
+      font-size: 0.7rem;
+      color: var(--text-soft);
+    }
+
+    .mode-dropdown {
+      position: absolute;
+      top: calc(100% + 0.4rem);
+      left: 0;
+      min-width: 190px;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
+      padding: 0.35rem 0.25rem;
+      display: none;
+      z-index: 20;
+    }
+
+    .mode-dropdown.open {
+      display: block;
+    }
+
+    .mode-option {
+      width: 100%;
+      border: none;
+      background: transparent;
+      color: var(--text-main);
+      padding: 0.55rem 0.75rem;
+      text-align: left;
+      border-radius: 8px;
+      font-size: 0.85rem;
+      cursor: pointer;
+      transition: background 0.15s ease, color 0.15s ease;
+    }
+
+    .mode-option:hover,
+    .mode-option.active {
+      background: rgba(125, 211, 252, 0.12);
+      color: var(--accent);
+    }
+
+    .placeholder-panel {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 2rem;
+      color: var(--text-soft);
+    }
+
+    .placeholder-card {
+      border: 1px dashed var(--border);
+      border-radius: 14px;
+      padding: 1.5rem;
+      background: rgba(15, 23, 42, 0.6);
+      max-width: 520px;
+      width: 100%;
+    }
+
+    .placeholder-title {
+      font-size: 1.1rem;
+      color: var(--text-main);
+      margin-bottom: 0.5rem;
+    }
+
+    .placeholder-text {
+      font-size: 0.95rem;
+      line-height: 1.5;
+      color: var(--text-soft);
+    }
+
+    /* Today planner view */
+    .planner-shell {
+      padding: 1.25rem;
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+    }
+
+    .planner-card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 1rem;
+      padding: 1rem 1.25rem;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+    }
+
+    .planner-card__header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 0.5rem;
+      margin-bottom: 0.75rem;
+    }
+
+    .planner-headline {
+      font-size: 1.1rem;
+      font-weight: 600;
+      color: var(--text-main);
+    }
+
+    .planner-subline {
+      font-size: 0.9rem;
+      color: var(--text-soft);
+      margin-top: 0.35rem;
+    }
+
+    .planner-section__title {
+      font-size: 0.95rem;
+      font-weight: 600;
+      color: var(--text-main);
+      letter-spacing: 0.02em;
+      text-transform: uppercase;
+    }
+
+    .planner-section__count {
+      font-size: 0.8rem;
+      color: var(--text-soft);
+    }
+
+    .planner-blocks {
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+
+    .planner-block {
+      border: 1px solid var(--border);
+      border-radius: 0.9rem;
+      padding: 0.85rem 1rem;
+      background: rgba(15, 23, 42, 0.7);
+    }
+
+    .planner-block__header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 1rem;
+    }
+
+    .planner-block__title {
+      color: var(--text-main);
+      font-size: 1rem;
+      font-weight: 600;
+      line-height: 1.4;
+    }
+
+    .planner-block__meta {
+      color: var(--text-soft);
+      font-size: 0.85rem;
+      margin-top: 0.25rem;
+    }
+
+    .planner-steps {
+      display: flex;
+      flex-direction: column;
+      gap: 0.35rem;
+      margin-top: 0.65rem;
+    }
+
+    .planner-step {
+      display: flex;
+      justify-content: space-between;
+      gap: 0.75rem;
+      padding: 0.65rem 0.75rem;
+      border-radius: 0.65rem;
+      background: rgba(148, 163, 184, 0.06);
+      border: 1px solid rgba(148, 163, 184, 0.15);
+    }
+
+    .planner-step__label {
+      color: var(--text-main);
+      font-size: 0.92rem;
+      line-height: 1.4;
+    }
+
+    .planner-step__meta {
+      color: var(--text-soft);
+      font-size: 0.8rem;
+      margin-top: 0.25rem;
+    }
+
+    .planner-task {
+      display: flex;
+      justify-content: space-between;
+      gap: 0.75rem;
+      padding: 0.65rem 0.75rem;
+      border-radius: 0.65rem;
+      background: rgba(148, 163, 184, 0.06);
+      border: 1px solid rgba(148, 163, 184, 0.15);
+    }
+
+    .planner-task__label {
+      color: var(--text-main);
+      font-size: 0.95rem;
+      line-height: 1.4;
+    }
+
+    .planner-task__meta {
+      color: var(--text-soft);
+      font-size: 0.8rem;
+      margin-top: 0.25rem;
+    }
+
+    .planner-status {
+      padding: 0.3rem 0.6rem;
+      border-radius: 999px;
+      font-size: 0.75rem;
+      text-transform: capitalize;
+      border: 1px solid var(--border);
+      color: var(--text-main);
+      white-space: nowrap;
+      align-self: flex-start;
+    }
+
+    .planner-block__right {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+    }
+
+    .planner-actions {
+      display: inline-flex;
+      gap: 0.35rem;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .planner-action-btn {
+      border: 1px solid var(--border);
+      background: rgba(148, 163, 184, 0.08);
+      color: var(--text-main);
+      border-radius: 999px;
+      font-size: 0.75rem;
+      padding: 0.25rem 0.6rem;
+      cursor: pointer;
+      transition: border-color 0.15s ease, background 0.15s ease;
+    }
+
+    .planner-action-btn:hover {
+      border-color: var(--accent);
+      background: rgba(148, 163, 184, 0.14);
+    }
+
+    .planner-empty {
+      color: var(--text-soft);
+      font-size: 0.9rem;
+      padding: 0.5rem 0;
+    }
+
+    .planner-error {
+      color: #fca5a5;
+      font-size: 0.9rem;
+      background: rgba(239, 68, 68, 0.08);
+      border: 1px solid rgba(239, 68, 68, 0.25);
+      padding: 0.75rem 1rem;
+      border-radius: 10px;
+    }
+
+    /* Commitment bar under bot messages */
+    .commitment-bar {
+      margin-top: 0.6rem;
+      display: inline-flex;
+      gap: 0.4rem;
+      align-items: center;
+      flex-wrap: wrap;
+      background: rgba(148, 163, 184, 0.08);
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 0.35rem 0.45rem;
+    }
+
+    .commitment-btn {
+      border: none;
+      background: transparent;
+      color: var(--text-main);
+      font-size: 0.78rem;
+      padding: 0.2rem 0.5rem;
+      border-radius: 999px;
+      cursor: pointer;
+      transition: color 0.15s ease, background 0.15s ease;
+    }
+
+    .commitment-btn:hover {
+      background: rgba(125, 211, 252, 0.12);
+      color: var(--accent);
+    }
+
+    .commitment-status {
+      font-size: 0.75rem;
+      color: var(--text-soft);
+      padding: 0.15rem 0.35rem;
+    }
+
+    /* Tab Navigation */
+    .tab-bar {
+      display: flex;
+      border-bottom: 1px solid var(--border);
+      background: rgba(2, 6, 23, 0.95);
+      flex-shrink: 0;
+      height: var(--tab-bar-height);
+    }
+
+    .tab {
+      flex: 1;
+      border: none;
+      background: transparent;
+      color: var(--text-soft);
+      font-size: 0.9rem;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      position: relative;
+      padding: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .tab:hover {
+      color: var(--text-main);
+      background: rgba(148, 163, 184, 0.05);
+    }
+
+    .tab.active {
+      color: var(--accent);
+      background: var(--accent-soft);
+    }
+
+    .tab-label {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+    }
+
+    .tab-badge {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 18px;
+      height: 18px;
+      padding: 0 6px;
+      border-radius: 999px;
+      background: var(--accent-soft);
+      border: 1px solid var(--accent);
+      color: var(--text-main);
+      font-size: 0.75rem;
+      margin-left: 0.35rem;
+    }
+
+    .tab-badge.hidden {
+      display: none;
+    }
+
+    .tab.active::after {
+      content: '';
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      height: 2px;
+      background: var(--accent);
+      box-shadow: 0 0 8px var(--accent);
+    }
+
+    /* Focus Ribbon */
+    .focus-ribbon {
+      background: linear-gradient(135deg, rgba(99, 102, 241, 0.15), rgba(124, 58, 237, 0.15));
+      border-bottom: 1px solid rgba(99, 102, 241, 0.3);
+      padding: 0.75rem 1rem;
+      display: none;
+      align-items: center;
+      gap: 0.75rem;
+      flex-shrink: 0;
+    }
+
+    .focus-ribbon.visible {
+      display: flex;
+    }
+
+    .focus-ribbon__text {
+      flex: 1;
+      font-size: 0.85rem;
+      color: var(--text-main);
+    }
+
+    .focus-ribbon__label {
+      font-size: 0.7rem;
+      color: var(--text-soft);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 0.2rem;
+    }
+
+    .focus-ribbon__title {
+      font-weight: 500;
+    }
+
+    .focus-ribbon__btn {
+      padding: 0.4rem 0.85rem;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: rgba(15, 23, 42, 0.8);
+      color: var(--text-main);
+      font-size: 0.75rem;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .focus-ribbon__btn:hover {
+      background: rgba(15, 23, 42, 0.95);
+      border-color: var(--accent);
+    }
+
+    /* Main content container */
+    .content-container {
+      flex: 1;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .view {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      display: none;
+      flex-direction: column;
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+    }
+
+    .view.active {
+      display: flex;
+    }
+
+    /* Chat View */
+    #chat-view {
+      padding-bottom: calc(var(--input-height) + max(var(--safe-bottom), 0.5rem));
+    }
+
+    .chat-log {
+      padding: 1.25rem;
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+      flex: 1;
+    }
+
+    .msg-row {
+      display: flex;
+      animation: fadeIn 0.3s ease;
+    }
+
+    .msg-row.user {
+      justify-content: flex-end;
+    }
+
+    .bubble {
+      max-width: 85%;
+      padding: 0.9rem 1.1rem;
+      border-radius: 1.1rem;
+      font-size: 0.95rem;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .msg-row.user .bubble {
+      background: linear-gradient(135deg, #6366f1, #7c3aed);
+      color: white;
+      border-bottom-right-radius: 0.3rem;
+      box-shadow: 0 4px 12px rgba(99, 102, 241, 0.4);
+    }
+
+    .msg-row.bot .bubble {
+      background: var(--card-bg);
+      border: 1px solid rgba(71, 85, 105, 0.5);
+      border-bottom-left-radius: 0.3rem;
+      backdrop-filter: blur(12px);
+    }
+
+    .meta {
+      font-size: 0.7rem;
+      color: var(--text-soft);
+      margin-top: 0.4rem;
+      opacity: 0.8;
+    }
+
+    /* Input bar - STICKY BOTTOM */
+    .input-bar {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      padding: 0.75rem;
+      padding-bottom: calc(0.75rem + var(--safe-bottom));
+      padding-left: calc(0.75rem + var(--safe-left));
+      padding-right: calc(0.75rem + var(--safe-right));
+      background: rgba(2, 6, 23, 0.95);
+      backdrop-filter: blur(20px);
+      border-top: 1px solid var(--border);
+      display: flex;
+      gap: 0.65rem;
+      align-items: center;
+      z-index: 100;
+      box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.3);
+    }
+
+    .input-bar.hidden {
+      display: none;
+    }
+
+    #user-input {
+      flex: 1;
+      border-radius: 24px;
+      border: 1px solid rgba(100, 116, 139, 0.5);
+      background: rgba(15, 23, 42, 0.95);
+      padding: 0.85rem 1.2rem;
+      color: var(--text-main);
+      font-size: 1rem;
+      min-height: 44px;
+      outline: none;
+      transition: border-color 0.2s ease;
+    }
+
+    #user-input:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 2px rgba(125, 211, 252, 0.15);
+    }
+
+    #send {
+      border: none;
+      padding: 0 1.4rem;
+      min-height: 44px;
+      border-radius: 24px;
+      background: linear-gradient(135deg, #22c55e, #4ade80);
+      color: white;
+      font-weight: 600;
+      font-size: 0.9rem;
+      cursor: pointer;
+      box-shadow: 0 4px 14px rgba(34, 197, 94, 0.4);
+      transition: transform 0.1s ease, box-shadow 0.1s ease;
+      flex-shrink: 0;
+    }
+
+    #send:active {
+      transform: scale(0.96);
+      box-shadow: 0 2px 8px rgba(34, 197, 94, 0.5);
+    }
+
+    .mic-btn {
+      border: 1px solid rgba(100, 116, 139, 0.5);
+      background: rgba(15, 23, 42, 0.95);
+      color: var(--text-main);
+      border-radius: 50%;
+      width: 44px;
+      height: 44px;
+      font-size: 1rem;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      transition: box-shadow 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+    }
+
+    .mic-btn.recording {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px rgba(125, 211, 252, 0.25), 0 0 12px rgba(125, 211, 252, 0.55);
+      background: rgba(125, 211, 252, 0.12);
+      color: var(--accent);
+    }
+
+    .mic-btn.error {
+      border-color: #f87171;
+      box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.25);
+      color: #f87171;
+    }
+
+    .cancel-transcript-btn {
+      border: 1px solid var(--border);
+      background: rgba(148, 163, 184, 0.08);
+      color: var(--text-main);
+      border-radius: 999px;
+      padding: 0 0.8rem;
+      height: 44px;
+      font-size: 0.8rem;
+      cursor: pointer;
+      transition: border-color 0.15s ease, background 0.15s ease;
+    }
+
+    .cancel-transcript-btn.hidden {
+      display: none;
+    }
+
+    /* Goals View */
+    #goals-view {
+      padding: 1.25rem;
+      gap: 1rem;
+    }
+
+    .goals-list {
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+    }
+
+    .goal-card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 1rem;
+      padding: 1.2rem;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      backdrop-filter: blur(16px);
+    }
+
+    .goal-card:hover {
+      border-color: var(--accent);
+      transform: translateY(-2px);
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+    }
+
+    .goal-card:active {
+      transform: translateY(0);
+    }
+
+    .goal-card__header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 0.75rem;
+      margin-bottom: 0.75rem;
+    }
+
+    .goal-card__id {
+      font-size: 0.7rem;
+      color: var(--text-soft);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .goal-card__title {
+      font-size: 1rem;
+      font-weight: 600;
+      color: var(--text-main);
+      margin: 0.25rem 0;
+      line-height: 1.4;
+    }
+
+    .goal-card__badge {
+      padding: 0.3rem 0.6rem;
+      border-radius: 999px;
+      background: rgba(34, 197, 94, 0.2);
+      border: 1px solid rgba(34, 197, 94, 0.4);
+      color: #22c55e;
+      font-size: 0.7rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+    }
+
+    .goal-card__meta {
+      font-size: 0.8rem;
+      color: var(--text-soft);
+      margin-top: 0.5rem;
+    }
+
+    .empty-state {
+      text-align: center;
+      padding: 3rem 1.5rem;
+      color: var(--text-soft);
+    }
+
+    .empty-state__icon {
+      font-size: 3rem;
+      margin-bottom: 1rem;
+      opacity: 0.3;
+    }
+
+    .empty-state__text {
+      font-size: 0.95rem;
+      line-height: 1.6;
+    }
+
+    /* Goal Detail View */
+    .goal-detail {
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(2, 6, 23, 0.98);
+      z-index: 200;
+      display: none;
+      flex-direction: column;
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+    }
+
+    .goal-detail.visible {
+      display: flex;
+    }
+
+    .goal-detail__header {
+      padding: 1rem;
+      padding-top: calc(1rem + var(--safe-top));
+      border-bottom: 1px solid var(--border);
+      background: rgba(2, 6, 23, 0.95);
+      backdrop-filter: blur(20px);
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+
+    .goal-detail__header-top {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      margin-bottom: 0.75rem;
+    }
+
+    .back-btn {
+      background: none;
+      border: none;
+      color: var(--accent);
+      font-size: 1.5rem;
+      cursor: pointer;
+      padding: 0.25rem;
+      line-height: 1;
+    }
+
+    .goal-detail__id {
+      font-size: 0.7rem;
+      color: var(--text-soft);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .goal-detail__title {
+      font-size: 1.3rem;
+      font-weight: 700;
+      color: var(--text-main);
+      line-height: 1.3;
+    }
+
+    .goal-detail__content {
+      padding: 1.25rem;
+      display: flex;
+      flex-direction: column;
+      gap: 1.5rem;
+      padding-bottom: 2rem;
+    }
+
+    .detail-section {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 1rem;
+      padding: 1.2rem;
+      backdrop-filter: blur(16px);
+    }
+
+    .detail-section__title {
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.1em;
+      color: var(--text-soft);
+      margin-bottom: 0.75rem;
+      font-weight: 600;
+    }
+
+    .detail-section__body {
+      font-size: 0.9rem;
+      line-height: 1.6;
+      color: var(--text-main);
+    }
+
+    .activity-log {
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+
+    .activity-item {
+      padding: 0.75rem;
+      background: rgba(15, 23, 42, 0.6);
+      border-radius: 0.5rem;
+      border-left: 2px solid var(--accent);
+    }
+
+    .activity-item__role {
+      font-size: 0.7rem;
+      color: var(--text-soft);
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 0.3rem;
+    }
+
+    .activity-item__text {
+      font-size: 0.85rem;
+      color: var(--text-main);
+      line-height: 1.5;
+    }
+
+    .continue-btn {
+      position: sticky;
+      bottom: calc(1rem + var(--safe-bottom));
+      margin: 0 1.25rem 1.25rem;
+      padding: 1rem;
+      border-radius: 24px;
+      border: none;
+      background: linear-gradient(135deg, #6366f1, #7c3aed);
+      color: white;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      box-shadow: 0 8px 24px rgba(99, 102, 241, 0.5);
+      transition: all 0.2s ease;
+    }
+
+    .continue-btn:active {
+      transform: scale(0.98);
+      box-shadow: 0 4px 16px rgba(99, 102, 241, 0.6);
+    }
+
+    /* Insights View */
+    #insights-view {
+      padding: 1.25rem;
+      gap: 1.5rem;
+      overflow-y: auto;
+    }
+
+    .insights-section {
+      margin-bottom: 1rem;
+    }
+
+    .insights-section__header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 0.5rem;
+    }
+
+    .insights-section__title {
+      font-size: 0.95rem;
+      font-weight: 600;
+      color: var(--text-main);
+      letter-spacing: 0.02em;
+    }
+
+    .insights-grid {
+      display: flex;
+      flex-direction: column;
+      gap: 0.65rem;
+    }
+
+    .insight-card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 0.9rem;
+      padding: 0.85rem 1rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.45rem;
+    }
+
+    .insight-card__meta {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 0.8rem;
+      color: var(--text-soft);
+    }
+
+    .insight-card__summary {
+      color: var(--text-main);
+      font-size: 0.95rem;
+      line-height: 1.4;
+    }
+
+    .insight-actions {
+      display: flex;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+    }
+
+    .insight-btn {
+      border: 1px solid var(--border);
+      background: rgba(148, 163, 184, 0.08);
+      color: var(--text-main);
+      border-radius: 12px;
+      font-size: 0.8rem;
+      padding: 0.4rem 0.75rem;
+      cursor: pointer;
+      transition: border-color 0.15s ease, background 0.15s ease;
+    }
+
+    .insight-btn.primary {
+      border-color: var(--accent);
+      background: var(--accent-soft);
+      color: var(--text-main);
+    }
+
+    .insight-btn:hover {
+      border-color: var(--accent);
+    }
+
+    .insights-empty {
+      color: var(--text-soft);
+      font-size: 0.9rem;
+      padding: 1rem 0.5rem;
+      text-align: center;
+    }
+
+    /* Chat View Placeholder */
+    .chat-placeholder {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      text-align: center;
+      font-size: 1rem;
+      color: var(--text-soft);
+      opacity: 0.5;
+      pointer-events: none;
+      user-select: none;
+    }
+
+    .chat-placeholder.hidden {
+      display: none;
+    }
+
+    @keyframes fadeIn {
+      from {
+        opacity: 0;
+        transform: translateY(8px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    /* Tablet and Desktop adjustments */
+    @media (min-width: 768px) {
+      .shell {
+        margin: 1rem auto;
+        max-width: 900px;
+        border-radius: 1rem;
+        border: 1px solid var(--border);
+        box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+        height: calc(100vh - 2rem);
+      }
+
+      .bubble {
+        max-width: 75%;
+      }
+
+      header {
+        padding: 1rem 1.5rem;
+      }
+
+      .input-bar {
+        max-width: 900px;
+        left: 50%;
+        transform: translateX(-50%);
+      }
+    }
+
+    @media (min-width: 1024px) {
+      .shell {
+        max-width: 1100px;
+      }
+
+      .input-bar {
+        max-width: 1100px;
+      }
+    }
+
+  </style>
+</head>
+
+<body>
+  <div class="shell">
+
+    <!-- HEADER -->
+    <header>
+      <div class="brand">
+        <div class="brand-row">
+          <div class="brand-title">Othello</div>
+          <div class="mode-switch">
+            <button class="mode-pill" id="mode-toggle" aria-haspopup="listbox" aria-expanded="false">
+              <span id="current-mode-label">Companion Chat</span>
+              <span class="chevron">▼</span>
+            </button>
+            <div class="mode-dropdown" id="mode-dropdown" role="listbox">
+              <button class="mode-option" data-mode="companion" role="option">Companion Chat</button>
+              <button class="mode-option" data-mode="today" role="option">Today Planner</button>
+              <button class="mode-option" data-mode="routine" role="option">Routine Planner</button>
+            </div>
+          </div>
+        </div>
+        <div class="brand-subtitle" id="mode-subtitle">Personal Goal Architect</div>
+      </div>
+
+      <div class="status-pill">
+        <div class="dot"></div>
+        <span id="status">Online</span>
+      </div>
+    </header>
+
+    <!-- TAB NAVIGATION -->
+    <nav class="tab-bar">
+      <button class="tab active" data-view="chat">Chat</button>
+      <button class="tab" data-view="goals" id="middle-tab">
+        <span class="tab-label">Goals</span>
+        <span class="tab-badge hidden" id="middle-tab-badge"></span>
+      </button>
+      <button class="tab" data-view="insights" id="insights-tab">
+        <span class="tab-label">Insights</span>
+        <span class="tab-badge hidden" id="insights-tab-badge"></span>
+      </button>
+    </nav>
+
+    <!-- FOCUS RIBBON (shown when a goal is active in Chat view) -->
+    <div id="focus-ribbon" class="focus-ribbon">
+      <div class="focus-ribbon__text">
+        <div class="focus-ribbon__label">Current Focus</div>
+        <div class="focus-ribbon__title" id="focus-ribbon-title">No goal selected</div>
+      </div>
+      <button class="focus-ribbon__btn" id="view-focus-btn">View Goal</button>
+    </div>
+
+    <!-- CONTENT CONTAINER -->
+    <div class="content-container">
+
+      <!-- CHAT VIEW -->
+      <div id="chat-view" class="view active">
+        <div id="chat-placeholder" class="chat-placeholder">Start a conversation</div>
+        <div id="chat-log" class="chat-log"></div>
+      </div>
+
+      <!-- TODAY PLANNER PLACEHOLDER -->
+      <div id="today-planner-view" class="view">
+        <div class="planner-shell" id="planner-shell">
+          <div class="planner-card planner-brief" id="planner-brief">
+            <div class="planner-headline" id="planner-headline">Loading...</div>
+            <div class="planner-subline" id="planner-energy"></div>
+          </div>
+          <div id="planner-error" class="planner-error" style="display:none;"></div>
+          <div class="planner-card" id="planner-routines">
+            <div class="planner-card__header">
+              <div class="planner-section__title">Routines</div>
+              <div class="planner-section__count" id="planner-routines-count"></div>
+            </div>
+            <div class="planner-blocks" id="planner-routines-list"></div>
+          </div>
+          <div class="planner-card" id="planner-goals">
+            <div class="planner-card__header">
+              <div class="planner-section__title">Goal Tasks</div>
+              <div class="planner-section__count" id="planner-goals-count"></div>
+            </div>
+            <div class="planner-blocks" id="planner-goals-list"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ROUTINE PLANNER PLACEHOLDER -->
+      <div id="routine-planner-view" class="view">
+        <div class="placeholder-panel">
+          <div class="placeholder-card">
+            <div class="placeholder-title">Routine Planner</div>
+            <div class="placeholder-text">
+              This view will surface adaptive routines and variants. (Placeholder)
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- GOALS VIEW -->
+      <div id="goals-view" class="view">
+        <div id="goals-list" class="goals-list"></div>
+      </div>
+
+      <!-- INSIGHTS VIEW -->
+      <div id="insights-view" class="view">
+        <div id="insights-content">
+          <div id="insights-error" class="insights-empty" style="display:none;">Unable to load insights right now.</div>
+          <div id="insights-empty" class="insights-empty">No pending insights right now.</div>
+          <div id="insights-list" class="insights-grid"></div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- INPUT BAR (only visible in Chat view) -->
+    <div class="input-bar" id="input-bar">
+      <input id="user-input" placeholder="Tell Othello what you're working towards..." />
+      <button id="mic-btn" class="mic-btn" title="Start voice input">🎤</button>
+      <button id="cancel-transcript-btn" class="cancel-transcript-btn hidden" title="Clear transcript">Cancel</button>
+      <button id="send">Send</button>
+    </div>
+
+    <!-- GOAL DETAIL VIEW (overlay) -->
+    <div id="goal-detail" class="goal-detail">
+      <div class="goal-detail__header">
+        <div class="goal-detail__header-top">
+          <button class="back-btn" id="back-from-detail">←</button>
+          <div class="goal-detail__id" id="detail-goal-id">Goal #1</div>
+        </div>
+        <h1 class="goal-detail__title" id="detail-goal-title">Goal Title</h1>
+      </div>
+      <div class="goal-detail__content" id="detail-content">
+        <!-- Dynamic content injected here -->
+      </div>
+      <button class="continue-btn" id="continue-working-btn">Continue working on this goal</button>
+    </div>
+
+  </div>
+
+
+  <!-- JS -->
+  <script>
+    const API = "/api/message";
+    const GOALS_API = "/api/goals";
+    const PLAN_UPDATE_API = "/api/plan/update";
+
+    let recognition = null;
+    let isRecording = false;
+    let sttFullTranscript = "";
+    let sttLastInterim = "";
+    let pendingMicStart = false;
+    let pendingStartTimeout = null;
+
+    // DOM elements
+    const chatLog = document.getElementById("chat-log");
+    const input = document.getElementById("user-input");
+    const sendBtn = document.getElementById("send");
+    const micBtn = document.getElementById("mic-btn");
+    const cancelTranscriptBtn = document.getElementById("cancel-transcript-btn");
+    const statusEl = document.getElementById("status");
+    const inputBar = document.getElementById("input-bar");
+
+    const tabs = document.querySelectorAll(".tab");
+    const middleTab = document.getElementById("middle-tab");
+    const middleTabBadge = document.getElementById("middle-tab-badge");
+    const insightsTabBadge = document.getElementById("insights-tab-badge");
+    const views = document.querySelectorAll(".view");
+    const modeToggle = document.getElementById("mode-toggle");
+    const modeDropdown = document.getElementById("mode-dropdown");
+    const modeOptions = Array.from(document.querySelectorAll(".mode-option"));
+    const modeSubtitle = document.getElementById("mode-subtitle");
+    const modeLabel = document.getElementById("current-mode-label");
+    const plannerHeadline = document.getElementById("planner-headline");
+    const plannerEnergy = document.getElementById("planner-energy");
+    const plannerError = document.getElementById("planner-error");
+    const plannerRoutinesCount = document.getElementById("planner-routines-count");
+    const plannerGoalsCount = document.getElementById("planner-goals-count");
+    const plannerRoutinesList = document.getElementById("planner-routines-list");
+    const plannerGoalsList = document.getElementById("planner-goals-list");
+
+    const focusRibbon = document.getElementById("focus-ribbon");
+    const focusRibbonTitle = document.getElementById("focus-ribbon-title");
+    const viewFocusBtn = document.getElementById("view-focus-btn");
+
+    const goalsList = document.getElementById("goals-list");
+    const goalDetail = document.getElementById("goal-detail");
+    const detailGoalId = document.getElementById("detail-goal-id");
+    const detailGoalTitle = document.getElementById("detail-goal-title");
+    const detailContent = document.getElementById("detail-content");
+    const backFromDetailBtn = document.getElementById("back-from-detail");
+    const continueWorkingBtn = document.getElementById("continue-working-btn");
+    const insightsContent = document.getElementById("insights-content");
+    const insightsList = document.getElementById("insights-list");
+    const insightsEmpty = document.getElementById("insights-empty");
+    const insightsError = document.getElementById("insights-error");
+
+    // App state
+    const othelloState = {
+      currentView: "chat",
+      currentMode: "companion", // companion | today | routine
+      goals: [],
+      activeGoalId: null,
+      currentDetailGoalId: null,
+      goalUpdateCounts: {},
+      currentAgentStatus: null
+    };
+
+    const insightsCounts = {
+      plan_pending: 0,
+      goal_pending: 0,
+      routine_pending: 0,
+      idea_pending: 0,
+      generic_pending: 0,
+    };
+
+    const MODE_LABELS = {
+      companion: "Companion Chat",
+      today: "Today Planner",
+      routine: "Routine Planner",
+    };
+
+    const MODE_SUBTITLES = {
+      companion: "Personal Goal Architect",
+      today: "Daily Plan Engine",
+      routine: "Adaptive Routine Coach",
+    };
+
+    const MODE_TAB_CONFIG = {
+      companion: { label: "Goals", view: "goals" },
+      today: { label: "Today Planner", view: "today-planner" },
+      routine: { label: "Routine Planner", view: "routine-planner" },
+    };
+
+    const MODE_ALLOWED_VIEWS = {
+      companion: ["chat", "goals", "insights"],
+      today: ["chat", "today-planner", "insights"],
+      routine: ["chat", "routine-planner", "insights"],
+    };
+
+    function applyInsightsMeta(meta) {
+      if (!meta) return;
+      const pending = meta.pending_counts || meta.pending || meta;
+      if (pending) {
+        insightsCounts.plan_pending = pending.plan ?? pending.plan_pending ?? insightsCounts.plan_pending;
+        insightsCounts.goal_pending = pending.goal ?? pending.goal_pending ?? insightsCounts.goal_pending;
+        insightsCounts.routine_pending = pending.routine ?? pending.routine_pending ?? insightsCounts.routine_pending;
+        insightsCounts.idea_pending = pending.idea ?? pending.idea_pending ?? insightsCounts.idea_pending;
+        insightsCounts.generic_pending = pending.generic ?? pending.generic_pending ?? insightsCounts.generic_pending;
+      }
+      updateTabBadges();
+    }
+
+    function totalPendingInsights() {
+      return (
+        (insightsCounts.plan_pending || 0) +
+        (insightsCounts.goal_pending || 0) +
+        (insightsCounts.routine_pending || 0) +
+        (insightsCounts.idea_pending || 0) +
+        (insightsCounts.generic_pending || 0)
+      );
+    }
+
+    function updateTabBadges() {
+      const mode = othelloState.currentMode;
+      const badgeMap = {
+        companion: insightsCounts.goal_pending,
+        today: insightsCounts.plan_pending,
+        routine: insightsCounts.routine_pending,
+      };
+      const middleCount = badgeMap[mode] || 0;
+      if (middleTabBadge) {
+        if (middleCount > 0) {
+          middleTabBadge.textContent = middleCount;
+          middleTabBadge.classList.remove("hidden");
+        } else {
+          middleTabBadge.classList.add("hidden");
+        }
+      }
+
+      const total = totalPendingInsights();
+      if (insightsTabBadge) {
+        if (total > 0) {
+          insightsTabBadge.textContent = total;
+          insightsTabBadge.classList.remove("hidden");
+        } else {
+          insightsTabBadge.classList.add("hidden");
+        }
+      }
+    }
+
+    async function refreshInsightsCounts(meta) {
+      if (meta) {
+        applyInsightsMeta(meta);
+        return;
+      }
+      try {
+        const resp = await fetch("/api/insights/summary");
+        if (!resp.ok) return;
+        const data = await resp.json();
+        applyInsightsMeta(data);
+      } catch (err) {
+        console.warn("[Othello UI] failed to refresh insights summary", err);
+      }
+    }
+
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+    function hideTranscriptCancel() {
+      if (cancelTranscriptBtn) {
+        cancelTranscriptBtn.classList.add("hidden");
+      }
+    }
+
+    function showTranscriptCancel() {
+      if (cancelTranscriptBtn) {
+        cancelTranscriptBtn.classList.remove("hidden");
+      }
+    }
+
+    if (!SpeechRecognition) {
+      if (micBtn) {
+        micBtn.disabled = true;
+        micBtn.title = "Speech recognition not supported in this browser.";
+      }
+    } else {
+      recognition = new SpeechRecognition();
+      recognition.continuous = true;
+      recognition.interimResults = true;
+      recognition.lang = "en-GB";
+
+      recognition.onstart = () => {
+        isRecording = true;
+        sttFullTranscript = "";
+        sttLastInterim = "";
+        pendingMicStart = false;
+        hideTranscriptCancel();
+        if (micBtn) {
+          micBtn.classList.remove("error");
+          micBtn.classList.add("recording");
+          micBtn.disabled = false;
+        }
+      };
+
+      recognition.onend = () => {
+        isRecording = false;
+        const finalText = (sttFullTranscript || sttLastInterim || "").trim();
+        input.value = finalText;
+        if (finalText) {
+          showTranscriptCancel();
+        }
+        if (micBtn) {
+          micBtn.classList.remove("recording");
+          micBtn.disabled = false;
+        }
+
+        // If a fresh start was requested, kick it off now after the shutdown finishes.
+        if (pendingMicStart) {
+          pendingMicStart = false;
+          if (pendingStartTimeout) {
+            clearTimeout(pendingStartTimeout);
+            pendingStartTimeout = null;
+          }
+          setTimeout(() => {
+            try {
+              recognition.start();
+            } catch (err) {
+              console.warn("[Othello UI] speech deferred start error:", err);
+            }
+          }, 20);
+        }
+      };
+
+      recognition.onerror = (event) => {
+        console.warn("[Othello UI] speech error:", event.error);
+        isRecording = false;
+        pendingMicStart = false;
+        if (pendingStartTimeout) {
+          clearTimeout(pendingStartTimeout);
+          pendingStartTimeout = null;
+        }
+        if (micBtn) {
+          micBtn.classList.remove("recording");
+          micBtn.classList.add("error");
+          setTimeout(() => micBtn.classList.remove("error"), 1000);
+          micBtn.disabled = false;
+        }
+      };
+
+      recognition.onresult = (event) => {
+        let interimBuffer = "";
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const result = event.results[i];
+          const phrase = (result[0] && result[0].transcript ? result[0].transcript : "").trim();
+          if (!phrase) continue;
+          if (result.isFinal) {
+            sttFullTranscript = sttFullTranscript
+              ? `${sttFullTranscript} ${phrase}`
+              : phrase;
+          } else {
+            interimBuffer = interimBuffer
+              ? `${interimBuffer} ${phrase}`
+              : phrase;
+          }
+        }
+
+        sttLastInterim = interimBuffer;
+        const tickerSource = `${sttFullTranscript} ${interimBuffer}`.trim();
+        if (tickerSource) {
+          const words = tickerSource.split(/\s+/);
+          const snippet = words.slice(-8).join(" ");
+          input.value = snippet;
+        }
+      };
+    }
+
+    // API helpers for Today Planner
+    function formatDateYYYYMMDD(date) {
+      const d = new Date(date.getTime() - (date.getTimezoneOffset() * 60000));
+      return d.toISOString().split("T")[0];
+    }
+
+    function getTomorrowDate() {
+      const d = new Date();
+      d.setDate(d.getDate() + 1);
+      return formatDateYYYYMMDD(d);
+    }
+
+    async function fetchTodayBrief() {
+      const resp = await fetch("/api/today-brief");
+      if (!resp.ok) throw new Error("Failed to load brief");
+      const data = await resp.json();
+      return data.brief || {};
+    }
+
+    async function fetchTodayPlan() {
+      const resp = await fetch(`/api/today-plan?ts=${Date.now()}`, { cache: "no-store" });
+      if (!resp.ok) throw new Error("Failed to load plan");
+      const data = await resp.json();
+      return data.plan || {};
+    }
+
+    function renderTodayBrief(plan, brief) {
+      const sections = (plan && plan.sections) || {};
+      const routines = sections.routines || [];
+      const goalTasks = sections.goal_tasks || [];
+
+      const headline = brief && brief.headline ? brief.headline : (plan && plan.date ? `Plan for ${plan.date}` : "Today Planner");
+
+      const routineBits = routines.length ? `${routines.length} routine${routines.length === 1 ? "" : "s"}` : "No routines";
+      const goalBits = goalTasks.length ? `${goalTasks.length} goal task${goalTasks.length === 1 ? "" : "s"}` : "No goal tasks";
+
+      const capacity = (plan && plan.capacity_model) || {};
+      const capacityBits = ["heavy", "medium", "light"]
+        .map(k => (capacity[k] ? `${capacity[k]} ${k}` : ""))
+        .filter(Boolean)
+        .join(", ");
+
+      const energyLoad = brief && brief.energy_load ? brief.energy_load : "";
+      const backlog = brief && brief.backlog ? brief.backlog : "";
+
+      const notes = [goalBits, routineBits, capacityBits, energyLoad, backlog]
+        .filter(Boolean)
+        .join(" • ");
+
+      plannerHeadline.textContent = headline;
+      plannerEnergy.textContent = notes;
+
+      console.log("[Today Planner] renderTodayBrief", {
+        goalTasks: goalTasks.length,
+        routines: routines.length,
+        capacity,
+        headline: plannerHeadline.textContent,
+        notes,
+      });
+    }
+
+    function renderPlannerError(message) {
+      plannerError.style.display = "block";
+      plannerError.textContent = message;
+    }
+
+    function clearPlannerError() {
+      plannerError.style.display = "none";
+      plannerError.textContent = "";
+    }
+
+    function renderTodayBrief(brief) {
+      plannerHeadline.textContent = brief.headline || "Today Planner";
+      const notes = [brief.energy_load, brief.backlog].filter(Boolean).join(" • ");
+      plannerEnergy.textContent = notes || "";
+    }
+
+    function createStatusChip(status) {
+      const chip = document.createElement("div");
+      chip.className = "planner-status";
+      chip.textContent = status || "planned";
+      return chip;
+    }
+
+    function buildPlannerActions(item) {
+      const container = document.createElement("div");
+      container.className = "planner-actions";
+
+      const actions = [
+        { label: "Done", status: "complete" },
+        { label: "Skip", status: "skipped" },
+        { label: "Move to Tomorrow", status: "rescheduled" },
+      ];
+
+      actions.forEach(action => {
+        const btn = document.createElement("button");
+        btn.className = "planner-action-btn";
+        btn.textContent = action.label;
+        btn.addEventListener("click", async () => {
+          if (!item || !item.item_id) return;
+          btn.disabled = true;
+          try {
+            const payload = {
+              item_id: item.item_id,
+              status: action.status,
+            };
+            if (action.status === "rescheduled") {
+              payload.reschedule_to = getTomorrowDate();
+            }
+            const resp = await fetch(PLAN_UPDATE_API, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(payload),
+            });
+            if (!resp.ok) {
+              const errText = await resp.text();
+              throw new Error(errText || "Failed to update item");
+            }
+            await loadTodayPlanner();
+          } catch (err) {
+            renderPlannerError("Could not update item. Please try again.");
+          } finally {
+            btn.disabled = false;
+          }
+        });
+        container.appendChild(btn);
+      });
+
+      return container;
+    }
+
+    function renderGoalTasks(goalTasks) {
+      const goalCount = Array.isArray(goalTasks) ? goalTasks.length : 0;
+      if (plannerGoalsList) {
+        plannerGoalsList.innerHTML = "";
+      }
+      if (plannerGoalsCount) {
+        plannerGoalsCount.textContent = `${goalCount} item${goalCount === 1 ? "" : "s"}`;
+      }
+      if (!plannerGoalsList) {
+        console.warn("[Today Planner] goal list element missing");
+        return;
+      }
+
+      if (!goalCount) {
+        plannerGoalsList.innerHTML = `<div class="planner-empty">No goal tasks scheduled.</div>`;
+      } else {
+        goalTasks.forEach(item => {
+          const task = document.createElement("div");
+          task.className = "planner-task";
+
+          const label = (item.metadata && item.metadata.label) || item.label || item.description || "(unnamed task)";
+
+          const taskLeft = document.createElement("div");
+          taskLeft.innerHTML = `
+            <div class="planner-task__label">${label}</div>
+            <div class="planner-task__meta">${item.section_hint || item.section || "goal"} · effort ${item.effort || "n/a"}</div>
+          `;
+
+          const taskRight = document.createElement("div");
+          taskRight.className = "planner-block__right";
+          taskRight.appendChild(createStatusChip(item.status));
+          if (item.item_id) {
+            taskRight.appendChild(buildPlannerActions(item));
+          }
+
+          task.appendChild(taskLeft);
+          task.appendChild(taskRight);
+          plannerGoalsList.appendChild(task);
+        });
+      }
+
+      console.log("[Today Planner] renderGoalTasks", {
+        goalCount,
+        headerEl: plannerGoalsCount,
+        headerText: plannerGoalsCount ? plannerGoalsCount.textContent : null,
+        listEl: plannerGoalsList,
+        listChildren: plannerGoalsList ? plannerGoalsList.children.length : null,
+      });
+    }
+
+    function renderPlannerSections(plan, goalTasksOverride = null) {
+      const sections = (plan.sections || {});
+      const routines = sections.routines || [];
+      const goalTasks = goalTasksOverride !== null ? goalTasksOverride : (sections.goal_tasks || []);
+
+      plannerRoutinesList.innerHTML = "";
+      if (!routines.length) {
+        plannerRoutinesCount.textContent = "0 items";
+        plannerRoutinesList.innerHTML = `<div class="planner-empty">No routines planned yet.</div>`;
+      } else {
+        plannerRoutinesCount.textContent = `${routines.length} item${routines.length === 1 ? "" : "s"}`;
+        routines.forEach(item => {
+          const block = document.createElement("div");
+          block.className = "planner-block";
+          const header = document.createElement("div");
+          header.className = "planner-block__header";
+
+          const headerLeft = document.createElement("div");
+          headerLeft.innerHTML = `
+            <div class="planner-block__title">${item.name || item.label || "Routine"}</div>
+            <div class="planner-block__meta">${item.section_hint || item.section || "any"} · ${item.variant || item.type || "routine"}</div>
+          `;
+
+          const headerRight = document.createElement("div");
+          headerRight.className = "planner-block__right";
+          headerRight.appendChild(createStatusChip(item.status));
+          if (item.item_id) {
+            headerRight.appendChild(buildPlannerActions(item));
+          }
+
+          header.appendChild(headerLeft);
+          header.appendChild(headerRight);
+          block.appendChild(header);
+
+          const stepsWrap = document.createElement("div");
+          stepsWrap.className = "planner-steps";
+          if ((item.steps || []).length === 0) {
+            stepsWrap.innerHTML = `<div class="planner-empty">No steps listed.</div>`;
+          } else {
+            (item.steps || []).forEach(step => {
+              const stepRow = document.createElement("div");
+              stepRow.className = "planner-step";
+
+              const stepLeft = document.createElement("div");
+              stepLeft.innerHTML = `
+                <div class="planner-step__label">${step.label || "Step"}</div>
+                <div class="planner-step__meta">${step.energy_cost || "energy"} · ${step.friction || "friction"}</div>
+              `;
+
+              const stepRight = document.createElement("div");
+              stepRight.className = "planner-block__right";
+              stepRight.appendChild(createStatusChip(step.status));
+              if (step.item_id) {
+                stepRight.appendChild(buildPlannerActions(step));
+              }
+
+              stepRow.appendChild(stepLeft);
+              stepRow.appendChild(stepRight);
+              stepsWrap.appendChild(stepRow);
+            });
+          }
+
+          block.appendChild(stepsWrap);
+          plannerRoutinesList.appendChild(block);
+        });
+      }
+      renderGoalTasks(goalTasks);
+
+      console.log("[Today Planner] renderPlannerSections", {
+        goalCount: goalTasks.length,
+        headerText: plannerGoalsCount ? plannerGoalsCount.textContent : null,
+        listChildren: plannerGoalsList ? plannerGoalsList.children.length : null,
+      });
+    }
+
+    async function loadTodayPlanner() {
+      console.log("[Today Planner] loadTodayPlanner invoked", {
+        view: othelloState.currentView,
+        ts: new Date().toISOString(),
+      });
+      clearPlannerError();
+      plannerHeadline.textContent = "Loading...";
+      plannerEnergy.textContent = "";
+      plannerRoutinesList.innerHTML = "";
+      plannerGoalsList.innerHTML = "";
+      try {
+        const [brief, plan] = await Promise.all([fetchTodayBrief(), fetchTodayPlan()]);
+        const goalTasks = (plan.sections?.goal_tasks || []);
+        console.log("[Today Planner] goalTasks count", goalTasks.length, { source: "ui", planSource: plan._plan_source });
+        renderTodayBrief(plan, brief);
+        renderPlannerSections(plan, goalTasks);
+      } catch (e) {
+        renderPlannerError("Could not load today\'s plan. Please try again later.");
+      }
+    }
+
+    async function fetchInsightsList(status = "pending") {
+      const resp = await fetch(`/api/insights/list?status=${encodeURIComponent(status)}`);
+      if (!resp.ok) throw new Error("Failed to load insights");
+      const data = await resp.json();
+      return data.insights || [];
+    }
+
+    async function fetchInsightsSummary() {
+      const resp = await fetch("/api/insights/summary");
+      if (!resp.ok) throw new Error("Failed to load insights summary");
+      return resp.json();
+    }
+
+    function showInsightsError(message) {
+      if (insightsError) {
+        insightsError.textContent = message || "Unable to load insights right now.";
+        insightsError.style.display = "block";
+      }
+      if (insightsEmpty) {
+        insightsEmpty.style.display = "none";
+      }
+      if (insightsList) {
+        insightsList.style.display = "none";
+      }
+    }
+
+    function clearInsightsError() {
+      if (insightsError) {
+        insightsError.textContent = "";
+        insightsError.style.display = "none";
+      }
+    }
+
+    function renderInsightsList(items) {
+      if (!insightsList || !insightsEmpty) return;
+
+      insightsList.innerHTML = "";
+      const hasItems = Array.isArray(items) && items.length > 0;
+
+      clearInsightsError();
+
+      if (!hasItems) {
+        insightsList.style.display = "none";
+        insightsEmpty.style.display = "block";
+        return;
+      }
+      insightsEmpty.style.display = "none";
+      insightsList.style.display = "flex";
+
+      items.forEach(item => {
+        const card = document.createElement("div");
+        card.className = "insight-card";
+
+        const meta = document.createElement("div");
+        meta.className = "insight-card__meta";
+
+        const typeLabel = document.createElement("span");
+        typeLabel.textContent = (item.insight_type || item.type || "generic").toLowerCase();
+        meta.appendChild(typeLabel);
+
+        const dateLabel = document.createElement("span");
+        dateLabel.textContent = item.created_at ? new Date(item.created_at).toLocaleString() : "";
+        meta.appendChild(dateLabel);
+
+        const summary = document.createElement("div");
+        summary.className = "insight-card__summary";
+        summary.textContent = item.summary || item.content || "";
+
+        card.appendChild(meta);
+        card.appendChild(summary);
+
+        const actions = document.createElement("div");
+        actions.className = "insight-actions";
+
+        const applyBtn = document.createElement("button");
+        applyBtn.className = "insight-btn primary";
+        applyBtn.textContent = "Apply";
+        applyBtn.addEventListener("click", async () => {
+          applyBtn.disabled = true;
+          const prevLabel = applyBtn.textContent;
+          applyBtn.textContent = "Applying…";
+          try {
+            await handleInsightAction(item, "apply");
+          } finally {
+            applyBtn.disabled = false;
+            applyBtn.textContent = prevLabel;
+          }
+        });
+
+        const dismissBtn = document.createElement("button");
+        dismissBtn.className = "insight-btn";
+        dismissBtn.textContent = "Dismiss";
+        dismissBtn.addEventListener("click", async () => {
+          dismissBtn.disabled = true;
+          try {
+            await handleInsightAction(item, "dismiss");
+          } finally {
+            dismissBtn.disabled = false;
+          }
+        });
+
+        actions.appendChild(applyBtn);
+        actions.appendChild(dismissBtn);
+        card.appendChild(actions);
+
+        insightsList.appendChild(card);
+      });
+    }
+
+    async function loadInsightsInbox() {
+      if (!insightsList || !insightsEmpty) return;
+      clearInsightsError();
+      try {
+        const [summaryData, insights] = await Promise.all([
+          fetchInsightsSummary(),
+          fetchInsightsList("pending"),
+        ]);
+
+        if (summaryData && summaryData.pending_counts) {
+          console.log("[Othello UI] insights summary", summaryData.pending_counts);
+          applyInsightsMeta(summaryData);
+        }
+
+        renderInsightsList(insights);
+      } catch (err) {
+        console.error("[Othello UI] failed to load insights", err);
+        renderInsightsList([]);
+        showInsightsError("Unable to load insights right now.");
+      }
+    }
+
+    async function handleInsightAction(item, action) {
+      const endpoint = action === "apply" ? "/api/insights/apply" : "/api/insights/dismiss";
+      const payload = { id: item.id };
+      if (action === "apply") {
+        console.log("[Insights] applying", {
+          id: item.id,
+          type: item.insight_type || item.type,
+          summary: item.summary || item.content,
+          payload,
+        });
+      }
+      try {
+        const resp = await fetch(endpoint, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        if (!resp.ok) {
+          throw new Error("Insight action failed");
+        }
+        const data = await resp.json();
+        if (data.insights_meta) {
+          applyInsightsMeta(data.insights_meta);
+        }
+        await loadInsightsInbox();
+        if (action === "apply") {
+          console.log("[Insights] apply succeeded, refreshing Today Planner", {
+            id: item.id,
+            type: item.insight_type || item.type,
+          });
+          await loadTodayPlanner();
+        }
+        return data;
+      } catch (err) {
+        console.error("[Othello UI] insight action failed", err);
+        showInsightsError("Unable to apply insight right now.");
+        throw err;
+      }
+    }
+
+    // ===== TAB NAVIGATION =====
+    function switchView(viewName) {
+      othelloState.currentView = viewName;
+
+      // Update tabs
+      tabs.forEach(tab => {
+        if (tab.dataset.view === viewName) {
+          tab.classList.add("active");
+        } else {
+          tab.classList.remove("active");
+        }
+      });
+
+      // Update views
+      views.forEach(view => {
+        if (view.id === `${viewName}-view`) {
+          view.classList.add("active");
+        } else {
+          view.classList.remove("active");
+        }
+      });
+
+      // Show/hide input bar and focus ribbon
+      if (viewName === "chat") {
+        inputBar.classList.remove("hidden");
+        updateFocusRibbon();
+      } else {
+        inputBar.classList.add("hidden");
+        focusRibbon.classList.remove("visible");
+      }
+
+      // Load view-specific data
+      if (viewName === "goals") {
+        renderGoalsList();
+      } else if (viewName === "today-planner") {
+        loadTodayPlanner();
+      } else if (viewName === "insights") {
+        loadInsightsInbox();
+      }
+    }
+
+    tabs.forEach(tab => {
+      tab.addEventListener("click", () => {
+        switchView(tab.dataset.view);
+      });
+    });
+
+    // ===== MODE SWITCHER =====
+    function persistMode(mode) {
+      try {
+        localStorage.setItem("othelloMode", mode);
+      } catch (e) {}
+    }
+
+    function loadMode() {
+      try {
+        const stored = localStorage.getItem("othelloMode");
+        if (stored && MODE_LABELS[stored]) {
+          return stored;
+        }
+      } catch (e) {}
+      return "companion";
+    }
+
+    function setMode(mode) {
+      if (!MODE_LABELS[mode]) return;
+      othelloState.currentMode = mode;
+      persistMode(mode);
+      modeLabel.textContent = MODE_LABELS[mode];
+      modeSubtitle.textContent = MODE_SUBTITLES[mode] || "";
+
+      modeOptions.forEach(opt => {
+        opt.classList.toggle("active", opt.dataset.mode === mode);
+      });
+      const tabCfg = MODE_TAB_CONFIG[mode];
+      if (tabCfg && middleTab) {
+        const labelEl = middleTab.querySelector('.tab-label');
+        if (labelEl) labelEl.textContent = tabCfg.label;
+        middleTab.dataset.view = tabCfg.view;
+      }
+
+      const allowed = MODE_ALLOWED_VIEWS[mode] || [];
+      const fallback = mode === "companion" ? "chat" : (tabCfg ? tabCfg.view : "chat");
+      const targetView = allowed.includes(othelloState.currentView) ? othelloState.currentView : fallback;
+      updateTabBadges();
+      refreshInsightsCounts();
+      switchView(targetView);
+    }
+
+    function toggleDropdown() {
+      const isOpen = modeDropdown.classList.contains("open");
+      modeDropdown.classList.toggle("open", !isOpen);
+      modeToggle.setAttribute("aria-expanded", (!isOpen).toString());
+    }
+
+    modeToggle.addEventListener("click", () => {
+      toggleDropdown();
+    });
+
+    modeOptions.forEach(opt => {
+      opt.addEventListener("click", () => {
+        const mode = opt.dataset.mode;
+        setMode(mode);
+        modeDropdown.classList.remove("open");
+        modeToggle.setAttribute("aria-expanded", "false");
+      });
+    });
+
+    document.addEventListener("click", (e) => {
+      if (!modeDropdown.contains(e.target) && !modeToggle.contains(e.target)) {
+        modeDropdown.classList.remove("open");
+        modeToggle.setAttribute("aria-expanded", "false");
+      }
+    });
+
+    // ===== INITIALIZE MODE =====
+    // To add new modes later, extend MODE_LABELS, MODE_SUBTITLES, and modeOptions in markup.
+    setMode(loadMode());
+    refreshInsightsCounts();
+
+    // ===== FOCUS RIBBON =====
+    function updateFocusRibbon() {
+      if (othelloState.currentView !== "chat") {
+        focusRibbon.classList.remove("visible");
+        return;
+      }
+
+      if (othelloState.activeGoalId !== null) {
+        const goal = othelloState.goals.find(g => g.id === othelloState.activeGoalId);
+        if (goal) {
+          focusRibbonTitle.textContent = goal.text || `Goal #${goal.id}`;
+          focusRibbon.classList.add("visible");
+        } else {
+          focusRibbon.classList.remove("visible");
+        }
+      } else {
+        focusRibbon.classList.remove("visible");
+      }
+    }
+
+    viewFocusBtn.addEventListener("click", () => {
+      if (othelloState.activeGoalId !== null) {
+        showGoalDetail(othelloState.activeGoalId);
+      }
+    });
+
+    // ===== CHAT FUNCTIONS =====
+    function addMessage(role, text) {
+      // Hide chat placeholder when first message appears
+      const chatPlaceholder = document.getElementById("chat-placeholder");
+      if (chatPlaceholder && !chatPlaceholder.classList.contains("hidden")) {
+        chatPlaceholder.classList.add("hidden");
+      }
+
+      const row = document.createElement("div");
+      row.className = `msg-row ${role}`;
+
+      const bubble = document.createElement("div");
+      bubble.className = "bubble";
+      bubble.textContent = text;
+
+      const meta = document.createElement("div");
+      meta.className = "meta";
+      meta.textContent = role === "user"
+        ? "You · " + new Date().toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"})
+        : "Othello · " + new Date().toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"});
+
+      bubble.appendChild(meta);
+
+      if (role === "bot" && othelloState.currentMode === "companion") {
+        const listItems = extractListItems(text);
+        if (hasStructuredList(text) && listItems.length) {
+          const bar = createCommitmentBar(listItems, text);
+          bubble.appendChild(bar);
+        }
+      }
+
+      row.appendChild(bubble);
+      chatLog.appendChild(row);
+
+      // Scroll to latest message
+      requestAnimationFrame(() => {
+        const chatView = document.getElementById("chat-view");
+        if (chatView) {
+          chatView.scrollTo({
+            top: chatView.scrollHeight,
+            behavior: "smooth"
+          });
+        }
+      });
+    }
+
+    function setActiveGoal(goalId) {
+      othelloState.activeGoalId = goalId;
+      if (!(goalId in othelloState.goalUpdateCounts)) {
+        othelloState.goalUpdateCounts[goalId] = 0;
+      }
+      updateFocusRibbon();
+    }
+
+    function bumpActiveGoalUpdates() {
+      const gid = othelloState.activeGoalId;
+      if (gid == null) return;
+      othelloState.goalUpdateCounts[gid] = (othelloState.goalUpdateCounts[gid] || 0) + 1;
+    }
+
+    async function sendMessage() {
+      const text = input.value.trim();
+      if (!text) return;
+
+      addMessage("user", text);
+      input.value = "";
+      input.focus();
+      statusEl.textContent = "Thinking…";
+
+      try {
+        const res = await fetch(API, {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({ 
+            message: text,
+            active_goal_id: othelloState.activeGoalId || null,
+            current_mode: othelloState.currentMode,
+            current_view: othelloState.currentView,
+          })
+        });
+
+        const data = await res.json();
+        addMessage("bot", data.reply || "[no reply]");
+        
+        // Update agent status display
+        if (data.agent_status) {
+          othelloState.currentAgentStatus = data.agent_status;
+          if (data.agent_status.planner_active) {
+            statusEl.textContent = "Online · Planner";
+          } else {
+            statusEl.textContent = "Online · Chat";
+          }
+        } else {
+          statusEl.textContent = "Online";
+        }
+
+        // Handle meta from backend for goal list / selection UX
+        if (data.meta && data.meta.intent === "select_goal_success" && typeof data.active_goal_id === "number") {
+          setActiveGoal(data.active_goal_id);
+        } else if (data.meta && data.meta.intent === "list_goals" && Array.isArray(data.goals)) {
+          othelloState.goals = data.goals;
+          othelloState.goals.forEach((g) => {
+            if (g && typeof g.id === "number" && !(g.id in othelloState.goalUpdateCounts)) {
+              othelloState.goalUpdateCounts[g.id] = 0;
+            }
+          });
+        } else {
+          bumpActiveGoalUpdates();
+        }
+
+        if (data.insights_meta) {
+          applyInsightsMeta(data.insights_meta);
+        } else {
+          await refreshInsightsCounts();
+        }
+
+        // Always refresh from backend to stay in sync
+        await refreshGoals();
+      } catch (err) {
+        console.error("[Othello UI] sendMessage error:", err);
+        addMessage("bot", "[Connection error: backend unreachable]");
+        statusEl.textContent = "Offline";
+      }
+    }
+
+    if (micBtn) {
+      micBtn.addEventListener("click", () => {
+        if (!SpeechRecognition || !recognition) return;
+        if (isRecording) {
+          try {
+            recognition.stop();
+          } catch (err) {
+            console.warn("[Othello UI] speech stop (toggle) error:", err);
+          }
+          return;
+        }
+        hideTranscriptCancel();
+        sttFullTranscript = "";
+        sttLastInterim = "";
+        if (micBtn) micBtn.disabled = true;
+
+        // Request a clean restart: stop/abort current session, then start once shutdown completes.
+        pendingMicStart = true;
+        if (pendingStartTimeout) {
+          clearTimeout(pendingStartTimeout);
+          pendingStartTimeout = null;
+        }
+
+        try {
+          recognition.stop();
+        } catch (err) {
+          // ignore stop errors
+        }
+
+        try {
+          recognition.abort();
+        } catch (err) {
+          // ignore abort errors
+        }
+
+        // Fallback: if onend never fires, attempt a start after a short grace period.
+        pendingStartTimeout = setTimeout(() => {
+          if (pendingMicStart && !isRecording) {
+            pendingMicStart = false;
+            try {
+              recognition.start();
+            } catch (err) {
+              console.warn("[Othello UI] speech fallback start error:", err);
+            } finally {
+              if (micBtn) micBtn.disabled = false;
+            }
+          }
+        }, 150);
+      });
+    }
+
+    if (cancelTranscriptBtn) {
+      cancelTranscriptBtn.addEventListener("click", () => {
+        input.value = "";
+        hideTranscriptCancel();
+        sttFullTranscript = "";
+        sttLastInterim = "";
+        if (recognition && isRecording) {
+          try {
+            recognition.stop();
+          } catch (err) {
+            console.warn("[Othello UI] speech stop error:", err);
+          }
+        }
+        input.focus();
+      });
+    }
+
+    sendBtn.onclick = sendMessage;
+    input.onkeydown = (e) => {
+      if (e.key === "Enter") sendMessage();
+    };
+
+    // ===== GOALS FUNCTIONS =====
+    function extractListItems(text) {
+      if (!text) return [];
+      const lines = text.split(/\r?\n/);
+      return lines
+        .map(l => l.trim())
+        .filter(l => /^[-*•]\s+/.test(l) || /^\d+\.\s+/.test(l))
+        .map(l => l.replace(/^[-*•]\s+/, "").replace(/^\d+\.\s+/, ""));
+    }
+
+    function hasStructuredList(text) {
+      if (!text) return false;
+      if (/<ul|<ol|<li/i.test(text)) return true;
+      return extractListItems(text).length > 0;
+    }
+
+    async function postCommitment(action, items, rawText) {
+      const safeItems = items && items.length ? items : [rawText];
+      const title = (safeItems[0] || "New commitment").slice(0, 120);
+      let message;
+
+      if (action === "goal") {
+        message = `Create a long-term goal titled "${title}" from these items:\n- ${safeItems.join("\n- ")}`;
+      } else if (action === "plan") {
+        message = `Add these tasks to today's plan:\n- ${safeItems.join("\n- ")}`;
+      } else if (action === "idea") {
+        message = `Save this as an idea/inbox entry:\n${rawText}\nItems:\n- ${safeItems.join("\n- ")}`;
+      } else {
+        return;
+      }
+
+      const res = await fetch(API, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message }),
+      });
+      if (!res.ok) {
+        const txt = await res.text();
+        throw new Error(txt || "Commitment failed");
+      }
+      return res.json();
+    }
+
+    function createCommitmentBar(items, rawText) {
+      const bar = document.createElement("div");
+      bar.className = "commitment-bar";
+
+      const status = document.createElement("span");
+      status.className = "commitment-status";
+
+      const makeBtn = (label, action) => {
+        const btn = document.createElement("button");
+        btn.className = "commitment-btn";
+        btn.textContent = label;
+        btn.addEventListener("click", async () => {
+          status.textContent = "Sending…";
+          btn.disabled = true;
+          try {
+            await postCommitment(action, items, rawText);
+            status.textContent = "Saved";
+            if (action === "plan") {
+              loadTodayPlanner();
+            }
+          } catch (err) {
+            status.textContent = "Failed";
+          } finally {
+            setTimeout(() => { status.textContent = ""; }, 1500);
+            btn.disabled = false;
+          }
+        });
+        return btn;
+      };
+
+      bar.appendChild(makeBtn("Save as long-term goal", "goal"));
+      bar.appendChild(makeBtn("Add tasks to Today Plan", "plan"));
+      bar.appendChild(makeBtn("Save as idea", "idea"));
+      bar.appendChild(status);
+
+      return bar;
+    }
+
+    async function refreshGoals() {
+      try {
+        const res = await fetch(GOALS_API);
+        if (!res.ok) throw new Error("Failed to fetch goals");
+        const data = await res.json();
+        const goals = data.goals || [];
+
+        othelloState.goals = goals;
+
+        // Ensure counters exist for existing goals
+        goals.forEach((g) => {
+          if (g && typeof g.id === "number" && !(g.id in othelloState.goalUpdateCounts)) {
+            othelloState.goalUpdateCounts[g.id] = 0;
+          }
+        });
+
+        updateFocusRibbon();
+        
+        // If currently viewing goals, re-render
+        if (othelloState.currentView === "goals") {
+          renderGoalsList();
+        }
+      } catch (err) {
+        console.warn("[Othello UI] Failed to refresh goals:", err);
+      }
+    }
+
+    function renderGoalsList() {
+      goalsList.innerHTML = "";
+
+      if (!othelloState.goals || othelloState.goals.length === 0) {
+        goalsList.innerHTML = `
+          <div class="empty-state">
+            <div class="empty-state__icon">🎯</div>
+            <div class="empty-state__text">
+              No goals yet. Start a conversation in the Chat tab to set your first goal.
+            </div>
+          </div>
+        `;
+        return;
+      }
+
+      othelloState.goals.forEach(goal => {
+        const card = document.createElement("div");
+        card.className = "goal-card";
+        
+        const isActive = goal.id === othelloState.activeGoalId;
+        const updateCount = othelloState.goalUpdateCounts[goal.id] || 0;
+
+        card.innerHTML = `
+          <div class="goal-card__header">
+            <div>
+              <div class="goal-card__id">Goal #${goal.id}</div>
+              <div class="goal-card__title">${goal.text || "Untitled Goal"}</div>
+            </div>
+            ${isActive ? '<div class="goal-card__badge">Active</div>' : ''}
+          </div>
+          ${goal.deadline ? `<div class="goal-card__meta">Deadline: ${goal.deadline}</div>` : ''}
+          ${updateCount > 0 ? `<div class="goal-card__meta">${updateCount} update${updateCount !== 1 ? 's' : ''} this session</div>` : ''}
+        `;
+
+        card.addEventListener("click", () => {
+          showGoalDetail(goal.id);
+        });
+
+        goalsList.appendChild(card);
+      });
+    }
+
+    function showGoalDetail(goalId) {
+      const goal = othelloState.goals.find(g => g.id === goalId);
+      if (!goal) return;
+
+      othelloState.currentDetailGoalId = goalId;
+
+      detailGoalId.textContent = `Goal #${goal.id}`;
+      detailGoalTitle.textContent = goal.text || "Untitled Goal";
+
+      // Build detail content
+      let contentHtml = "";
+
+      // Description / Intent
+      contentHtml += `
+        <div class="detail-section">
+          <div class="detail-section__title">Intent</div>
+          <div class="detail-section__body">${goal.text || "No description provided."}</div>
+        </div>
+      `;
+
+      // Deadline
+      if (goal.deadline) {
+        contentHtml += `
+          <div class="detail-section">
+            <div class="detail-section__title">Deadline</div>
+            <div class="detail-section__body">${goal.deadline}</div>
+          </div>
+        `;
+      }
+
+      // Activity log (conversation history)
+      if (goal.conversation && Array.isArray(goal.conversation) && goal.conversation.length > 0) {
+        contentHtml += `
+          <div class="detail-section">
+            <div class="detail-section__title">Activity Log</div>
+            <div class="activity-log">
+        `;
+
+        goal.conversation.forEach(entry => {
+          const role = entry.role === "user" ? "You" : "Othello";
+          contentHtml += `
+            <div class="activity-item">
+              <div class="activity-item__role">${role}</div>
+              <div class="activity-item__text">${entry.content || ""}</div>
+            </div>
+          `;
+        });
+
+        contentHtml += `
+            </div>
+          </div>
+        `;
+      } else {
+        contentHtml += `
+          <div class="detail-section">
+            <div class="detail-section__title">Activity Log</div>
+            <div class="detail-section__body">No activity yet. Continue working on this goal to build your conversation history.</div>
+          </div>
+        `;
+      }
+
+      // Plan placeholder
+      contentHtml += `
+        <div class="detail-section">
+          <div class="detail-section__title">Current Plan</div>
+          <div class="detail-section__body">Plan tracking coming soon. Othello will help you break down this goal into actionable steps.</div>
+        </div>
+      `;
+
+      detailContent.innerHTML = contentHtml;
+      goalDetail.classList.add("visible");
+    }
+
+    function hideGoalDetail() {
+      goalDetail.classList.remove("visible");
+      othelloState.currentDetailGoalId = null;
+    }
+
+    backFromDetailBtn.addEventListener("click", hideGoalDetail);
+
+    continueWorkingBtn.addEventListener("click", () => {
+      if (othelloState.currentDetailGoalId !== null) {
+        setActiveGoal(othelloState.currentDetailGoalId);
+        hideGoalDetail();
+        switchView("chat");
+        input.focus();
+      }
+    });
+
+    // ===== INITIALIZATION =====
+    refreshGoals();
+  </script>
+</body>
+</html>

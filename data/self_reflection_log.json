@@ -1,0 +1,442 @@
+[
+  {
+    "timestamp": "2025-12-10T10:18:50.445439",
+    "summary": {
+      "hit_rate": 0.0,
+      "ignore_rate": 0.0,
+      "fail_rate": 0.0,
+      "top_success": null,
+      "top_fail": null
+    },
+    "suggestions": []
+  },
+  {
+    "timestamp": "2025-12-10T10:23:41.109856",
+    "summary": {
+      "hit_rate": 0.0,
+      "ignore_rate": 0.0,
+      "fail_rate": 0.0,
+      "top_success": null,
+      "top_fail": null
+    },
+    "suggestions": []
+  },
+  {
+    "timestamp": "2025-12-10T10:25:21.362632",
+    "summary": {
+      "hit_rate": 0.0,
+      "ignore_rate": 0.0,
+      "fail_rate": 0.0,
+      "top_success": null,
+      "top_fail": null
+    },
+    "suggestions": []
+  },
+  {
+    "timestamp": "2025-12-10T10:26:28.415745",
+    "summary": {
+      "hit_rate": 0.0,
+      "ignore_rate": 0.0,
+      "fail_rate": 0.0,
+      "top_success": null,
+      "top_fail": null
+    },
+    "suggestions": []
+  },
+  {
+    "timestamp": "2025-12-10T10:26:46.092603",
+    "summary": {
+      "hit_rate": 0.0,
+      "ignore_rate": 0.0,
+      "fail_rate": 0.0,
+      "top_success": null,
+      "top_fail": null
+    },
+    "suggestions": []
+  },
+  {
+    "timestamp": "2025-12-10T10:36:47.979137",
+    "summary": {
+      "hit_rate": 0.0,
+      "ignore_rate": 0.0,
+      "fail_rate": 0.0,
+      "top_success": null,
+      "top_fail": null
+    },
+    "suggestions": []
+  },
+  {
+    "timestamp": "2025-12-10T10:39:54.998570",
+    "summary": {
+      "hit_rate": 0.0,
+      "ignore_rate": 0.0,
+      "fail_rate": 0.0,
+      "top_success": null,
+      "top_fail": null
+    },
+    "suggestions": []
+  },
+  {
+    "timestamp": "2025-12-10T10:42:36.335548",
+    "summary": {
+      "hit_rate": 0.0,
+      "ignore_rate": 0.0,
+      "fail_rate": 0.0,
+      "top_success": null,
+      "top_fail": null
+    },
+    "suggestions": []
+  },
+  {
+    "timestamp": "2025-12-10T11:57:46.726630",
+    "summary": {
+      "hit_rate": 0.0,
+      "ignore_rate": 0.0,
+      "fail_rate": 0.0,
+      "top_success": null,
+      "top_fail": null
+    },
+    "suggestions": []
+  },
+  {
+    "timestamp": "2025-12-10T11:58:02.510026",
+    "summary": {
+      "hit_rate": 0.0,
+      "ignore_rate": 0.0,
+      "fail_rate": 0.0,
+      "top_success": null,
+      "top_fail": null
+    },
+    "suggestions": []
+  },
+  {
+    "timestamp": "2025-12-10T11:58:17.021179",
+    "summary": {
+      "hit_rate": 0.0,
+      "ignore_rate": 0.0,
+      "fail_rate": 0.0,
+      "top_success": null,
+      "top_fail": null
+    },
+    "suggestions": []
+  },
+  {
+    "timestamp": "2025-12-10T12:00:01.266271",
+    "summary": {
+      "hit_rate": 0.0,
+      "ignore_rate": 0.0,
+      "fail_rate": 0.0,
+      "top_success": null,
+      "top_fail": null
+    },
+    "suggestions": []
+  },
+  {
+    "timestamp": "2025-12-10T12:00:25.087968",
+    "summary": {
+      "hit_rate": 0.0,
+      "ignore_rate": 0.0,
+      "fail_rate": 0.0,
+      "top_success": null,
+      "top_fail": null
+    },
+    "suggestions": []
+  },
+  {
+    "timestamp": "2025-12-10T12:01:25.962293",
+    "summary": {
+      "hit_rate": 0.0,
+      "ignore_rate": 0.0,
+      "fail_rate": 0.0,
+      "top_success": null,
+      "top_fail": null
+    },
+    "suggestions": []
+  },
+  {
+    "timestamp": "2025-12-10T12:28:50.321072",
+    "summary": {
+      "hit_rate": 0.0,
+      "ignore_rate": 0.0,
+      "fail_rate": 0.0,
+      "top_success": null,
+      "top_fail": null
+    },
+    "suggestions": []
+  },
+  {
+    "timestamp": "2025-12-10T12:30:21.984470",
+    "summary": {
+      "hit_rate": 0.0,
+      "ignore_rate": 0.0,
+      "fail_rate": 0.0,
+      "top_success": null,
+      "top_fail": null
+    },
+    "suggestions": []
+  },
+  {
+    "timestamp": "2025-12-10T12:30:36.792192",
+    "summary": {
+      "hit_rate": 0.0,
+      "ignore_rate": 0.0,
+      "fail_rate": 0.0,
+      "top_success": null,
+      "top_fail": null
+    },
+    "suggestions": []
+  },
+  {
+    "timestamp": "2025-12-10T12:30:56.338189",
+    "summary": {
+      "hit_rate": 0.0,
+      "ignore_rate": 0.0,
+      "fail_rate": 0.0,
+      "top_success": null,
+      "top_fail": null
+    },
+    "suggestions": []
+  },
+  {
+    "timestamp": "2025-12-10T12:33:42.713125",
+    "summary": {
+      "hit_rate": 0.0,
+      "ignore_rate": 0.0,
+      "fail_rate": 0.0,
+      "top_success": null,
+      "top_fail": null
+    },
+    "suggestions": []
+  },
+  {
+    "timestamp": "2025-12-10T12:36:37.137319",
+    "summary": {
+      "hit_rate": 0.0,
+      "ignore_rate": 0.0,
+      "fail_rate": 0.0,
+      "top_success": null,
+      "top_fail": null
+    },
+    "suggestions": []
+  },
+  {
+    "timestamp": "2025-12-10T12:38:02.227131",
+    "summary": {
+      "hit_rate": 0.0,
+      "ignore_rate": 0.0,
+      "fail_rate": 0.0,
+      "top_success": null,
+      "top_fail": null
+    },
+    "suggestions": []
+  },
+  {
+    "timestamp": "2025-12-10T12:46:48.066058",
+    "summary": {
+      "hit_rate": 0.0,
+      "ignore_rate": 0.0,
+      "fail_rate": 0.0,
+      "top_success": null,
+      "top_fail": null
+    },
+    "suggestions": []
+  },
+  {
+    "timestamp": "2025-12-10T12:59:10.980410",
+    "summary": {
+      "hit_rate": 0.0,
+      "ignore_rate": 0.0,
+      "fail_rate": 0.0,
+      "top_success": null,
+      "top_fail": null
+    },
+    "suggestions": []
+  },
+  {
+    "timestamp": "2025-12-10T12:59:42.845909",
+    "summary": {
+      "hit_rate": 0.0,
+      "ignore_rate": 0.0,
+      "fail_rate": 0.0,
+      "top_success": null,
+      "top_fail": null
+    },
+    "suggestions": []
+  },
+  {
+    "timestamp": "2025-12-10T13:04:06.041596",
+    "summary": {
+      "hit_rate": 0.0,
+      "ignore_rate": 0.0,
+      "fail_rate": 0.0,
+      "top_success": null,
+      "top_fail": null
+    },
+    "suggestions": []
+  },
+  {
+    "timestamp": "2025-12-10T13:11:40.845291",
+    "summary": {
+      "hit_rate": 0.0,
+      "ignore_rate": 0.0,
+      "fail_rate": 0.0,
+      "top_success": null,
+      "top_fail": null
+    },
+    "suggestions": []
+  },
+  {
+    "timestamp": "2025-12-10T13:45:40.857915",
+    "summary": {
+      "hit_rate": 0.0,
+      "ignore_rate": 0.0,
+      "fail_rate": 0.0,
+      "top_success": null,
+      "top_fail": null
+    },
+    "suggestions": []
+  },
+  {
+    "timestamp": "2025-12-10T13:46:10.037123",
+    "summary": {
+      "hit_rate": 0.0,
+      "ignore_rate": 0.0,
+      "fail_rate": 0.0,
+      "top_success": null,
+      "top_fail": null
+    },
+    "suggestions": []
+  },
+  {
+    "timestamp": "2025-12-10T13:46:50.686140",
+    "summary": {
+      "hit_rate": 0.0,
+      "ignore_rate": 0.0,
+      "fail_rate": 0.0,
+      "top_success": null,
+      "top_fail": null
+    },
+    "suggestions": []
+  },
+  {
+    "timestamp": "2025-12-10T14:05:57.052953",
+    "summary": {
+      "hit_rate": 0.0,
+      "ignore_rate": 0.0,
+      "fail_rate": 0.0,
+      "top_success": null,
+      "top_fail": null
+    },
+    "suggestions": []
+  },
+  {
+    "timestamp": "2025-12-10T14:12:51.669539",
+    "summary": {
+      "hit_rate": 0.0,
+      "ignore_rate": 0.0,
+      "fail_rate": 0.0,
+      "top_success": null,
+      "top_fail": null
+    },
+    "suggestions": []
+  },
+  {
+    "timestamp": "2025-12-10T14:15:55.092592",
+    "summary": {
+      "hit_rate": 0.0,
+      "ignore_rate": 0.0,
+      "fail_rate": 0.0,
+      "top_success": null,
+      "top_fail": null
+    },
+    "suggestions": []
+  },
+  {
+    "timestamp": "2025-12-10T14:16:19.338188",
+    "summary": {
+      "hit_rate": 0.0,
+      "ignore_rate": 0.0,
+      "fail_rate": 0.0,
+      "top_success": null,
+      "top_fail": null
+    },
+    "suggestions": []
+  },
+  {
+    "timestamp": "2025-12-10T15:04:01.565301",
+    "summary": {
+      "hit_rate": 0.0,
+      "ignore_rate": 0.0,
+      "fail_rate": 0.0,
+      "top_success": null,
+      "top_fail": null
+    },
+    "suggestions": []
+  },
+  {
+    "timestamp": "2025-12-10T15:10:34.992894",
+    "summary": {
+      "hit_rate": 0.0,
+      "ignore_rate": 0.0,
+      "fail_rate": 0.0,
+      "top_success": null,
+      "top_fail": null
+    },
+    "suggestions": []
+  },
+  {
+    "timestamp": "2025-12-10T16:21:51.372910",
+    "summary": {
+      "hit_rate": 0.0,
+      "ignore_rate": 0.0,
+      "fail_rate": 0.0,
+      "top_success": null,
+      "top_fail": null
+    },
+    "suggestions": []
+  },
+  {
+    "timestamp": "2025-12-10T17:07:56.164842",
+    "summary": {
+      "hit_rate": 0.0,
+      "ignore_rate": 0.0,
+      "fail_rate": 0.0,
+      "top_success": null,
+      "top_fail": null
+    },
+    "suggestions": []
+  },
+  {
+    "timestamp": "2025-12-10T17:08:33.213412",
+    "summary": {
+      "hit_rate": 0.0,
+      "ignore_rate": 0.0,
+      "fail_rate": 0.0,
+      "top_success": null,
+      "top_fail": null
+    },
+    "suggestions": []
+  },
+  {
+    "timestamp": "2025-12-10T17:53:14.573011",
+    "summary": {
+      "hit_rate": 0.0,
+      "ignore_rate": 0.0,
+      "fail_rate": 0.0,
+      "top_success": null,
+      "top_fail": null
+    },
+    "suggestions": []
+  },
+  {
+    "timestamp": "2025-12-10T18:22:37.106374",
+    "summary": {
+      "hit_rate": 0.0,
+      "ignore_rate": 0.0,
+      "fail_rate": 0.0,
+      "top_success": null,
+      "top_fail": null
+    },
+    "suggestions": []
+  }
+]

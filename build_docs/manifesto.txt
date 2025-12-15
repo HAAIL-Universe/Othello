@@ -1,0 +1,149 @@
+Othello is a contract-first personal goal + day planning system designed to be deployable on cheap hosting, resistant to cold starts, and safe to evolve from single-user to multi-user without rewriting core logic. Othello must separate commands (user intent that changes state) from queries (read-only views). The system must define a stable API contract, log state changes as events, and produce read models for the UI to render. The UI must not invent truth; it may only display server truth and send explicit user commands. File-based storage is allowed only as cache or local-dev convenience; production truth must live in Postgres.
+
+OTHELLO BLUEPRINT
+
+A. Contract
+
+Contract version: othello_api_v1
+
+Every request is either:
+
+Command: creates an event, mutates state, returns updated read model
+
+Query: returns a read model only
+
+All command endpoints must accept an optional idempotency key to prevent duplicates during retries.
+
+B. Event ledger
+
+Introduce an event_ledger concept as the authoritative log of changes:
+
+Each event: event_id (uuid), occurred_at, actor, type, idempotency_key, payload (jsonb), entity_type, entity_id
+
+Event ledger is written on every command.
+
+Read models are derived from:
+
+current tables (fast path), and
+
+event ledger (audit path / rebuild path).
+
+C. Read models (server truth surfaces)
+
+GoalReadModel
+
+Source: goals + plan_steps
+
+Used by: Goals tab, goal planning view
+
+TodayPlanReadModel
+
+Source: plans + plan_items
+
+Used by: Today Planner tab
+
+InsightReadModel
+
+Source: insights
+
+Used by: Insights surfaces + counters
+
+GoalTaskHistoryReadModel
+
+Source: goal_task_history
+
+Used by: history view/analytics (currently endpoint exists)
+
+D. API contract (based on existing code)
+Queries:
+
+GET /api/health/db → { status: "ok" | "error", ... }
+
+GET /api/goals → { goals: GoalReadModel[] }
+
+GET /api/goals/<goal_id> → { goal: GoalReadModel }
+
+GET /api/goals/active-with-next-actions → { goals: ... } (existing)
+
+GET /api/today-plan?mood=&fatigue=&time_pressure= → { plan: TodayPlanReadModel }
+
+GET /api/today-brief?mood=&fatigue=&time_pressure= → { brief: { ... } }
+
+GET /api/insights/summary → { pending_counts: { [type]: number } }
+
+GET /api/insights/list?status=pending|applied|dismissed → { insights: InsightReadModel[] }
+
+GET /api/goal-tasks/history?... → { goal_tasks: ..., start_date, end_date }
+
+Commands:
+
+POST /api/message → { reply, goals?, meta?, insights_meta? } (chat-driven planning)
+
+POST /api/plan/update body { item_id, status, plan_date?, reason?, reschedule_to? } → { plan: TodayPlanReadModel }
+
+POST /api/plan/rebuild → { plan: TodayPlanReadModel }
+
+POST /api/goals/<goal_id>/steps/<step_id>/status body { status } → { step: PlanStep }
+
+POST /api/goals/<goal_id>/plan body { instruction? } → { reply, goal, agent_status }
+
+POST /api/insights/apply body { id } → { ok, applied_count, insights_meta }
+
+POST /api/insights/dismiss body { id } → { ok, insights_meta }
+
+Idempotency rules (to lock now, even if enforcement comes later):
+
+Commands may include Idempotency-Key header (preferred) or request_id in JSON body.
+
+If the same key is re-sent with the same actor + endpoint, return the same result (or treat as no-op).
+
+E. UI surfaces
+
+Single UI page is acceptable for v0:
+
+“Login Gate” overlay (single-user PIN)
+
+“Waking up” overlay (cold start + DB readiness)
+
+Tabs: Chat, Today Planner, Goals, Insights (already in othello_ui.html)
+
+UI must:
+
+never compute plan content,
+
+never store truth beyond the auth token and last-selected view,
+
+treat all retries as safe (idempotent commands).
+
+F. Deployment blueprint (Render Free aligned)
+
+Preferred split (best cold-start UX):
+
+Render Static Site serving othello_ui.html (instant load)
+
+Render Web Service for API (api.py)
+
+Minimal single-service (today):
+
+Render Web Service runs Flask + serves UI at /
+
+UI shows “Waking up” state while API/DB become ready
+
+Env vars (required):
+
+OPENAI_API_KEY
+
+DATABASE_URL
+Env vars (new, for login + stability):
+
+OTHELLO_LOGIN_PIN (single-user gate)
+
+OTHELLO_SECRET_KEY (token signing)
+
+OTHELLO_MODEL (prevents interactive model selection)
+
+Start command (Render Web Service):
+
+Add gunicorn to requirements.txt
+
+Use gunicorn api:app --bind 0.0.0.0:$PORT --workers 1 --threads 8 --timeout 120
