@@ -29,3 +29,4 @@ pyyaml
 dateparser
 python-dotenv  # Environment variable management for development
 psycopg2-binary  # PostgreSQL database adapter for Python
+gunicorn  # WSGI server for production (Render)

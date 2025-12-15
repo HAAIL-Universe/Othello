@@ -127,6 +127,46 @@ Open your browser and go to: http://127.0.0.1:8000/
 
 You should see the Othello interface. Try chatting to set your first goal!
 
+## How to Run and Test Locally (Windows)
+
+### 1. Start the backend
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/run_local.ps1
+```
+
+- This will activate the virtual environment (if present), set the default port (5000), and start the Flask server on http://127.0.0.1:5000/.
+- The health endpoint will be available at http://127.0.0.1:5000/api/health/db
+
+### 2. Open the UI
+
+- Visit: [http://127.0.0.1:5000/](http://127.0.0.1:5000/) in your browser (do NOT use file://).
+
+### 3. Test the health endpoint
+
+```powershell
+curl.exe -i http://127.0.0.1:5000/api/health/db
+```
+Expected response:
+```json
+{
+  "status": "ok",
+  "message": "Database connection healthy",
+  "database": "PostgreSQL (Neon)"
+}
+```
+
+### 4. Waking Overlay Verification Checklist
+
+1. Stop the backend if running, then start it using the command above.
+2. Open the UI in your browser. You should see a full-screen "Waking server…" overlay with a spinner and status line.
+3. The overlay should disappear and the app should load once the backend is ready.
+4. If you stop the backend and reload the UI, the overlay should remain and show an error after ~90 seconds, with a Retry button.
+5. Start the backend while the overlay is up: the overlay should disappear and the app should load.
+6. Confirm the health endpoint returns JSON as above at http://127.0.0.1:5000/api/health/db
+
+---
+
 ## Project Structure
 
 ```
@@ -240,3 +280,26 @@ MIT License - Feel free to use and modify for your own goals!
 ---
 
 **Built with ❤️ to help you achieve your goals**
+
+## Render Deploy Checklist
+
+- **Build command:** (leave blank or use default)
+- **Start command:**
+  ```
+  python -m gunicorn api:app --bind 0.0.0.0:$PORT --workers 1 --threads 8 --timeout 120
+  ```
+- **Required env vars:**
+  - `OPENAI_API_KEY` (for AI features)
+  - `DATABASE_URL` (for goal persistence)
+- **Notes:**
+  - `gunicorn` is now installed via `requirements.txt`.
+  - The start command uses `python -m gunicorn` to avoid PATH issues on Render.
+  - The app is served at `/` and health at `/api/health/db`.
+
+To redeploy:
+1. Push to the main branch on GitHub.
+2. Trigger a manual deploy in the Render dashboard if needed.
+3. Watch logs for `Booting worker with pid` and `Listening at: http://0.0.0.0:$PORT`.
+4. Visit your Render URL and confirm the app loads and the waking overlay clears when backend is ready.
+
+---
