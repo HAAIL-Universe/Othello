@@ -1328,6 +1328,14 @@
     // DOM element bindings for globals that may be missing
     const modeToggle = document.getElementById('mode-toggle');
     const inputBar = document.getElementById('input-bar');
+    const modeDropdown = document.getElementById('mode-dropdown');
+    const focusRibbon = document.getElementById('focus-ribbon');
+    const modeOptions = Array.from(document.querySelectorAll('.mode-option'));
+    if (typeof setBootState !== 'function') {
+      function setBootState(state) {
+        console.log('bootState:', state);
+      }
+    }
       // --- Boot State Machine ---
       // BOOT_DEBUG flag for boot instrumentation
       const BOOT_DEBUG = location.search.includes("bootdebug=1");
@@ -2311,7 +2319,7 @@
         updateFocusRibbon();
       } else {
         if (inputBar) inputBar.classList.add("hidden");
-        focusRibbon.classList.remove("visible");
+        if (focusRibbon) focusRibbon.classList.remove("visible");
       }
 
       // Load view-specific data
@@ -2356,9 +2364,11 @@
       modeLabel.textContent = MODE_LABELS[mode];
       modeSubtitle.textContent = MODE_SUBTITLES[mode] || "";
 
-      modeOptions.forEach(opt => {
-        opt.classList.toggle("active", opt.dataset.mode === mode);
-      });
+      if (modeOptions && modeOptions.length) {
+        modeOptions.forEach(opt => {
+          opt.classList.toggle("active", opt.dataset.mode === mode);
+        });
+      }
       const tabCfg = MODE_TAB_CONFIG[mode];
       if (tabCfg && middleTab) {
         const labelEl = middleTab.querySelector('.tab-label');
@@ -2375,6 +2385,7 @@
     }
 
     function toggleDropdown() {
+      if (!modeDropdown) return;
       const isOpen = modeDropdown.classList.contains("open");
       modeDropdown.classList.toggle("open", !isOpen);
       if (modeToggle) modeToggle.setAttribute("aria-expanded", (!isOpen).toString());
@@ -2386,16 +2397,19 @@
       });
     }
 
-    modeOptions.forEach(opt => {
-      opt.addEventListener("click", () => {
-        const mode = opt.dataset.mode;
-        setMode(mode);
-        modeDropdown.classList.remove("open");
-        if (modeToggle) modeToggle.setAttribute("aria-expanded", "false");
+    if (modeOptions && modeOptions.length) {
+      modeOptions.forEach(opt => {
+        opt.addEventListener("click", () => {
+          const mode = opt.dataset.mode;
+          setMode(mode);
+          if (modeDropdown) modeDropdown.classList.remove("open");
+          if (modeToggle) modeToggle.setAttribute("aria-expanded", "false");
+        });
       });
-    });
+    }
 
     document.addEventListener("click", (e) => {
+      if (!modeDropdown || (!modeToggle && !modeDropdown)) return;
       if (!modeDropdown.contains(e.target) && (!modeToggle || !modeToggle.contains(e.target))) {
         modeDropdown.classList.remove("open");
         if (modeToggle) modeToggle.setAttribute("aria-expanded", "false");
@@ -2409,11 +2423,11 @@
 
     // ===== FOCUS RIBBON =====
     function updateFocusRibbon() {
+      if (!focusRibbon) return;
       if (othelloState.currentView !== "chat") {
         focusRibbon.classList.remove("visible");
         return;
       }
-
       if (othelloState.activeGoalId !== null) {
         const goal = othelloState.goals.find(g => g.id === othelloState.activeGoalId);
         if (goal) {

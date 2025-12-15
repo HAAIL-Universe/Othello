@@ -1,3 +1,7 @@
+@app.route("/api/auth/logout", methods=["POST"])
+def auth_logout():
+    session.clear()
+    return jsonify({"ok": True})
 
 # Asset route registration (after app exists)
 from flask import send_from_directory
