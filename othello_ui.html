@@ -1,6 +1,54 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+    <style>
+      .waking-overlay {
+        position: fixed;
+        z-index: 9999;
+        top: 0; left: 0; right: 0; bottom: 0;
+        background: rgba(2, 6, 23, 0.98);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        color: var(--text-main);
+        font-size: 1.2rem;
+        pointer-events: all;
+        transition: opacity 0.3s;
+      }
+      .waking-overlay__spinner {
+        border: 6px solid var(--bg-2);
+        border-top: 6px solid var(--accent);
+        border-radius: 50%;
+        width: 56px;
+        height: 56px;
+        animation: spin 1s linear infinite;
+        margin-bottom: 2rem;
+      }
+      @keyframes spin {
+        0% { transform: rotate(0deg); }
+        100% { transform: rotate(360deg); }
+      }
+      .waking-overlay__status {
+        margin-top: 1.2rem;
+        font-size: 1rem;
+        color: var(--text-soft);
+      }
+      .waking-overlay__retry {
+        margin-top: 2rem;
+        padding: 0.7rem 1.5rem;
+        border-radius: 8px;
+        border: 1px solid var(--accent);
+        background: var(--accent-soft);
+        color: var(--accent);
+        font-size: 1rem;
+        cursor: pointer;
+        display: none;
+      }
+      .waking-overlay__retry.visible {
+        display: inline-block;
+      }
+    </style>
   <meta charset="UTF-8" />
   <title>Othello — Personal Goal Architect</title>
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
@@ -1131,6 +1179,12 @@
 </head>
 
 <body>
+    <div id="waking-overlay" class="waking-overlay">
+      <div class="waking-overlay__spinner"></div>
+      <div>Waking server…</div>
+      <div id="waking-status" class="waking-overlay__status">Checking server…</div>
+      <button id="waking-retry" class="waking-overlay__retry">Retry</button>
+    </div>
   <div class="shell">
 
     <!-- HEADER -->
@@ -1271,6 +1325,93 @@
 
   <!-- JS -->
   <script>
+      // --- Boot State Machine ---
+      const BOOT_STATE = {
+        WAKING_SERVER: 'WAKING_SERVER',
+        CHECKING_AUTH: 'CHECKING_AUTH',
+        LOADING_DATA: 'LOADING_DATA',
+        READY: 'READY',
+        ERROR: 'ERROR',
+      };
+      let bootState = BOOT_STATE.WAKING_SERVER;
+
+      const wakingOverlay = document.getElementById('waking-overlay');
+      const wakingStatus = document.getElementById('waking-status');
+      const wakingRetry = document.getElementById('waking-retry');
+      const statusPill = document.querySelector('.status-pill');
+      const inputBar = document.querySelector('.input-bar');
+
+      function setBootState(state) {
+        bootState = state;
+        if (state === BOOT_STATE.WAKING_SERVER) {
+          wakingOverlay.style.display = 'flex';
+          wakingStatus.textContent = 'Checking server…';
+          wakingRetry.classList.remove('visible');
+          if (statusPill) statusPill.textContent = 'Waking up…';
+          if (inputBar) inputBar.classList.add('hidden');
+        } else if (state === BOOT_STATE.ERROR) {
+          wakingStatus.textContent = 'Server did not wake up. Please try again.';
+          wakingRetry.classList.add('visible');
+          wakingOverlay.style.display = 'flex';
+          if (statusPill) statusPill.textContent = 'Offline';
+          if (inputBar) inputBar.classList.add('hidden');
+        } else {
+          wakingOverlay.style.display = 'none';
+          wakingRetry.classList.remove('visible');
+          if (inputBar) inputBar.classList.remove('hidden');
+        }
+      }
+
+      async function waitForReady() {
+        setBootState(BOOT_STATE.WAKING_SERVER);
+        let attempt = 0;
+        let delay = 700;
+        const maxDelay = 12000;
+        const maxElapsed = 1000 * 90;
+        const start = Date.now();
+        let lastErr = null;
+        while (Date.now() - start < maxElapsed) {
+          attempt++;
+          try {
+            wakingStatus.textContent = `Checking server… (attempt ${attempt})`;
+            const resp = await fetch('/api/health/db', { credentials: 'omit', cache: 'no-store' });
+            if (resp.ok) {
+              const data = await resp.json();
+              if (data.status === 'ok') {
+                setBootState(BOOT_STATE.CHECKING_AUTH);
+                return;
+              }
+              lastErr = data.details || data.message || 'Unknown error';
+            } else {
+              lastErr = `HTTP ${resp.status}`;
+            }
+          } catch (e) {
+            lastErr = e.message || e.toString();
+          }
+          wakingStatus.textContent = `Waking server… (attempt ${attempt})\n${lastErr || ''}`;
+          await new Promise(r => setTimeout(r, delay));
+          delay = Math.min(maxDelay, Math.floor(delay * 1.7 + 200));
+        }
+        setBootState(BOOT_STATE.ERROR);
+      }
+
+      wakingRetry.addEventListener('click', () => {
+        waitForReady().then(() => {
+          setBootState(BOOT_STATE.CHECKING_AUTH);
+          // Placeholder: next boot step (e.g., checkAuth) goes here
+        });
+      });
+
+      // --- Boot sequence ---
+      (async function boot() {
+        await waitForReady();
+        // Placeholder: checkAuth() would go here
+        setBootState(BOOT_STATE.READY);
+        // Continue normal app boot (e.g., loadTodayPlanner)
+        if (typeof loadTodayPlanner === 'function') {
+          loadTodayPlanner();
+        }
+      })();
     const API = "/api/message";
     const GOALS_API = "/api/goals";
     const PLAN_UPDATE_API = "/api/plan/update";
@@ -1615,11 +1756,7 @@
       plannerError.textContent = "";
     }
 
-    function renderTodayBrief(brief) {
-      plannerHeadline.textContent = brief.headline || "Today Planner";
-      const notes = [brief.energy_load, brief.backlog].filter(Boolean).join(" • ");
-      plannerEnergy.textContent = notes || "";
-    }
+
 
     function createStatusChip(status) {
       const chip = document.createElement("div");
