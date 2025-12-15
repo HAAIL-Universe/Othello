@@ -1601,12 +1601,12 @@
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             credentials: 'same-origin',
-            body: JSON.stringify({ pin: pin })
+            body: JSON.stringify({ password: pin })
           });
           if (resp.ok) {
             const data = await resp.json();
             if (BOOT_DEBUG) console.log('[BOOT] /api/auth/login', data);
-            if (data && data.authed) {
+            if (data && (data.ok || data.authed)) {
               setBootState(BOOT_STATE.AUTHENTICATED);
               bootApp();
               return;
@@ -1617,7 +1617,12 @@
             let errMsg = 'Login failed.';
             try {
               const data = await resp.json();
-              errMsg = data.error || errMsg;
+              // Show backend 503 server_misconfigured error inline
+              if (resp.status === 503 && data && data.error === 'server_misconfigured') {
+                errMsg = data.detail || 'Server misconfigured.';
+              } else {
+                errMsg = data.error || errMsg;
+              }
             } catch {}
             loginError.textContent = errMsg;
           }
@@ -2393,10 +2398,15 @@
     }
 
     // ===== TAB NAVIGATION =====
+    // Define tabs and views from DOM
+    const tabs = Array.from(document.querySelectorAll('.tab'));
+    const views = Array.from(document.querySelectorAll('.view'));
+
     function switchView(viewName) {
       othelloState.currentView = viewName;
 
       // Update tabs
+      if (!tabs || !tabs.length) return;
       tabs.forEach(tab => {
         if (tab.dataset.view === viewName) {
           tab.classList.add("active");
@@ -2406,13 +2416,15 @@
       });
 
       // Update views
-      views.forEach(view => {
-        if (view.id === `${viewName}-view`) {
-          view.classList.add("active");
-        } else {
-          view.classList.remove("active");
-        }
-      });
+      if (views && views.length) {
+        views.forEach(view => {
+          if (view.id === `${viewName}-view`) {
+            view.classList.add("active");
+          } else {
+            view.classList.remove("active");
+          }
+        });
+      }
 
       // Show/hide input bar and focus ribbon
       if (viewName === "chat") {
@@ -2433,11 +2445,13 @@
       }
     }
 
-    tabs.forEach(tab => {
-      tab.addEventListener("click", () => {
-        switchView(tab.dataset.view);
+    if (tabs && tabs.length) {
+      tabs.forEach(tab => {
+        tab.addEventListener("click", () => {
+          switchView(tab.dataset.view);
+        });
       });
-    });
+    }
 
     // ===== MODE SWITCHER =====
     function persistMode(mode) {

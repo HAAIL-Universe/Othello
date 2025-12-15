@@ -222,10 +222,14 @@ if not secret:
     secret = "dev-secret-key"
 app.config["SECRET_KEY"] = secret
 
-# Minimal auth config
-OTHELLO_PASSWORD = os.environ.get("OTHELLO_PASSWORD")
+
+# Minimal auth config (compat bridge)
 from flask import session, abort
 from functools import wraps
+from passlib.hash import bcrypt
+
+OTHELLO_PASSWORD = os.environ.get("OTHELLO_PASSWORD")
+OTHELLO_PIN_HASH = os.environ.get("OTHELLO_PIN_HASH")
 
 def require_auth(f):
     @wraps(f)
@@ -248,12 +252,35 @@ def health_check():
 def auth_login():
     data = request.get_json() or {}
     password = data.get("password")
-    if not OTHELLO_PASSWORD:
-        return jsonify({"error": "Server misconfigured: OTHELLO_PASSWORD not set"}), 500
-    if password == OTHELLO_PASSWORD:
-        session["authed"] = True
-        return jsonify({"ok": True})
-    return jsonify({"error": "Invalid password"}), 401
+    # Auth precedence: OTHELLO_PIN_HASH > OTHELLO_PASSWORD > misconfig
+    if OTHELLO_PIN_HASH:
+        if not password:
+            return jsonify({"error": "missing_password", "detail": "Password required"}), 400
+        try:
+            if bcrypt.verify(password, OTHELLO_PIN_HASH):
+                session["authed"] = True
+                return jsonify({"ok": True})
+            else:
+                return jsonify({"error": "Invalid password"}), 401
+        except Exception as e:
+            logging.getLogger("API").error(f"bcrypt verification error: {e}")
+            return jsonify({"error": "server_error", "detail": "bcrypt verification failed"}), 500
+    elif OTHELLO_PASSWORD:
+        logging.getLogger("API").warning("plaintext password mode enabled; set OTHELLO_PIN_HASH to harden")
+        if not password:
+            return jsonify({"error": "missing_password", "detail": "Password required"}), 400
+        if password == OTHELLO_PASSWORD:
+            session["authed"] = True
+            return jsonify({"ok": True})
+        return jsonify({"error": "Invalid password"}), 401
+    else:
+        return (
+            jsonify({
+                "error": "server_misconfigured",
+                "detail": "OTHELLO_PASSWORD not set"
+            }),
+            503
+        )
 
 @app.route("/api/auth/me", methods=["GET"])
 def auth_me():
