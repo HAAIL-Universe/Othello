@@ -1179,11 +1179,18 @@
 </head>
 
 <body>
-    <div id="waking-overlay" class="waking-overlay">
-      <div class="waking-overlay__spinner"></div>
-      <div>Waking server…</div>
-      <div id="waking-status" class="waking-overlay__status">Checking server…</div>
-      <button id="waking-retry" class="waking-overlay__retry">Retry</button>
+    <div id="login-overlay" class="waking-overlay" style="display:flex;">
+      <div class="waking-overlay__spinner" id="login-spinner"></div>
+      <div class="login-content" id="login-content" style="display:none;flex-direction:column;align-items:center;">
+        <div class="brand-title" style="font-size:2rem;margin-bottom:1.2rem;">Othello</div>
+        <form id="login-form" autocomplete="off" style="display:flex;flex-direction:column;align-items:center;width:100%;max-width:320px;">
+          <input id="login-pin" type="password" inputmode="numeric" pattern="[0-9]*" maxlength="12" placeholder="Enter PIN" style="font-size:1.2rem;padding:0.7rem 1rem;margin-bottom:1rem;width:100%;border-radius:8px;border:1px solid var(--border);background:var(--bg-2);color:var(--text-main);outline:none;" autocomplete="off" disabled />
+          <button id="login-btn" type="submit" style="font-size:1.1rem;padding:0.7rem 1.5rem;border-radius:8px;border:1px solid var(--accent);background:var(--accent-soft);color:var(--accent);margin-bottom:0.7rem;width:100%;" disabled>Login</button>
+          <div id="login-error" style="color:#f87171;font-size:0.98rem;min-height:1.5em;margin-bottom:0.5em;text-align:center;"></div>
+        </form>
+      </div>
+      <div id="login-status" class="waking-overlay__status" style="margin-top:1.2rem;">Waking server…</div>
+      <button id="login-retry" class="waking-overlay__retry">Retry</button>
     </div>
   <div class="shell">
 
@@ -1329,39 +1336,83 @@
       // BOOT_DEBUG flag for boot instrumentation
       const BOOT_DEBUG = location.search.includes("bootdebug=1");
       const BOOT_STATE = {
-        WAKING_SERVER: 'WAKING_SERVER',
+        WAKING: 'WAKING',
         CHECKING_AUTH: 'CHECKING_AUTH',
-        LOADING_DATA: 'LOADING_DATA',
-        READY: 'READY',
+        NEEDS_LOGIN: 'NEEDS_LOGIN',
+        AUTHENTICATED: 'AUTHENTICATED',
+        BOOTING_APP: 'BOOTING_APP',
         ERROR: 'ERROR',
       };
-      let bootState = BOOT_STATE.WAKING_SERVER;
+      let bootState = BOOT_STATE.WAKING;
 
-      const wakingOverlay = document.getElementById('waking-overlay');
-      const wakingStatus = document.getElementById('waking-status');
-      const wakingRetry = document.getElementById('waking-retry');
+      // Overlay elements
+      const loginOverlay = document.getElementById('login-overlay');
+      const loginSpinner = document.getElementById('login-spinner');
+      const loginContent = document.getElementById('login-content');
+      const loginForm = document.getElementById('login-form');
+      const loginPin = document.getElementById('login-pin');
+      const loginBtn = document.getElementById('login-btn');
+      const loginError = document.getElementById('login-error');
+      const loginStatus = document.getElementById('login-status');
+      const loginRetry = document.getElementById('login-retry');
       const statusPill = document.querySelector('.status-pill');
       const inputBar = document.querySelector('.input-bar');
 
       function setBootState(state) {
         bootState = state;
         if (BOOT_DEBUG) console.log('[BOOT] setBootState:', state);
-        if (state === BOOT_STATE.WAKING_SERVER) {
-          wakingOverlay.style.display = 'flex';
-          wakingStatus.textContent = 'Checking server…';
-          wakingRetry.classList.remove('visible');
+        // Overlay always blocks app until authenticated
+        if (state === BOOT_STATE.WAKING) {
+          loginOverlay.style.display = 'flex';
+          loginSpinner.style.display = '';
+          loginContent.style.display = 'none';
+          loginStatus.textContent = 'Waking server…';
+          loginStatus.style.display = '';
+          loginRetry.classList.remove('visible');
+          loginPin.disabled = true;
+          loginBtn.disabled = true;
+          loginError.textContent = '';
           if (statusPill) statusPill.textContent = 'Waking up…';
           if (inputBar) inputBar.classList.add('hidden');
         } else if (state === BOOT_STATE.ERROR) {
-          wakingStatus.textContent = 'Server did not wake up. Please try again.';
-          wakingRetry.classList.add('visible');
-          wakingOverlay.style.display = 'flex';
+          loginOverlay.style.display = 'flex';
+          loginSpinner.style.display = 'none';
+          loginContent.style.display = 'none';
+          loginStatus.textContent = 'Server did not wake up. Please try again.';
+          loginStatus.style.display = '';
+          loginRetry.classList.add('visible');
+          loginPin.disabled = true;
+          loginBtn.disabled = true;
           if (statusPill) statusPill.textContent = 'Offline';
           if (inputBar) inputBar.classList.add('hidden');
-        } else {
-          wakingOverlay.style.display = 'none';
-          wakingRetry.classList.remove('visible');
+        } else if (state === BOOT_STATE.CHECKING_AUTH) {
+          loginOverlay.style.display = 'flex';
+          loginSpinner.style.display = '';
+          loginContent.style.display = 'none';
+          loginStatus.textContent = 'Checking authentication…';
+          loginStatus.style.display = '';
+          loginRetry.classList.remove('visible');
+          loginPin.disabled = true;
+          loginBtn.disabled = true;
+        } else if (state === BOOT_STATE.NEEDS_LOGIN) {
+          loginOverlay.style.display = 'flex';
+          loginSpinner.style.display = 'none';
+          loginContent.style.display = 'flex';
+          loginStatus.textContent = 'Server ready.';
+          loginStatus.style.display = '';
+          loginRetry.classList.remove('visible');
+          loginPin.disabled = false;
+          loginBtn.disabled = false;
+          loginPin.value = '';
+          loginPin.focus();
+        } else if (state === BOOT_STATE.AUTHENTICATED) {
+          loginOverlay.style.display = 'none';
+          loginRetry.classList.remove('visible');
+          loginError.textContent = '';
           if (inputBar) inputBar.classList.remove('hidden');
+        } else if (state === BOOT_STATE.BOOTING_APP) {
+          loginOverlay.style.display = 'none';
+          loginRetry.classList.remove('visible');
         }
       }
 
@@ -1372,7 +1423,7 @@
           return;
         }
         _waitForReadyActive = true;
-        setBootState(BOOT_STATE.WAKING_SERVER);
+        setBootState(BOOT_STATE.WAKING);
         let attempt = 0;
         let delay = 700;
         const maxDelay = 12000;
@@ -1385,17 +1436,17 @@
           let data = null;
           let fetchError = null;
           try {
-            wakingStatus.textContent = `Checking server… (attempt ${attempt})`;
-            if (BOOT_DEBUG) console.log(`[BOOT] Polling /api/health/db (attempt ${attempt})`);
+            loginStatus.textContent = `Waking server… (attempt ${attempt})`;
+            if (BOOT_DEBUG) console.log(`[BOOT] Polling /api/health (attempt ${attempt})`);
             const controller = new AbortController();
             const timeout = setTimeout(() => controller.abort(), 4000);
-            resp = await fetch('/api/health/db', { credentials: 'omit', cache: 'no-store', signal: controller.signal });
+            resp = await fetch('/api/health', { credentials: 'omit', cache: 'no-store', signal: controller.signal });
             clearTimeout(timeout);
-            if (BOOT_DEBUG) console.log('[BOOT] /api/health/db response', resp.status);
+            if (BOOT_DEBUG) console.log('[BOOT] /api/health response', resp.status);
             if (resp.ok) {
               try {
                 data = await resp.json();
-                if (BOOT_DEBUG) console.log('[BOOT] /api/health/db payload', data);
+                if (BOOT_DEBUG) console.log('[BOOT] /api/health payload', data);
               } catch (jsonErr) {
                 if (BOOT_DEBUG) console.log('[BOOT] JSON parse error', jsonErr);
                 lastErr = 'Invalid JSON';
@@ -1415,38 +1466,138 @@
             lastErr = e.message || e.toString();
             if (BOOT_DEBUG) console.log('[BOOT] fetch error', e);
           }
-          wakingStatus.textContent = `Waking server… (attempt ${attempt})\n${lastErr || ''}`;
+          loginStatus.textContent = `Waking server… (attempt ${attempt})\n${lastErr || ''}`;
           if (BOOT_DEBUG) console.log('[BOOT] Not ready, retrying in', delay, 'ms', { lastErr });
-          await new Promise(r => setTimeout(r, delay));
+          await new Promise(r => setTimeout(r, delay + Math.floor(Math.random() * 200)));
           delay = Math.min(maxDelay, Math.floor(delay * 1.7 + 200));
         }
         setBootState(BOOT_STATE.ERROR);
         _waitForReadyActive = false;
       }
 
-      wakingRetry.addEventListener('click', () => {
-        waitForReady().then(() => {
-          setBootState(BOOT_STATE.CHECKING_AUTH);
-          // Placeholder: next boot step (e.g., checkAuth) goes here
-        });
+      async function checkAuth() {
+        setBootState(BOOT_STATE.CHECKING_AUTH);
+        try {
+          const resp = await fetch('/api/auth/me', { credentials: 'same-origin', cache: 'no-store' });
+          if (resp.ok) {
+            const data = await resp.json();
+            if (BOOT_DEBUG) console.log('[BOOT] /api/auth/me', data);
+            if (data && data.authed) {
+              setBootState(BOOT_STATE.AUTHENTICATED);
+              bootApp();
+              return;
+            }
+          }
+        } catch (e) {
+          if (BOOT_DEBUG) console.log('[BOOT] /api/auth/me error', e);
+        }
+        setBootState(BOOT_STATE.NEEDS_LOGIN);
+      }
+
+      async function handleLogin(pin) {
+        loginBtn.disabled = true;
+        loginPin.disabled = true;
+        loginError.textContent = '';
+        try {
+          const resp = await fetch('/api/auth/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ pin: pin })
+          });
+          if (resp.ok) {
+            const data = await resp.json();
+            if (BOOT_DEBUG) console.log('[BOOT] /api/auth/login', data);
+            if (data && data.authed) {
+              setBootState(BOOT_STATE.AUTHENTICATED);
+              bootApp();
+              return;
+            } else {
+              loginError.textContent = (data && data.error) || 'Invalid PIN.';
+            }
+          } else {
+            let errMsg = 'Login failed.';
+            try {
+              const data = await resp.json();
+              errMsg = data.error || errMsg;
+            } catch {}
+            loginError.textContent = errMsg;
+          }
+        } catch (e) {
+          loginError.textContent = 'Network error.';
+        }
+        loginPin.value = '';
+        loginBtn.disabled = false;
+        loginPin.disabled = false;
+        loginPin.focus();
+      }
+
+      async function handleLogout() {
+        try {
+          await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' });
+        } catch {}
+        // Clear UI state if needed
+        setBootState(BOOT_STATE.NEEDS_LOGIN);
+      }
+
+      function bootApp() {
+        setBootState(BOOT_STATE.BOOTING_APP);
+        if (BOOT_DEBUG) console.log('[BOOT] Booting app…');
+        setTimeout(async () => {
+          try {
+            if (typeof loadTodayPlanner === 'function') {
+              await loadTodayPlanner();
+            }
+            setBootState(BOOT_STATE.AUTHENTICATED);
+          } catch (e) {
+            if (e && (e.status === 401 || e.status === 403)) {
+              if (BOOT_DEBUG) console.log('[BOOT] Data call 401/403, forcing re-auth');
+              await checkAuth();
+            } else {
+              // Show in-app error banner (not overlay)
+              if (plannerError) {
+                plannerError.style.display = 'block';
+                plannerError.textContent = 'App error: ' + (e && e.message ? e.message : 'Unknown error.');
+              }
+            }
+          }
+        }, 100);
+      }
+
+      loginRetry.addEventListener('click', () => {
+        waitForReady().then(checkAuth);
       });
 
-      // --- Boot sequence ---
-      (async function boot() {
-        if (BOOT_DEBUG) console.log('[BOOT] Starting boot sequence');
-        await waitForReady();
-        // At this point, server is reachable, so hide overlay immediately
-        setBootState(BOOT_STATE.READY);
-        if (BOOT_DEBUG) console.log('[BOOT] Server ready, continuing app boot');
-        // Continue normal app boot (e.g., loadTodayPlanner)
-        if (typeof loadTodayPlanner === 'function') {
-          try {
-            await loadTodayPlanner();
-          } catch (e) {
-            // loadTodayPlanner already handles error UI, but log for BOOT_DEBUG
-            if (BOOT_DEBUG) console.log('[BOOT] loadTodayPlanner failed', e);
-          }
+      loginForm.addEventListener('submit', (e) => {
+        e.preventDefault();
+        if (loginPin.value.trim()) {
+          handleLogin(loginPin.value.trim());
         }
+      });
+      loginPin.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          loginBtn.click();
+        }
+      });
+
+      // Add logout button to header (minimal UI)
+      let logoutBtn = document.getElementById('logout-btn');
+      if (!logoutBtn) {
+        logoutBtn = document.createElement('button');
+        logoutBtn.id = 'logout-btn';
+        logoutBtn.textContent = 'Logout';
+        logoutBtn.style = 'margin-left:1.5rem;font-size:1rem;padding:0.3rem 1.1rem;border-radius:8px;border:1px solid var(--accent);background:var(--accent-soft);color:var(--accent);';
+        const brandRow = document.querySelector('.brand-row');
+        if (brandRow) brandRow.appendChild(logoutBtn);
+      }
+      logoutBtn.onclick = handleLogout;
+
+      // --- Unified boot sequence ---
+      (async function bootUnified() {
+        if (BOOT_DEBUG) console.log('[BOOT] Starting unified boot sequence');
+        await waitForReady();
+        await checkAuth();
       })();
     const API = "/api/message";
     const GOALS_API = "/api/goals";
