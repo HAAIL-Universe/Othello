@@ -11,23 +11,6 @@ from typing import Any, Dict, Optional
 from dotenv import load_dotenv
 load_dotenv()
 
-# Lazy loader for agent/LLM/DB modules
-def get_agent_components():
-    # Import only when needed (not for health endpoints)
-    from core.architect_brain import Architect
-    from core.llm_wrapper import AsyncLLMWrapper
-    from core.input_router import InputRouter
-    from core.othello_engine import OthelloEngine
-    from utils.postprocessor import postprocess_and_save
-    from db.database import init_pool, ensure_core_schema, fetch_one
-    from db import plan_repository
-    from db import goal_task_history_repository
-    from db.db_goal_manager import DbGoalManager
-    from core.memory_manager import MemoryManager
-    from db import insights_repository
-    from insights_service import extract_insights_from_exchange
-    return locals()
-
 
 def serialize_insight(insight: Dict[str, Any]) -> Dict[str, Any]:
     """Convert a repository row into a JSON-safe dict for the UI."""
@@ -158,6 +141,39 @@ def format_goal_list(goals) -> str:
 
 
 def parse_goal_selection_request(text: str) -> Optional[int]:
+
+    # === Model selector and agent/LLM/DB lazy loader ===
+    import os
+    SELECTED_MODEL = os.getenv("FELLO_MODEL", "gpt-4o-mini")
+
+    # Canonical lazy loader for agent/LLM/DB modules and model selection
+    def get_agent_components():
+        # Import only when needed (not for health endpoints)
+        from core.architect_brain import Architect
+        from core.llm_wrapper import AsyncLLMWrapper
+        from core.input_router import InputRouter
+        from core.othello_engine import OthelloEngine
+        from utils.postprocessor import postprocess_and_save
+        from db.database import ensure_core_schema, fetch_one
+        from db import plan_repository
+        from db import goal_task_history_repository
+        from db.db_goal_manager import DbGoalManager
+        from core.memory_manager import MemoryManager
+        from db import insights_repository
+        from insights_service import extract_insights_from_exchange
+        # Model selection: try pick_model if available, else fallback
+        try:
+            from core.llm_wrapper import pick_model
+            model = pick_model(default=os.getenv("FELLO_MODEL", "gpt-4o-mini"))
+        except Exception:
+            model = os.getenv("FELLO_MODEL", "gpt-4o-mini")
+        openai_model = AsyncLLMWrapper(model=model)
+        architect_agent = Architect(model=openai_model)
+        architect_agent.goal_mgr = DbGoalManager()
+        architect_agent.memory_mgr = MemoryManager()
+        othello_engine = OthelloEngine(goal_manager=architect_agent.goal_mgr, memory_manager=architect_agent.memory_mgr)
+        DEFAULT_USER_ID = DbGoalManager.DEFAULT_USER_ID
+        return locals()
     """
     Try to parse EXPLICIT goal selection commands like:
     - "goal 1"
@@ -192,26 +208,7 @@ def parse_goal_selection_request(text: str) -> Optional[int]:
     return None
 
 
-# === Model selector at startup ===
-import os
-selected_model = os.getenv("OTHELLO_MODEL") or "gpt-4o"
-print(f"FELLO will use: {selected_model}")
 
-
-selected_model = pick_model()
-print(f"FELLO will use: {selected_model}")
-
-# ===== Instantiate Architect with OpenAI Model =====
-openai_model = AsyncLLMWrapper(model=selected_model)
-architect_agent = Architect(model=openai_model)
-
-# Replace the file-based GoalManager with database-backed version
-architect_agent.goal_mgr = DbGoalManager()
-architect_agent.memory_mgr = MemoryManager()
-othello_engine = OthelloEngine(goal_manager=architect_agent.goal_mgr, memory_manager=architect_agent.memory_mgr)
-print("[API] Using database-backed GoalManager")
-
-DEFAULT_USER_ID = DbGoalManager.DEFAULT_USER_ID
 
 app = Flask(__name__)
 CORS(app)  # Allow requests from frontend
