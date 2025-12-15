@@ -1,3 +1,15 @@
+# Serve /scripts/ assets if referenced
+from flask import send_from_directory
+import os
+
+@app.route('/scripts/<path:filename>')
+def serve_scripts(filename):
+    return send_from_directory(os.path.join(os.getcwd(), 'scripts'), filename)
+
+# Serve /interface/ assets if referenced
+@app.route('/interface/<path:filename>')
+def serve_interface(filename):
+    return send_from_directory(os.path.join(os.getcwd(), 'interface'), filename)
 def get_runtime_config_snapshot():
     """
     Returns a dict with booleans for env presence, selected auth/secret/model/db modes, and build info.
@@ -293,7 +305,9 @@ def parse_goal_selection_request(text: str) -> Optional[int]:
 
 
 
-app = Flask(__name__)
+# --- Flask App Setup ---
+import mimetypes
+app = Flask(__name__, static_folder="static", static_url_path="/static")
 CORS(app)  # Allow requests from frontend
 # Harden SECRET_KEY handling for production
 secret = os.getenv("SECRET_KEY")
@@ -327,10 +341,18 @@ def require_auth(f):
     return decorated
 
 
+
 # Always-on health endpoint for connection checks (does not check DB)
 @app.route("/api/health", methods=["GET"])
 def health_check():
     return jsonify({"ok": True})
+
+# Serve static assets (JS, CSS, etc.) if referenced as /static/...
+@app.route('/static/<path:filename>')
+def static_files(filename):
+    # Guess mimetype for correct Content-Type
+    mimetype, _ = mimetypes.guess_type(filename)
+    return send_file(os.path.join(app.static_folder, filename), mimetype=mimetype)
 
 # Minimal auth endpoints
 @app.route("/api/auth/login", methods=["POST"])

@@ -1324,6 +1324,7 @@
 
   <!-- JS -->
   <script>
+    console.log("Othello UI boot OK");
       // --- Boot State Machine ---
       // BOOT_DEBUG flag for boot instrumentation
       const BOOT_DEBUG = location.search.includes("bootdebug=1");
@@ -1381,6 +1382,7 @@
       }
       function hideConnectOverlay() {
         connectOverlay.style.display = 'none';
+        connectOverlay.style.pointerEvents = 'none';
         connectRetry.classList.remove('visible');
       }
 
@@ -1399,6 +1401,11 @@
             data = await resp.json();
             if (data && (data.ok === true || data.status === 'ok')) {
               hideConnectOverlay();
+              // Defensive: forcibly hide overlay in case of race/logic bug
+              if (connectOverlay) {
+                connectOverlay.style.display = 'none';
+                connectOverlay.style.pointerEvents = 'none';
+              }
               connectBackoff = 500;
               connectAttempts = 0;
               return true;
