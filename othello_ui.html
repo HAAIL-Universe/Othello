@@ -1326,6 +1326,8 @@
   <!-- JS -->
   <script>
       // --- Boot State Machine ---
+      // BOOT_DEBUG flag for boot instrumentation
+      const BOOT_DEBUG = location.search.includes("bootdebug=1");
       const BOOT_STATE = {
         WAKING_SERVER: 'WAKING_SERVER',
         CHECKING_AUTH: 'CHECKING_AUTH',
@@ -1343,6 +1345,7 @@
 
       function setBootState(state) {
         bootState = state;
+        if (BOOT_DEBUG) console.log('[BOOT] setBootState:', state);
         if (state === BOOT_STATE.WAKING_SERVER) {
           wakingOverlay.style.display = 'flex';
           wakingStatus.textContent = 'Checking server…';
@@ -1362,7 +1365,13 @@
         }
       }
 
+      let _waitForReadyActive = false;
       async function waitForReady() {
+        if (_waitForReadyActive) {
+          if (BOOT_DEBUG) console.log('[BOOT] waitForReady already running, skipping duplicate');
+          return;
+        }
+        _waitForReadyActive = true;
         setBootState(BOOT_STATE.WAKING_SERVER);
         let attempt = 0;
         let delay = 700;
@@ -1372,27 +1381,47 @@
         let lastErr = null;
         while (Date.now() - start < maxElapsed) {
           attempt++;
+          let resp = null;
+          let data = null;
+          let fetchError = null;
           try {
             wakingStatus.textContent = `Checking server… (attempt ${attempt})`;
-            const resp = await fetch('/api/health/db', { credentials: 'omit', cache: 'no-store' });
+            if (BOOT_DEBUG) console.log(`[BOOT] Polling /api/health/db (attempt ${attempt})`);
+            const controller = new AbortController();
+            const timeout = setTimeout(() => controller.abort(), 4000);
+            resp = await fetch('/api/health/db', { credentials: 'omit', cache: 'no-store', signal: controller.signal });
+            clearTimeout(timeout);
+            if (BOOT_DEBUG) console.log('[BOOT] /api/health/db response', resp.status);
             if (resp.ok) {
-              const data = await resp.json();
-              if (data.status === 'ok') {
+              try {
+                data = await resp.json();
+                if (BOOT_DEBUG) console.log('[BOOT] /api/health/db payload', data);
+              } catch (jsonErr) {
+                if (BOOT_DEBUG) console.log('[BOOT] JSON parse error', jsonErr);
+                lastErr = 'Invalid JSON';
+                data = null;
+              }
+              if (data && data.status === 'ok') {
                 setBootState(BOOT_STATE.CHECKING_AUTH);
+                _waitForReadyActive = false;
                 return;
               }
-              lastErr = data.details || data.message || 'Unknown error';
+              lastErr = (data && (data.details || data.message)) || 'Unknown error';
             } else {
               lastErr = `HTTP ${resp.status}`;
             }
           } catch (e) {
+            fetchError = e;
             lastErr = e.message || e.toString();
+            if (BOOT_DEBUG) console.log('[BOOT] fetch error', e);
           }
           wakingStatus.textContent = `Waking server… (attempt ${attempt})\n${lastErr || ''}`;
+          if (BOOT_DEBUG) console.log('[BOOT] Not ready, retrying in', delay, 'ms', { lastErr });
           await new Promise(r => setTimeout(r, delay));
           delay = Math.min(maxDelay, Math.floor(delay * 1.7 + 200));
         }
         setBootState(BOOT_STATE.ERROR);
+        _waitForReadyActive = false;
       }
 
       wakingRetry.addEventListener('click', () => {
@@ -1404,12 +1433,19 @@
 
       // --- Boot sequence ---
       (async function boot() {
+        if (BOOT_DEBUG) console.log('[BOOT] Starting boot sequence');
         await waitForReady();
-        // Placeholder: checkAuth() would go here
+        // At this point, server is reachable, so hide overlay immediately
         setBootState(BOOT_STATE.READY);
+        if (BOOT_DEBUG) console.log('[BOOT] Server ready, continuing app boot');
         // Continue normal app boot (e.g., loadTodayPlanner)
         if (typeof loadTodayPlanner === 'function') {
-          loadTodayPlanner();
+          try {
+            await loadTodayPlanner();
+          } catch (e) {
+            // loadTodayPlanner already handles error UI, but log for BOOT_DEBUG
+            if (BOOT_DEBUG) console.log('[BOOT] loadTodayPlanner failed', e);
+          }
         }
       })();
     const API = "/api/message";
@@ -1746,14 +1782,24 @@
       });
     }
 
-    function renderPlannerError(message) {
+    function renderPlannerError(message, httpStatus) {
       plannerError.style.display = "block";
-      plannerError.textContent = message;
+      let msg = message || "Could not load today's plan. Please try again later.";
+      if (httpStatus) msg += ` (HTTP ${httpStatus})`;
+      plannerError.innerHTML = `${msg} <button id="planner-retry-btn" style="margin-left:1em;">Retry</button>`;
+      const retryBtn = document.getElementById("planner-retry-btn");
+      if (retryBtn) {
+        retryBtn.onclick = () => {
+          clearPlannerError();
+          loadTodayPlanner();
+        };
+      }
     }
 
     function clearPlannerError() {
       plannerError.style.display = "none";
       plannerError.textContent = "";
+      plannerError.innerHTML = "";
     }
 
 
@@ -1938,7 +1984,7 @@
     }
 
     async function loadTodayPlanner() {
-      console.log("[Today Planner] loadTodayPlanner invoked", {
+      if (BOOT_DEBUG) console.log("[Today Planner] loadTodayPlanner invoked", {
         view: othelloState.currentView,
         ts: new Date().toISOString(),
       });
@@ -1950,11 +1996,19 @@
       try {
         const [brief, plan] = await Promise.all([fetchTodayBrief(), fetchTodayPlan()]);
         const goalTasks = (plan.sections?.goal_tasks || []);
-        console.log("[Today Planner] goalTasks count", goalTasks.length, { source: "ui", planSource: plan._plan_source });
+        if (BOOT_DEBUG) console.log("[Today Planner] goalTasks count", goalTasks.length, { source: "ui", planSource: plan._plan_source });
         renderTodayBrief(plan, brief);
         renderPlannerSections(plan, goalTasks);
       } catch (e) {
-        renderPlannerError("Could not load today\'s plan. Please try again later.");
+        let httpStatus = null;
+        if (e && e.response && e.response.status) httpStatus = e.response.status;
+        if (e && e.message && e.message.startsWith('Failed to load plan')) {
+          // Try to extract HTTP status from error message if present
+          const match = e.message.match(/HTTP (\d+)/);
+          if (match) httpStatus = match[1];
+        }
+        renderPlannerError("Planner load failed", httpStatus);
+        if (BOOT_DEBUG) console.log("[Today Planner] loadTodayPlanner error", e);
       }
     }
 
