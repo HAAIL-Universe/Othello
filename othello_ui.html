@@ -1541,18 +1541,21 @@
         checkApiHealth();
       });
 
-      loginForm.addEventListener('submit', (e) => {
-        e.preventDefault();
-        if (loginPin.value.trim()) {
-          handleLogin(loginPin.value.trim());
-        }
-      });
-      loginPin.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') {
+      const loginForm = document.getElementById('loginForm');
+      if (loginForm) {
+        loginForm.addEventListener('submit', (e) => {
           e.preventDefault();
-          loginBtn.click();
-        }
-      });
+          if (loginPin.value.trim()) {
+            handleLogin(loginPin.value.trim());
+          }
+        });
+        loginPin.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            loginBtn.click();
+          }
+        });
+      }
 
       // Add logout button to header (minimal UI)
       let logoutBtn = document.getElementById('logout-btn');
