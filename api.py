@@ -1,3 +1,82 @@
+def get_runtime_config_snapshot():
+    """
+    Returns a dict with booleans for env presence, selected auth/secret/model/db modes, and build info.
+    Never includes or logs secret values.
+    """
+    env = os.environ
+    def present(key):
+        return bool(env.get(key))
+
+    # Auth mode
+    if present("OTHELLO_PIN_HASH"):
+        auth_mode = "pin_hash"
+    elif present("OTHELLO_PASSWORD"):
+        auth_mode = "plaintext_password"
+    else:
+        auth_mode = "none"
+
+    # Secret key source
+    if present("SECRET_KEY"):
+        secret_key_source = "SECRET_KEY"
+    elif present("OTHELLO_SECRET_KEY"):
+        secret_key_source = "OTHELLO_SECRET_KEY"
+    elif (os.getenv("RENDER") or os.getenv("RENDER_SERVICE_ID")):
+        secret_key_source = "missing"
+    else:
+        secret_key_source = "default_dev"
+
+    # Model
+    model = env.get("OTHELLO_MODEL")
+    if not model:
+        # Try to read from .llm_model_cache if present (safe)
+        try:
+            with open(".llm_model_cache", "r") as f:
+                model = f.read().strip()
+        except Exception:
+            model = None
+    model_selected = model or "unknown"
+
+    # DB
+    db_mode = "configured" if present("DATABASE_URL") else "missing"
+
+    # Build info
+    build = env.get("RENDER_GIT_COMMIT") or "unknown"
+
+    # Compose snapshot
+    snapshot = {
+        "env_present": {
+            "DATABASE_URL_present": present("DATABASE_URL"),
+            "OPENAI_API_KEY_present": present("OPENAI_API_KEY"),
+            "OTHELLO_PIN_HASH_present": present("OTHELLO_PIN_HASH"),
+            "OTHELLO_PASSWORD_present": present("OTHELLO_PASSWORD"),
+            "SECRET_KEY_present": present("SECRET_KEY"),
+            "OTHELLO_SECRET_KEY_present": present("OTHELLO_SECRET_KEY"),
+            "OTHELLO_MODEL_present": present("OTHELLO_MODEL"),
+            "OTHELLO_LOGIN_KEY_present": present("OTHELLO_LOGIN_KEY"),
+        },
+        "auth_mode_selected": auth_mode,
+        "secret_key_source": secret_key_source,
+        "model_selected": model_selected,
+        "db_mode": db_mode,
+        "build": build,
+    }
+    return snapshot
+
+# Minimal auth endpoints
+def _debug_config_allowed():
+    # Only allow if authed session AND DEBUG_CONFIG=1
+    if not session.get("authed"):
+        return False
+    return os.environ.get("DEBUG_CONFIG") == "1"
+
+
+# --- Debug config endpoint ---
+@app.route("/api/debug/config", methods=["GET"])
+def debug_config():
+    if not _debug_config_allowed():
+        return ("Not found", 404)
+    return jsonify(get_runtime_config_snapshot())
+
 import logging
 import os
 import re
@@ -253,31 +332,33 @@ def auth_login():
     data = request.get_json() or {}
     password = data.get("password")
     # Auth precedence: OTHELLO_PIN_HASH > OTHELLO_PASSWORD > misconfig
+    auth_mode = get_runtime_config_snapshot()["auth_mode_selected"]
     if OTHELLO_PIN_HASH:
         if not password:
-            return jsonify({"error": "missing_password", "detail": "Password required"}), 400
+            return jsonify({"error": "missing_password", "detail": "Password required", "auth_mode": auth_mode}), 400
         try:
             if bcrypt.verify(password, OTHELLO_PIN_HASH):
                 session["authed"] = True
                 return jsonify({"ok": True})
             else:
-                return jsonify({"error": "Invalid password"}), 401
+                return jsonify({"error": "Invalid password", "auth_mode": auth_mode}), 401
         except Exception as e:
             logging.getLogger("API").error(f"bcrypt verification error: {e}")
-            return jsonify({"error": "server_error", "detail": "bcrypt verification failed"}), 500
+            return jsonify({"error": "server_error", "detail": "bcrypt verification failed", "auth_mode": auth_mode}), 500
     elif OTHELLO_PASSWORD:
         logging.getLogger("API").warning("plaintext password mode enabled; set OTHELLO_PIN_HASH to harden")
         if not password:
-            return jsonify({"error": "missing_password", "detail": "Password required"}), 400
+            return jsonify({"error": "missing_password", "detail": "Password required", "auth_mode": auth_mode}), 400
         if password == OTHELLO_PASSWORD:
             session["authed"] = True
             return jsonify({"ok": True})
-        return jsonify({"error": "Invalid password"}), 401
+        return jsonify({"error": "Invalid password", "auth_mode": auth_mode}), 401
     else:
         return (
             jsonify({
                 "error": "server_misconfigured",
-                "detail": "OTHELLO_PASSWORD not set"
+                "detail": "OTHELLO_PASSWORD not set",
+                "auth_mode": auth_mode
             }),
             503
         )
@@ -1407,6 +1488,16 @@ def serve_ui():
     """
     return send_file("othello_ui.html")
 
+
+
+# Log config snapshot at startup (safe, no secrets)
+try:
+    snap = get_runtime_config_snapshot()
+    logging.info(
+        f"[CONFIG] auth_mode={snap['auth_mode_selected']}, secret_key_source={snap['secret_key_source']}, db_configured={snap['db_mode']}, model={snap['model_selected']}, build={snap['build']}"
+    )
+except Exception as e:
+    logging.warning(f"[CONFIG] Could not log config snapshot: {e}")
 
 if __name__ == "__main__":
     app.run(port=8000, debug=False)
