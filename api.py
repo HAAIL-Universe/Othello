@@ -1,4 +1,5 @@
 import logging
+import os
 import re
 from datetime import date, timedelta
 from flask import Flask, request, jsonify, send_file
@@ -210,9 +211,16 @@ def parse_goal_selection_request(text: str) -> Optional[int]:
 
 
 
+
 app = Flask(__name__)
 CORS(app)  # Allow requests from frontend
-app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "dev-secret-key")
+# Harden SECRET_KEY handling for production
+secret = os.getenv("SECRET_KEY")
+if not secret:
+    if os.getenv("RENDER") or os.getenv("RENDER_SERVICE_ID"):
+        logging.warning("[API] WARNING: SECRET_KEY is not set in environment! Using insecure default. Set SECRET_KEY in Render environment variables.")
+    secret = "dev-secret-key"
+app.config["SECRET_KEY"] = secret
 
 # Minimal auth config
 OTHELLO_PASSWORD = os.environ.get("OTHELLO_PASSWORD")
