@@ -1190,6 +1190,17 @@
         </form>
       </div>
       <div id="login-status" class="waking-overlay__status" style="margin-top:1.2rem;">Waking server…</div>
+          <!-- Boot Debug Panel (hidden by default, shown with ?bootdebug=1) -->
+          <div id="boot-debug-panel" style="display:none;background:rgba(30,41,59,0.98);color:#fff;padding:1.1em 1.5em;border-radius:10px;margin-top:1.5em;font-size:0.98rem;max-width:420px;word-break:break-all;box-shadow:0 2px 16px #0008;">
+            <div style="font-weight:bold;margin-bottom:0.5em;">Boot Diagnostics</div>
+            <div><b>healthUrl:</b> <span id="bootdebug-healthurl"></span></div>
+            <div><b>attempt:</b> <span id="bootdebug-attempt"></span></div>
+            <div><b>last HTTP status:</b> <span id="bootdebug-http"></span></div>
+            <div><b>last JSON status:</b> <span id="bootdebug-json"></span></div>
+            <div><b>last error:</b> <span id="bootdebug-error"></span></div>
+            <div><b>elapsed:</b> <span id="bootdebug-elapsed"></span></div>
+            <div><b>next retry:</b> <span id="bootdebug-retry"></span></div>
+          </div>
       <button id="login-retry" class="waking-overlay__retry">Retry</button>
     </div>
   <div class="shell">
@@ -1335,6 +1346,38 @@
       // --- Boot State Machine ---
       // BOOT_DEBUG flag for boot instrumentation
       const BOOT_DEBUG = location.search.includes("bootdebug=1");
+            // Boot debug panel elements
+            const bootDebugPanel = document.getElementById('boot-debug-panel');
+            const bootDebugHealthUrl = document.getElementById('bootdebug-healthurl');
+            const bootDebugAttempt = document.getElementById('bootdebug-attempt');
+            const bootDebugHttp = document.getElementById('bootdebug-http');
+            const bootDebugJson = document.getElementById('bootdebug-json');
+            const bootDebugError = document.getElementById('bootdebug-error');
+            const bootDebugElapsed = document.getElementById('bootdebug-elapsed');
+            const bootDebugRetry = document.getElementById('bootdebug-retry');
+
+            if (BOOT_DEBUG && bootDebugPanel) {
+              bootDebugPanel.style.display = '';
+            }
+
+            function updateBootDebug({
+              healthUrl = '',
+              attempt = '',
+              http = '',
+              json = '',
+              error = '',
+              elapsed = '',
+              retry = ''
+            } = {}) {
+              if (!BOOT_DEBUG || !bootDebugPanel) return;
+              if (bootDebugHealthUrl) bootDebugHealthUrl.textContent = healthUrl;
+              if (bootDebugAttempt) bootDebugAttempt.textContent = attempt;
+              if (bootDebugHttp) bootDebugHttp.textContent = http;
+              if (bootDebugJson) bootDebugJson.textContent = json;
+              if (bootDebugError) bootDebugError.textContent = error;
+              if (bootDebugElapsed) bootDebugElapsed.textContent = elapsed;
+              if (bootDebugRetry) bootDebugRetry.textContent = retry;
+            }
       const BOOT_STATE = {
         WAKING: 'WAKING',
         CHECKING_AUTH: 'CHECKING_AUTH',
@@ -1430,33 +1473,51 @@
         const maxElapsed = 1000 * 90;
         const start = Date.now();
         let lastErr = null;
+        let lastHttp = '';
+        let lastJson = '';
+        let lastRetry = '';
         while (Date.now() - start < maxElapsed) {
           attempt++;
           let resp = null;
           let data = null;
           let fetchError = null;
+          let elapsed = ((Date.now() - start) / 1000).toFixed(1) + 's';
+          let retryIn = delay + Math.floor(Math.random() * 200);
           try {
             loginStatus.textContent = `Waking server… (attempt ${attempt})`;
-            if (BOOT_DEBUG) console.log(`[BOOT] Polling /api/health (attempt ${attempt})`);
+            if (BOOT_DEBUG) console.log(`[BOOT] Polling /api/health/db (attempt ${attempt})`);
             const controller = new AbortController();
-            const timeout = setTimeout(() => controller.abort(), 4000);
-            resp = await fetch('/api/health', { credentials: 'omit', cache: 'no-store', signal: controller.signal });
+            const timeout = setTimeout(() => controller.abort(), 15000);
+            resp = await fetch('/api/health/db', { credentials: 'omit', cache: 'no-store', signal: controller.signal });
             clearTimeout(timeout);
-            if (BOOT_DEBUG) console.log('[BOOT] /api/health response', resp.status);
+            lastHttp = resp.status;
+            if (BOOT_DEBUG) console.log('[BOOT] /api/health/db response', resp.status);
             if (resp.ok) {
               try {
                 data = await resp.json();
-                if (BOOT_DEBUG) console.log('[BOOT] /api/health payload', data);
+                if (BOOT_DEBUG) console.log('[BOOT] /api/health/db payload', data);
               } catch (jsonErr) {
                 if (BOOT_DEBUG) console.log('[BOOT] JSON parse error', jsonErr);
                 lastErr = 'Invalid JSON';
                 data = null;
+                lastJson = 'Invalid JSON';
               }
               if (data && data.status === 'ok') {
+                lastJson = 'ok';
+                updateBootDebug({
+                  healthUrl: '/api/health/db',
+                  attempt,
+                  http: lastHttp,
+                  json: lastJson,
+                  error: '',
+                  elapsed,
+                  retry: ''
+                });
                 setBootState(BOOT_STATE.CHECKING_AUTH);
                 _waitForReadyActive = false;
                 return;
               }
+              lastJson = data && data.status ? data.status : 'no status';
               lastErr = (data && (data.details || data.message)) || 'Unknown error';
             } else {
               lastErr = `HTTP ${resp.status}`;
@@ -1464,19 +1525,39 @@
           } catch (e) {
             fetchError = e;
             lastErr = e.message || e.toString();
+            if (e.name === 'AbortError') lastErr = 'Timeout (AbortError)';
             if (BOOT_DEBUG) console.log('[BOOT] fetch error', e);
           }
+          updateBootDebug({
+            healthUrl: '/api/health/db',
+            attempt,
+            http: lastHttp,
+            json: lastJson,
+            error: lastErr,
+            elapsed,
+            retry: retryIn + 'ms'
+          });
           loginStatus.textContent = `Waking server… (attempt ${attempt})\n${lastErr || ''}`;
           if (BOOT_DEBUG) console.log('[BOOT] Not ready, retrying in', delay, 'ms', { lastErr });
-          await new Promise(r => setTimeout(r, delay + Math.floor(Math.random() * 200)));
+          await new Promise(r => setTimeout(r, retryIn));
           delay = Math.min(maxDelay, Math.floor(delay * 1.7 + 200));
         }
         setBootState(BOOT_STATE.ERROR);
         _waitForReadyActive = false;
+        updateBootDebug({
+          healthUrl: '/api/health/db',
+          attempt,
+          http: lastHttp,
+          json: lastJson,
+          error: lastErr,
+          elapsed: ((Date.now() - start) / 1000).toFixed(1) + 's',
+          retry: ''
+        });
       }
 
       async function checkAuth() {
         setBootState(BOOT_STATE.CHECKING_AUTH);
+        if (BOOT_DEBUG) console.log('[BOOT] Transition: CHECKING_AUTH');
         try {
           const resp = await fetch('/api/auth/me', { credentials: 'same-origin', cache: 'no-store' });
           if (resp.ok) {
@@ -1484,6 +1565,7 @@
             if (BOOT_DEBUG) console.log('[BOOT] /api/auth/me', data);
             if (data && data.authed) {
               setBootState(BOOT_STATE.AUTHENTICATED);
+              if (BOOT_DEBUG) console.log('[BOOT] Transition: AUTHENTICATED');
               bootApp();
               return;
             }
@@ -1492,6 +1574,22 @@
           if (BOOT_DEBUG) console.log('[BOOT] /api/auth/me error', e);
         }
         setBootState(BOOT_STATE.NEEDS_LOGIN);
+        if (BOOT_DEBUG) console.log('[BOOT] Transition: NEEDS_LOGIN');
+            // Global error handlers for bootdebug
+            if (BOOT_DEBUG && window) {
+              window.onerror = function (msg, url, line, col, error) {
+                updateBootDebug({ error: (msg || '') + (error ? (' | ' + error.stack) : '') });
+                setBootState(BOOT_STATE.ERROR);
+                if (bootDebugPanel) bootDebugPanel.style.display = '';
+                return false;
+              };
+              window.onunhandledrejection = function (event) {
+                updateBootDebug({ error: (event.reason && event.reason.stack) || event.reason || 'Unhandled promise rejection' });
+                setBootState(BOOT_STATE.ERROR);
+                if (bootDebugPanel) bootDebugPanel.style.display = '';
+                return false;
+              };
+            }
       }
 
       async function handleLogin(pin) {
