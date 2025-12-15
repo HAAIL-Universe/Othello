@@ -1,15 +1,16 @@
-# Serve /scripts/ assets if referenced
+
+# Asset route registration (after app exists)
 from flask import send_from_directory
 import os
 
-@app.route('/scripts/<path:filename>')
-def serve_scripts(filename):
-    return send_from_directory(os.path.join(os.getcwd(), 'scripts'), filename)
+def register_asset_routes(app):
+    @app.get('/scripts/<path:filename>')
+    def serve_scripts(filename):
+        return send_from_directory(os.path.join(os.getcwd(), 'scripts'), filename)
 
-# Serve /interface/ assets if referenced
-@app.route('/interface/<path:filename>')
-def serve_interface(filename):
-    return send_from_directory(os.path.join(os.getcwd(), 'interface'), filename)
+    @app.get('/interface/<path:filename>')
+    def serve_interface(filename):
+        return send_from_directory(os.path.join(os.getcwd(), 'interface'), filename)
 def get_runtime_config_snapshot():
     """
     Returns a dict with booleans for env presence, selected auth/secret/model/db modes, and build info.
@@ -307,6 +308,7 @@ def parse_goal_selection_request(text: str) -> Optional[int]:
 
 # --- Flask App Setup ---
 import mimetypes
+
 app = Flask(__name__, static_folder="static", static_url_path="/static")
 CORS(app)  # Allow requests from frontend
 # Harden SECRET_KEY handling for production
@@ -317,8 +319,9 @@ if not secret:
     secret = "dev-secret-key"
 app.config["SECRET_KEY"] = secret
 
-# Register debug routes after app/session setup
+# Register debug and asset routes after app/session setup
 register_debug_routes(app)
+register_asset_routes(app)
 
 
 # Minimal auth config (compat bridge)
