@@ -1709,47 +1709,7 @@
     let pendingStartTimeout = null;
 
     // DOM elements
-    const chatLog = document.getElementById("chat-log");
-    const input = document.getElementById("user-input");
-    const sendBtn = document.getElementById("send");
-    const micBtn = document.getElementById("mic-btn");
-    const cancelTranscriptBtn = document.getElementById("cancel-transcript-btn");
-    const statusEl = document.getElementById("status");
-    const inputBar = document.getElementById("input-bar");
-
-    const tabs = document.querySelectorAll(".tab");
-    const middleTab = document.getElementById("middle-tab");
-    const middleTabBadge = document.getElementById("middle-tab-badge");
-    const insightsTabBadge = document.getElementById("insights-tab-badge");
-    const views = document.querySelectorAll(".view");
-    const modeToggle = document.getElementById("mode-toggle");
-    const modeDropdown = document.getElementById("mode-dropdown");
-    const modeOptions = Array.from(document.querySelectorAll(".mode-option"));
-    const modeSubtitle = document.getElementById("mode-subtitle");
-    const modeLabel = document.getElementById("current-mode-label");
-    const plannerHeadline = document.getElementById("planner-headline");
-    const plannerEnergy = document.getElementById("planner-energy");
-    const plannerError = document.getElementById("planner-error");
-    const plannerRoutinesCount = document.getElementById("planner-routines-count");
-    const plannerGoalsCount = document.getElementById("planner-goals-count");
-    const plannerRoutinesList = document.getElementById("planner-routines-list");
-    const plannerGoalsList = document.getElementById("planner-goals-list");
-
-    const focusRibbon = document.getElementById("focus-ribbon");
-    const focusRibbonTitle = document.getElementById("focus-ribbon-title");
-    const viewFocusBtn = document.getElementById("view-focus-btn");
-
-    const goalsList = document.getElementById("goals-list");
-    const goalDetail = document.getElementById("goal-detail");
-    const detailGoalId = document.getElementById("detail-goal-id");
-    const detailGoalTitle = document.getElementById("detail-goal-title");
-    const detailContent = document.getElementById("detail-content");
-    const backFromDetailBtn = document.getElementById("back-from-detail");
-    const continueWorkingBtn = document.getElementById("continue-working-btn");
-    const insightsContent = document.getElementById("insights-content");
-    const insightsList = document.getElementById("insights-list");
-    const insightsEmpty = document.getElementById("insights-empty");
-    const insightsError = document.getElementById("insights-error");
+    // ...all DOM element declarations are now at the top of the main script block...
 
     // App state
     const othelloState = {
