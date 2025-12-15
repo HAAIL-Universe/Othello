@@ -1325,6 +1325,9 @@
   <!-- JS -->
   <script>
     console.log("Othello UI boot OK");
+    // DOM element bindings for globals that may be missing
+    const modeToggle = document.getElementById('mode-toggle');
+    const inputBar = document.getElementById('input-bar');
       // --- Boot State Machine ---
       // BOOT_DEBUG flag for boot instrumentation
       const BOOT_DEBUG = location.search.includes("bootdebug=1");
@@ -2304,10 +2307,10 @@
 
       // Show/hide input bar and focus ribbon
       if (viewName === "chat") {
-        inputBar.classList.remove("hidden");
+        if (inputBar) inputBar.classList.remove("hidden");
         updateFocusRibbon();
       } else {
-        inputBar.classList.add("hidden");
+        if (inputBar) inputBar.classList.add("hidden");
         focusRibbon.classList.remove("visible");
       }
 
@@ -2374,26 +2377,28 @@
     function toggleDropdown() {
       const isOpen = modeDropdown.classList.contains("open");
       modeDropdown.classList.toggle("open", !isOpen);
-      modeToggle.setAttribute("aria-expanded", (!isOpen).toString());
+      if (modeToggle) modeToggle.setAttribute("aria-expanded", (!isOpen).toString());
     }
 
-    modeToggle.addEventListener("click", () => {
-      toggleDropdown();
-    });
+    if (modeToggle) {
+      modeToggle.addEventListener("click", () => {
+        toggleDropdown();
+      });
+    }
 
     modeOptions.forEach(opt => {
       opt.addEventListener("click", () => {
         const mode = opt.dataset.mode;
         setMode(mode);
         modeDropdown.classList.remove("open");
-        modeToggle.setAttribute("aria-expanded", "false");
+        if (modeToggle) modeToggle.setAttribute("aria-expanded", "false");
       });
     });
 
     document.addEventListener("click", (e) => {
-      if (!modeDropdown.contains(e.target) && !modeToggle.contains(e.target)) {
+      if (!modeDropdown.contains(e.target) && (!modeToggle || !modeToggle.contains(e.target))) {
         modeDropdown.classList.remove("open");
-        modeToggle.setAttribute("aria-expanded", "false");
+        if (modeToggle) modeToggle.setAttribute("aria-expanded", "false");
       }
     });
 
