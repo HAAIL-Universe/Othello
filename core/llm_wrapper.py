@@ -11,12 +11,25 @@ def pick_model(default: str = "gpt-4o"):
     print("3: gpt-4-turbo")
     print("4: gpt-4o")
     choice = input(f"Enter 1-4 [default={default}]: ").strip()
-    return {
-        "1": "gpt-3.5-turbo",
-        "2": "gpt-4",
-        "3": "gpt-4-turbo",
-        "4": "gpt-4o"
-    }.get(choice, default)
+        model_cache_path = ".llm_model_cache"
+        resolved_model = None
+        if model:
+            resolved_model = model
+        else:
+            env_model = os.getenv("OTHELLO_MODEL")
+            if env_model:
+                resolved_model = env_model
+            elif os.path.exists(model_cache_path):
+                with open(model_cache_path, "r") as f:
+                    resolved_model = f.read().strip()
+            else:
+                resolved_model = "gpt-4o"
+
+        self.model = resolved_model
+        # Only write cache if model was explicitly set (argument or env)
+        if model or (not model and os.getenv("OTHELLO_MODEL")):
+            with open(model_cache_path, "w") as f:
+                f.write(self.model)
 
 
 class LLMWrapper:

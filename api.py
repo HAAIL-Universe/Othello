@@ -189,27 +189,9 @@ def parse_goal_selection_request(text: str) -> Optional[int]:
 
 
 # === Model selector at startup ===
-def pick_model():
-    models = [
-        "gpt-3.5-turbo",
-        "gpt-4",
-        "gpt-4-turbo",
-        "gpt-4o",
-    ]
-    print("Which model would you like FELLO to use this session?")
-    for idx, model in enumerate(models, 1):
-        print(f"{idx}: {model}")
-    while True:
-        choice = input(f"Enter 1-{len(models)} [default=4]: ").strip()
-        if not choice:
-            return models[3]  # default to GPT-4o
-        try:
-            i = int(choice) - 1
-            if 0 <= i < len(models):
-                return models[i]
-        except Exception:
-            pass
-        print("Invalid selection, try again.")
+import os
+selected_model = os.getenv("OTHELLO_MODEL") or "gpt-4o"
+print(f"FELLO will use: {selected_model}")
 
 
 selected_model = pick_model()
