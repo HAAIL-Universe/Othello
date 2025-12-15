@@ -1,0 +1,200 @@
+[
+  {
+    "id": "morning_reset",
+    "name": "Morning Reset",
+    "active": true,
+    "tags": [
+      "workday"
+    ],
+    "days": [
+      "mon",
+      "tue",
+      "wed",
+      "thu",
+      "fri"
+    ],
+    "variants": [
+      {
+        "id": "full",
+        "label": "full",
+        "approx_duration_min": 40,
+        "energy_profile": "medium",
+        "dependency_level": "medium",
+        "tags": [
+          "workday"
+        ],
+        "steps": [
+          {
+            "id": "hydrate",
+            "label": "Hydrate + light stretch",
+            "approx_duration_min": 5,
+            "energy_cost": "low",
+            "friction": "low"
+          },
+          {
+            "id": "planning",
+            "label": "10-minute intent + calendar skim",
+            "approx_duration_min": 10,
+            "energy_cost": "medium",
+            "friction": "medium"
+          },
+          {
+            "id": "setup",
+            "label": "Desk reset + open deep-work tool",
+            "approx_duration_min": 10,
+            "energy_cost": "medium",
+            "friction": "medium"
+          },
+          {
+            "id": "warmup",
+            "label": "Short focus warmup (breath / box breathing)",
+            "approx_duration_min": 5,
+            "energy_cost": "low",
+            "friction": "low"
+          }
+        ]
+      },
+      {
+        "id": "short",
+        "label": "short",
+        "approx_duration_min": 20,
+        "energy_profile": "low",
+        "dependency_level": "low",
+        "tags": [
+          "workday",
+          "time-pressed"
+        ],
+        "steps": [
+          {
+            "id": "hydrate",
+            "label": "Hydrate",
+            "approx_duration_min": 2,
+            "energy_cost": "low",
+            "friction": "low"
+          },
+          {
+            "id": "planning",
+            "label": "3-minute intent + pick one block",
+            "approx_duration_min": 3,
+            "energy_cost": "low",
+            "friction": "low"
+          },
+          {
+            "id": "setup",
+            "label": "Open today's main doc + block distractions",
+            "approx_duration_min": 5,
+            "energy_cost": "medium",
+            "friction": "medium"
+          }
+        ]
+      },
+      {
+        "id": "micro",
+        "label": "micro",
+        "approx_duration_min": 8,
+        "energy_profile": "low",
+        "dependency_level": "low",
+        "tags": [
+          "recovery",
+          "fatigue"
+        ],
+        "steps": [
+          {
+            "id": "breathe",
+            "label": "90-second breath reset",
+            "approx_duration_min": 2,
+            "energy_cost": "low",
+            "friction": "low"
+          },
+          {
+            "id": "intent",
+            "label": "Name one non-negotiable for the morning",
+            "approx_duration_min": 2,
+            "energy_cost": "low",
+            "friction": "low"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "id": "evening_winddown",
+    "name": "Evening Wind-Down",
+    "active": true,
+    "tags": [
+      "any"
+    ],
+    "days": [
+      "mon",
+      "tue",
+      "wed",
+      "thu",
+      "fri",
+      "sat",
+      "sun"
+    ],
+    "variants": [
+      {
+        "id": "full",
+        "label": "full",
+        "approx_duration_min": 30,
+        "energy_profile": "low",
+        "dependency_level": "low",
+        "tags": [
+          "recovery",
+          "workday"
+        ],
+        "steps": [
+          {
+            "id": "tidy",
+            "label": "Tidy workspace + pack for tomorrow",
+            "approx_duration_min": 5,
+            "energy_cost": "low",
+            "friction": "low"
+          },
+          {
+            "id": "journal",
+            "label": "5-minute reflection + wins",
+            "approx_duration_min": 5,
+            "energy_cost": "low",
+            "friction": "low"
+          },
+          {
+            "id": "shutdown",
+            "label": "Device dim + no-notifications",
+            "approx_duration_min": 5,
+            "energy_cost": "low",
+            "friction": "low"
+          }
+        ]
+      },
+      {
+        "id": "short",
+        "label": "short",
+        "approx_duration_min": 12,
+        "energy_profile": "low",
+        "dependency_level": "low",
+        "tags": [
+          "fatigue",
+          "time-pressed"
+        ],
+        "steps": [
+          {
+            "id": "tidy",
+            "label": "Quick tidy + pack one thing",
+            "approx_duration_min": 3,
+            "energy_cost": "low",
+            "friction": "low"
+          },
+          {
+            "id": "journal",
+            "label": "2 bullets: done + next",
+            "approx_duration_min": 3,
+            "energy_cost": "low",
+            "friction": "low"
+          }
+        ]
+      }
+    ]
+  }
+]

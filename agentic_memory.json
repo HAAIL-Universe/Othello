@@ -1,0 +1,98 @@
+[
+  {
+    "type": "goal_update",
+    "goal_id": 5,
+    "content": "Updated goal 'I want to lose 5kg and improve my cardio in the next 12 weeks.'. Summary: Goal to consult with a nutritionist, start a cardio workout routine, track food intake and exercise ",
+    "plan_step_count": 0,
+    "metadata": {},
+    "timestamp": "2025-12-08T19:54:19.600075Z"
+  },
+  {
+    "type": "goal_update",
+    "goal_id": 5,
+    "content": "Updated goal 'I want to lose 5kg and improve my cardio in the next 12 weeks.'. Summary: To achieve target weight loss and cardio improvement in the next 12 weeks through a balanced diet, r",
+    "plan_step_count": 0,
+    "metadata": {},
+    "timestamp": "2025-12-08T20:00:53.917476Z"
+  },
+  {
+    "type": "goal_update",
+    "goal_id": 5,
+    "content": "Updated goal 'I want to lose 5kg and improve my cardio in the next 12 weeks.'. Summary: Detailed plan for achieving weight loss and cardio improvement",
+    "plan_step_count": 0,
+    "metadata": {},
+    "timestamp": "2025-12-08T20:13:29.803599Z"
+  },
+  {
+    "type": "goal_update",
+    "goal_id": 5,
+    "content": "Updated goal 'I want to lose 5kg and improve my cardio in the next 12 weeks.'. Summary: Implement a weight loss plan to lose about 0.5kg per week.",
+    "plan_step_count": 0,
+    "metadata": {},
+    "timestamp": "2025-12-08T20:21:38.294765Z"
+  },
+  {
+    "type": "goal_update",
+    "goal_id": 5,
+    "content": "Updated goal 'I want to lose 5kg and improve my cardio in the next 12 weeks.'. Summary: Develop a structured approach involving nutrition, exercise, and self-care strategies.",
+    "plan_step_count": 0,
+    "metadata": {},
+    "timestamp": "2025-12-08T20:21:55.151279Z"
+  },
+  {
+    "type": "goal_update",
+    "goal_id": 6,
+    "content": "Updated goal 'I want to build Othello into a full daily life OS. Give me 3 long-term goals and 3 quick ideas I could implement this month.' with 4-step plan. Summary: Develop a robust feature set for Othello that comprehensively supports the diverse aspects of daily ",
+    "plan_step_count": 4,
+    "metadata": {},
+    "timestamp": "2025-12-10T12:30:21.983471Z"
+  },
+  {
+    "type": "goal_update",
+    "goal_id": 6,
+    "content": "Updated goal 'I want to build Othello into a full daily life OS. Give me 3 long-term goals and 3 quick ideas I could implement this month.' with 6-step plan. Summary: Develop a comprehensive feature set for a daily life management application",
+    "plan_step_count": 6,
+    "metadata": {},
+    "timestamp": "2025-12-10T12:30:56.328199Z"
+  },
+  {
+    "type": "goal_update",
+    "goal_id": 6,
+    "content": "Updated goal 'I want to build Othello into a full daily life OS. Give me 3 long-term goals and 3 quick ideas I could implement this month.' with 4-step plan. Summary: Develop a comprehensive productivity suite within Othello",
+    "plan_step_count": 4,
+    "metadata": {},
+    "timestamp": "2025-12-10T12:33:42.700814Z"
+  },
+  {
+    "type": "goal_update",
+    "goal_id": 7,
+    "content": "Updated goal 'I want to build Othello into a full daily life OS. Give me 3 long-term goals and 3 quick ideas…' with 2-step plan. Summary: Develop a Seamless User Interface",
+    "plan_step_count": 2,
+    "metadata": {},
+    "timestamp": "2025-12-10T12:36:37.128328Z"
+  },
+  {
+    "type": "goal_update",
+    "goal_id": 8,
+    "content": "Updated goal 'I want to capture some concrete work for you.  Long-term goals:  Turn Othello into my daily life OS.  Ship an ADHD-friendly planning flow that I actually use.  Make Othello work on phone and desktop with one shared brain.  Quick ideas for this month:  Add inline actions to today’s plan so I can tick things off.  Add an Insights inbox where I promote ideas into plans and goals.  Add voice input so I can rant after work and have you parse it later.' with 5-step plan. Summary: Develop Othello into a Complete Daily Life OS with integrated tools, ADHD-friendly features, and cro",
+    "plan_step_count": 5,
+    "metadata": {},
+    "timestamp": "2025-12-10T12:38:02.216142Z"
+  },
+  {
+    "type": "goal_update",
+    "goal_id": 8,
+    "content": "Updated goal 'I want to capture some concrete work for you.  Long-term goals:  Turn Othello into my daily life OS.  Ship an ADHD-friendly planning flow that I actually use.  Make Othello work on phone and desktop with one shared brain.  Quick ideas for this month:  Add inline actions to today’s plan so I can tick things off.  Add an Insights inbox where I promote ideas into plans and goals.  Add voice input so I can rant after work and have you parse it later.' with 4-step plan. Summary: Turn Othello into your daily life OS",
+    "plan_step_count": 4,
+    "metadata": {},
+    "timestamp": "2025-12-10T12:59:10.977412Z"
+  },
+  {
+    "type": "goal_update",
+    "goal_id": 8,
+    "content": "Updated goal 'I want to capture some concrete work for you.  Long-term goals:  Turn Othello into my daily life OS.  Ship an ADHD-friendly planning flow that I actually use.  Make Othello work on phone and desktop with one shared brain.  Quick ideas for this month:  Add inline actions to today’s plan so I can tick things off.  Add an Insights inbox where I promote ideas into plans and goals.  Add voice input so I can rant after work and have you parse it later.' with 4-step plan. Summary: Turn Othello into My Daily Life OS",
+    "plan_step_count": 4,
+    "metadata": {},
+    "timestamp": "2025-12-10T12:59:42.826929Z"
+  }
+]

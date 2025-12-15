@@ -6,23 +6,27 @@ from flask_cors import CORS
 import asyncio
 from typing import Any, Dict, Optional
 
-from core.architect_brain import Architect  # Import your agent (actual location)
-from core.llm_wrapper import AsyncLLMWrapper  # Async wrapper for the LLM
-from core.input_router import InputRouter  # For plan request detection
-from core.othello_engine import OthelloEngine  # Planning engine surface
-from utils.postprocessor import postprocess_and_save  # Analysis-only
 
-# Database imports
-from db.database import init_pool, ensure_core_schema, fetch_one
-from db import plan_repository
-from db import goal_task_history_repository
-from db.db_goal_manager import DbGoalManager
-from core.memory_manager import MemoryManager
-from db import insights_repository
-from insights_service import extract_insights_from_exchange
-
+# NOTE: Keep import-time work minimal! Do not import LLM/agent modules or connect to DB at module scope unless required for health endpoints.
 from dotenv import load_dotenv
 load_dotenv()
+
+# Lazy loader for agent/LLM/DB modules
+def get_agent_components():
+    # Import only when needed (not for health endpoints)
+    from core.architect_brain import Architect
+    from core.llm_wrapper import AsyncLLMWrapper
+    from core.input_router import InputRouter
+    from core.othello_engine import OthelloEngine
+    from utils.postprocessor import postprocess_and_save
+    from db.database import init_pool, ensure_core_schema, fetch_one
+    from db import plan_repository
+    from db import goal_task_history_repository
+    from db.db_goal_manager import DbGoalManager
+    from core.memory_manager import MemoryManager
+    from db import insights_repository
+    from insights_service import extract_insights_from_exchange
+    return locals()
 
 
 def serialize_insight(insight: Dict[str, Any]) -> Dict[str, Any]:
@@ -211,6 +215,44 @@ DEFAULT_USER_ID = DbGoalManager.DEFAULT_USER_ID
 
 app = Flask(__name__)
 CORS(app)  # Allow requests from frontend
+app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "dev-secret-key")
+
+# Minimal auth config
+OTHELLO_PASSWORD = os.environ.get("OTHELLO_PASSWORD")
+from flask import session, abort
+from functools import wraps
+
+def require_auth(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        # Allow unauthenticated for health, login, me, and root
+        if request.path in ["/api/health", "/api/auth/login", "/api/auth/me", "/"]:
+            return f(*args, **kwargs)
+        if not session.get("authed"):
+            return jsonify({"error": "Authentication required"}), 401
+        return f(*args, **kwargs)
+    return decorated
+
+# Fast, LLM-free health endpoint
+@app.route("/api/health", methods=["GET"])
+def health_check():
+    return jsonify({"status": "ok"})
+
+# Minimal auth endpoints
+@app.route("/api/auth/login", methods=["POST"])
+def auth_login():
+    data = request.get_json() or {}
+    password = data.get("password")
+    if not OTHELLO_PASSWORD:
+        return jsonify({"error": "Server misconfigured: OTHELLO_PASSWORD not set"}), 500
+    if password == OTHELLO_PASSWORD:
+        session["authed"] = True
+        return jsonify({"ok": True})
+    return jsonify({"error": "Invalid password"}), 401
+
+@app.route("/api/auth/me", methods=["GET"])
+def auth_me():
+    return jsonify({"authenticated": bool(session.get("authed"))})
 
 
 def log_pending_insights_on_startup():
@@ -588,6 +630,7 @@ def handle_message():
 
 
 @app.route("/api/today-plan", methods=["GET"])
+@require_auth
 def get_today_plan():
     """Return today's blended plan of routines + focused goal tasks.
 
@@ -616,6 +659,7 @@ def get_today_plan():
 
 
 @app.route("/api/today-brief", methods=["GET"])
+@require_auth
 def get_today_brief():
     """Return a terse tactical brief for voice/read-out."""
     logger = logging.getLogger("API")
@@ -635,6 +679,7 @@ def get_today_brief():
 
 
 @app.route("/api/plan/update", methods=["POST"])
+@require_auth
 def update_plan_item():
     """Update lifecycle status for a plan item (complete/skip/reschedule)."""
     logger = logging.getLogger("API")
@@ -664,6 +709,7 @@ def update_plan_item():
 
 
 @app.route("/api/plan/rebuild", methods=["POST"])
+@require_auth
 def rebuild_today_plan():
     """Force regeneration of today's plan (used when context shifts)."""
     logger = logging.getLogger("API")
@@ -679,6 +725,7 @@ def rebuild_today_plan():
 
 
 @app.route("/api/goals", methods=["GET"])
+@require_auth
 def get_goals():
     """
     Simple read-only endpoint so the UI can see what goals
@@ -693,6 +740,7 @@ def get_goals():
 
 
 @app.route("/api/goals/<int:goal_id>", methods=["GET"])
+@require_auth
 def get_goal_with_plan(goal_id):
     """
     Get a single goal with its associated plan steps.
@@ -739,6 +787,7 @@ def get_goal_with_plan(goal_id):
 
 
 @app.route("/api/goals/active-with-next-actions", methods=["GET"])
+@require_auth
 def get_active_goals_with_next_actions():
     """
     Get all active goals with their next incomplete step.
@@ -796,6 +845,7 @@ def get_active_goals_with_next_actions():
 
 
 @app.route("/api/goals/<int:goal_id>/steps/<int:step_id>/status", methods=["POST"])
+@require_auth
 def update_step_status(goal_id, step_id):
     """
     Update the status of a specific plan step.
@@ -855,6 +905,7 @@ def update_step_status(goal_id, step_id):
 
 
 @app.route("/api/goals/<int:goal_id>/plan", methods=["POST"])
+@require_auth
 def trigger_goal_planning(goal_id):
     """
     Trigger architect planning for a specific goal.
@@ -1136,6 +1187,7 @@ def _apply_idea_insight(insight: dict) -> None:
 
 
 @app.route("/api/insights/summary", methods=["GET"])
+@require_auth
 def insights_summary():
     logger = logging.getLogger("API.Insights")
     try:
@@ -1148,6 +1200,7 @@ def insights_summary():
 
 
 @app.route("/api/insights/list", methods=["GET"])
+@require_auth
 def insights_list():
     logger = logging.getLogger("API.Insights")
     status = (request.args.get("status") or "pending").strip().lower()
@@ -1168,6 +1221,7 @@ def insights_list():
 
 
 @app.route("/api/insights/apply", methods=["POST"])
+@require_auth
 def insights_apply():
     data = request.get_json() or {}
     insight_id = data.get("id")
@@ -1215,6 +1269,7 @@ def insights_apply():
 
 
 @app.route("/api/goal-tasks/history", methods=["GET"])
+@require_auth
 def goal_task_history():
     logger = logging.getLogger("API.GoalTasks")
     args = request.args or {}
@@ -1261,6 +1316,7 @@ def goal_task_history():
 
 
 @app.route("/api/insights/dismiss", methods=["POST"])
+@require_auth
 def insights_dismiss():
     data = request.get_json() or {}
     insight_id = data.get("id")

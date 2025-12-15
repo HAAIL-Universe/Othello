@@ -1,3 +1,0 @@
-OTHELLO DIRECTIVE
-
-Lock Othello to a contract-first discipline without rewrites: keep the existing Flask routes and DB tables, but formalize which endpoints are commands vs queries, add a minimal single-user auth gate, make model selection non-interactive, and add a visible waking state in the UI for Render Free cold starts. Do not add features beyond: (1) auth gate, (2) waking state, (3) deploy stability fixes. Treat file-backed state as cache-only and ensure the app remains usable even if data/ contents reset.
