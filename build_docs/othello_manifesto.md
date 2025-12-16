@@ -5,27 +5,36 @@
 Othello exists to turn **human intent** into **consistent execution**.
 
 It is not “a motivational chatbot,” “a to‑do list,” or “a diary.”  
-It is a **personal operations system**: a planner + routine engine + behavioural insight loop that turns fuzzy goals into repeatable action.
+It is a **goal + routine + planning operating system** with a strict truth boundary:
 
-Othello’s north star is simple:
+- **Transcript truth**: what the user said (verbatim).
+- **Suggestions**: what the system inferred (pending until confirmed).
+- **Confirmed state**: what becomes real (DB truth only).
 
-- If you tell Othello what matters, Othello helps you **do the next right thing today**
-- Othello records what actually happened
-- Othello learns what works for you, and adapts tomorrow
+Othello’s north star:
+
+- If you tell Othello what matters, Othello helps you **do the next right thing**.
+- Othello records what actually happened.
+- Othello learns what works for you and adapts (without rewriting history).
 
 ## Identity
 
-Othello is the **tactical executor** in your wider ecosystem:
+Othello is the **execution spine** in your wider ecosystem.
 
-- **Magistus** (brain/orchestrator) can reason across contexts and modules.
-- **Othello** (execution spine) produces plans, collects outcomes, and generates behavioural insights.
-- Othello must remain **contract-first** and **debuggable**, so other systems can safely rely on it.
+- **Magistus**: broad orchestrator across contexts and modules.
+- **Othello**: focused executor that owns goals, routines, plans, outcomes, and insights.
 
-Othello must be:
+Othello must keep a separate identity from Magistus. If Othello becomes a general assistant, it loses product clarity and trust.
 
-- **Deterministic where it counts** (truth, state, projections)
-- **Adaptive where it helps** (plan suggestions, task phrasing, coaching tone)
-- **Traceable always** (you can answer “why did it do that?” from stored evidence)
+## Voice-first, contract-first
+
+Othello is **voice-first** by default, but **text is the contract**:
+
+- Voice is captured as audio → transcribed → stored as **verbatim transcript**.
+- Audio is **transient** by default: delete after transcription (or after a short retry TTL if transcription fails).
+- The transcript is canonical evidence for recall, reasoning, and audits.
+
+Othello must support long-form journaling style capture (“free flow”) without turning that into silent state changes.
 
 ## Principles
 
@@ -39,101 +48,95 @@ Before adding features, define:
 
 Anything that cannot be represented in the contract does not exist.
 
-### 2) Truth is append-only
-Othello’s source of truth is an **event ledger**:
+### 2) DB is truth; JSON is not truth
+Authoritative state must live in Postgres (Neon):
 
-- Every meaningful user action becomes an event.
-- Events are not edited in place. Corrections are new events.
-- Read models are derived from events (or maintained as projections).
+- goals, steps, routines, plans, outcomes, insights, consents, profiles
+- events/audit logs for explainability
 
-This makes Othello replayable, auditable, and scalable.
+Filesystem JSON/JSONL may exist only as:
+- **test fixtures**, or
+- **write-only debug logs** (never read to power product behavior).
 
-### 3) UI is a lens, not a brain
-The UI does not compute truth.
+### 3) Truth is replayable
+Othello must be able to reconstruct and explain behavior from stored evidence:
 
-- The UI may format, sort, filter, and render.
-- The UI may cache read models.
-- The UI must not invent state that the backend cannot justify.
+- transcript truth
+- confirmed state + event history
+- versioned consent settings and influence policies
 
-### 4) Plans are promises; outcomes are reality
-A “plan” is not the same as “progress.”
+### 4) UI is a lens, not a brain
+The UI may format, filter, and cache read models.  
+The UI must not invent or “fix” canonical truth client-side.
 
-- Plans are hypotheses.
-- Outcomes are facts.
-- Insight comes from comparing them.
+### 5) Suggestions are not truth
+Inferences are stored as **pending suggestions** until user confirmation.
 
-### 5) Behaviour beats vibes
-Othello optimizes for **behavioural change**, not “good feelings.”
+- “Suggested goal found” is not a goal.
+- “Suggested steps” are not steps.
+- “Suggested deferral” is not a schedule change.
 
-The tone may be encouraging, but the system is measured by:
-
-- adherence and follow-through
-- reduced friction
-- improved consistency
-- improved next-action clarity
-
-### 6) Minimalism, but not fragility
-Othello should be small and fast, but never brittle.
-
-- fewer moving parts, but strong boundaries
-- simple auth now, but expandable later
-- Render cold starts handled as first-class UX
+### 6) Plans are hypotheses; outcomes are facts
+A plan is a promise to attempt.  
+An outcome is what happened.  
+Insights come from comparing the two.
 
 ### 7) Everything is explainable
 Othello must be able to answer:
 
 - “What is my plan today?”
-- “Why is this task recommended?”
+- “Why did you recommend this?”
 - “What evidence supports this insight?”
 - “What changed since last week?”
 
-No hidden magic. No silent state loss.
+No hidden state. No silent rewrites.
 
-## The Othello Loop
+### 8) Consent governs coaching
+Othello may provide nudges and behavior-support strategies **only** under explicit, granular consent.
 
-1. **Capture intent**
-   - Goal, routine, constraint, mood, time window, context.
-2. **Normalize into a structured update**
-   - Always ends as a canonical internal schema.
-3. **Generate a Today Plan**
-   - Few tasks, right size, ordered, time-aware.
-4. **Execute and record reality**
-   - done / partial / skipped / blocked + reason
-5. **Reflect and learn**
-   - insights + adjustments
-6. **Repeat**
-   - tomorrow’s plan incorporates what was learned
+- Consent is versioned, logged, and revocable.
+- “Influence modes” are global per user (v1), controlled via settings.
+- Othello never lies or deceives; it never performs hidden schedule changes.
 
-## What Othello is NOT (Non-goals)
+### 9) Time is user-local, stored UTC
+- All timestamps stored in UTC.
+- Users set an explicit IANA time zone at setup.
+- “Night-before prompts”, “today boundaries”, and nudges interpret time in the user’s local zone.
+
+## The Othello Loops
+
+### A) Conversation → Suggestions → Confirmation → Execution
+1. Capture transcript (verbatim).
+2. On-demand analysis produces pending suggestions (goal/steps/constraints/insights).
+3. User confirms suggestions into DB truth.
+4. User executes and logs outcomes.
+5. System derives insights and proposes adjustments (suggestions again).
+6. Repeat.
+
+### B) Daily loop (future phases)
+1. Night-before prep prompt (optional, respectful).
+2. User-initiated “Build today’s plan”.
+3. Confirmed plan becomes active.
+4. In-app coaching → later push notifications.
+
+## Non-goals
 
 - A generic life coach or therapist
-- An unstructured “chat log” with no durable meaning
-- A place where the frontend calculates canonical truth
-- A system that stores opaque LLM blobs as its primary memory
-- A multi-tenant SaaS (yet). Start as single-user, expand cleanly later.
-- A “perfect planner” that requires perfect behaviour
+- Unbounded prompt accumulation (“append forever”) as personalization
+- Frontend-calculated truth
+- Opaque LLM blob storage as primary memory
+- Silent nudging without consent
+- Multi-tenant SaaS in v0 (but the schema must be multi-user capable)
 
-## Product Guardrails
+## Measures of success
 
-- **No silent data loss**: if something fails, it must be visible (UI + logs).
-- **No unversioned contracts**: schema drift is a bug.
-- **No hidden state**: every derived state must be reproducible from the ledger + config.
-- **No dependency on “LLM availability” for core truth**: the system still runs if AI is off.
+Phase 1 (Goal OS v0):
+- Voice journaling works; transcripts are saved; audio is deleted.
+- Suggestions are on-demand and confirm-gated.
+- Goals/steps can be created, updated, completed, and viewed in history.
+- Deleting non-test JSON files does not break runtime.
 
-## Measures of Success
-
-Short-term:
-
-- Othello reliably boots on Render, shows a waking state, and responds.
-- You can create goals, get a Today Plan, log outcomes, and see insights.
-
-Mid-term:
-
-- Planning becomes fast and consistent: “I always know what to do next.”
-- Insights lead to real plan adjustments: fewer repeated failures.
-
-Long-term:
-
-- Othello becomes a trustworthy execution layer Magistus can call into.
-- Your history becomes a replayable dataset that explains your behaviour and growth.
-
+Later phases:
+- Daily planning becomes consistent (“I always know the next right thing”).
+- Nudges improve follow-through without annoyance.
+- Othello becomes a reliable execution layer Magistus can call into.

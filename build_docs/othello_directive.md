@@ -1,317 +1,196 @@
 # Othello Directive
 
-## 0) Directive Intent
+## 0) Directive intent
 
-This document is the **execution law** for building Othello.
-
-It defines:
-
-- strict boundaries (what code may and may not do)
-- quality rules (contracts, events, projections, UI behaviour)
-- implementation constraints (cold starts, auth, logging)
-- stop conditions (when to stop and ask for human intervention)
-
+This document is the execution law for building Othello.  
 Anything not aligned with this directive is a bug, even if it “works.”
 
+This directive is written to be LLM/collaborator-safe: it defines strict boundaries, stop conditions, and pass/fail acceptance criteria.
+
 ---
 
-## 1) Non-Negotiable Rules
+## 1) Non-negotiable rules
 
 ### 1.1 Contract-first, always
+- Every externally visible payload has a defined schema.
+- Every event/suggestion payload is validated server-side.
+- No “shove JSON into a file and parse later” for core behavior.
 
-- Every externally visible payload must have a defined schema.
-- Every event payload must be validated server-side.
-- No “just shove JSON into a column and parse later” for core behaviours.
+### 1.2 DB is the only source of truth
+- Canonical state lives in Postgres (Neon).
+- Filesystem JSON/JSONL may exist only as:
+  - test fixtures
+  - write-only debug logs (never read by runtime)
 
-### 1.2 Ledger is the source of truth
+Acceptance test: the app still runs for Phase 1 even if all non-test JSON files are deleted.
 
-- Canonical state changes happen via **event writes**.
-- Projections/read models are derived from events.
-- Do not create direct “update goal row” endpoints that bypass event emission.
-
-### 1.3 UI never computes canonical truth
-
-The UI:
-
-- may display and format read models
-- may cache read models
-- may stage user input locally until committed
-
-The UI must not:
-
-- invent state not represented in read models
-- “fix” server truth client-side
-- compute progress metrics from partial local history when server truth exists
+### 1.3 Transcript truth vs suggestions vs confirmed state
+- Transcript is verbatim evidence.
+- Suggestions are optional and pending.
+- Confirmed state changes require explicit user confirmation.
 
 ### 1.4 No silent failure
-
 If something fails:
+- the user sees it (UI)
+- logs capture it (server)
+- state is not silently “pretended”
 
-- user sees it
-- logs capture it
-- system does not pretend it succeeded
+### 1.5 Voice pipeline is transient-audio by default
+- Audio is used only to produce transcript.
+- Delete audio after transcription success.
+- If transcription fails, keep audio only for a short TTL to allow retries, then delete.
 
-### 1.5 Cold-start safe is mandatory
+### 1.6 No unbounded prompt accumulation
+Personalization must not be implemented by appending permanent text to a system prompt.
 
-Render Free cold starts are expected behaviour. The system must:
+Use:
+- structured user profile snapshots in DB
+- bounded retrieval/injection per request
 
-- expose `/ready` (or equivalent) for UI gating
-- provide `/warmup` path if useful
-- show a visible waking UI state with retry and explanation
-- never show a blank screen or infinite spinner without context
+### 1.7 Consent governs coaching
+- Nudges/influence strategies require explicit, granular consent.
+- Influence modes are global per user (initially).
+- All strategy usage must be inspectable via logs later phases.
 
-### 1.6 Minimal auth now, expandable later
-
-- Implement a single-user login gate now.
-- All non-health endpoints require auth.
-- Do not hardcode secrets into frontend or repo.
-- Auth implementation must be modular enough to later support multi-user.
+### 1.8 Time handling
+- Store all timestamps in UTC.
+- User must set explicit IANA timezone at setup.
+- Interpret day boundaries and scheduling in user-local time.
 
 ---
 
-## 2) Architecture Boundaries
+## 2) Architecture boundaries
 
 ### 2.1 Layers
+1) API Layer: auth, validation, response formatting  
+2) Persistence Layer: DB access helpers/DAO  
+3) Transcript Layer: STT pipeline + message state  
+4) Suggestion Layer: analysis and suggestion creation (no truth writes)  
+5) Confirmation Layer: transform suggestion → DB truth  
+6) Read Models: query endpoints for UI  
+7) UI: renders read models; triggers actions
 
-Othello is split into clear layers:
+### 2.2 LLM boundary
+LLM is allowed only for:
+- generating suggestions from transcripts
+- phrasing/coaching tone
+- decomposing tasks into steps as suggestions
 
-1. **API Layer**
-   - request parsing, auth, validation, response formatting
-2. **Contract Layer**
-   - schemas and versioning rules
-3. **Event Layer**
-   - event creation, validation, persistence
-4. **Projection Layer**
-   - read model updates, rebuild utilities
-5. **Planning Engine**
-   - deterministic planning rules + optional LLM assist
-6. **UI**
-   - renders read models, emits events
+LLM is not allowed for:
+- writing canonical truth directly
+- deciding outcomes as facts
+- mutating goal state without confirmation
 
-### 2.2 LLM Boundary
-
-LLM usage is allowed only for:
-
-- phrasing and coaching tone
-- decomposing tasks into smaller steps
-- suggesting adjustments
-
-LLM usage is not allowed for:
-
-- deciding canonical truth (goal status changes, outcome facts)
-- storing unstructured blobs as primary truth
-- bypassing event writes
-
-If LLM is unavailable, system must still function using deterministic rules.
+If the LLM is unavailable, Phase 1 still works (manual goal/step entry remains possible).
 
 ---
 
-## 3) Required Interfaces (Implementation Contract)
+## 3) Required interfaces (Phase 1)
 
-### 3.1 Health / readiness
+### 3.1 Health/readiness
+- `GET /health` fast, no auth.
+- `GET /ready` for UI gating.
 
-- `GET /health` always returns quickly and never requires auth.
-- `GET /ready` returns readiness for UI gating.
-- Optional: `GET /warmup` to trigger wake paths.
-
-### 3.2 Auth
-
-Minimum endpoints:
-
+### 3.2 Auth (minimal, expandable)
 - `POST /v1/auth/login`
 - `POST /v1/auth/logout`
 - `GET /v1/auth/me`
 
-Rules:
+### 3.3 Voice + messages
+- create message shell
+- upload audio
+- finalize/enqueue STT
+- poll message status + transcript
 
-- use secure token/session storage
-- protect all non-health endpoints
-- add rate limiting / brute-force protection (even minimal)
+### 3.4 Analysis (on-demand)
+- analyze selected message IDs only
+- create suggestions only
 
-### 3.3 Event writes
+### 3.5 Confirmation
+- accept/reject suggestions
+- acceptance creates DB truth (goals/steps)
+- rejection logs decision, does not mutate truth
 
-- `POST /v1/events`
-- `POST /v1/events/batch`
-
-Rules:
-
-- server validates event envelope + payload schema
-- returns event ids
-- batch responses are per-event (no all-or-nothing unless explicitly chosen)
-
-### 3.4 Read endpoints
-
-- `GET /v1/read/today-plan`
-- `GET /v1/read/goals`
-- `GET /v1/read/insights`
-- `GET /v1/read/history`
-
-Rules:
-
-- only return read models (no raw table dumping)
-- consistent response shapes
-- pagination if needed
+### 3.6 Goals + steps + history
+- read goals
+- read goal detail
+- tick steps
+- complete goal
+- read completed history and events
 
 ---
 
-## 4) Data & Schema Rules
+## 4) Data & schema rules
 
-### 4.1 Event envelope required fields
+### 4.1 Multi-user discipline (even if single-user today)
+Every row that belongs to a user must include `user_id`.
 
-Every event must include:
+### 4.2 Event history
+Maintain `goal_events` append-only. Do not try to “explain” history by overwriting rows.
 
-- `event_id` (UUID)
-- `event_type` (string)
-- `event_version` (int)
-- `occurred_at` (timestamp)
-- `actor_user_id`
-- `payload`
-
-Optional but recommended:
-
-- `correlation_id`
-- `session_id`
-- `meta` (client version, UI surface)
-
-### 4.2 Projection rebuild
-
-The system must support:
-
-- rebuilding projections from the ledger
-- validating projection consistency
-
-Projection rebuild is the escape hatch for corruption and schema changes.
+### 4.3 Migration discipline
+- schema changes are versioned
+- projections/read endpoints have stable response shapes
+- no silent contract drift
 
 ---
 
-## 5) Reliability & Observability Requirements
+## 5) Reliability & observability
 
 ### 5.1 Logs
-
 Logs must include:
-
-- request id
+- request_id
 - route
 - latency
-- status code
-- user id (where safe)
-- event ids for writes
-- projection update success/failure
+- status
+- user_id (where safe)
+- message_id / suggestion_id / goal_id where applicable
 
-### 5.2 Error returns
-
+### 5.2 Errors
 Error responses must be structured:
+- error_code
+- message
+- request_id
+- details (optional validation errors)
 
-- `error_code`
-- `message`
-- `request_id`
-- optional `details` (validation errors, etc.)
-
-### 5.3 No “console-only” errors
-
-If the user needs to act, the UI must display the error state.
+UI must surface actionable failures.
 
 ---
 
-## 6) UI Behaviour Rules
+## 6) UI behavior rules (Phase 1)
 
-### 6.1 Cold-start UI states
-
-UI must implement explicit states:
-
-- `WAKING_SERVER`
-- `CHECKING_AUTH`
-- `LOADING_DATA`
-- `READY`
-- `ERROR`
-
-### 6.2 Event-first interactions
-
-UI actions must map to events:
-
-- create goal -> `goal_created`
-- edit goal -> `goal_updated`
-- generate plan -> `plan_generation_requested` then server emits `plan_generated`
-- complete task -> `task_outcome_logged`
-
-UI should never mutate read models locally and call it “done” without an event confirmation.
-
-### 6.3 Offline / cache policy (if any)
-
-If you add local caching:
-
-- it must be marked as cache
-- it must resync with server
-- it must not overwrite server truth silently
+- UI does not compute truth; it calls endpoints.
+- UI shows explicit states for:
+  - transcription in progress
+  - analysis in progress
+  - pending suggestions
+  - acceptance/rejection success/failure
+- No infinite spinner with no explanation.
 
 ---
 
-## 7) Engineering Rules for Contributions (Copilot-safe)
+## 7) Engineering contribution rules (Copilot-safe)
 
-### 7.1 Change discipline
-
-Any change must specify:
-
-- what contract changed (if any)
-- what event(s) are emitted
-- what projection(s) are updated
-- what UI read model(s) are impacted
-- how to test it
-
-### 7.2 Stop conditions (when to stop and ask)
+Every change must declare:
+- what contract/endpoint is affected
+- what DB tables are affected
+- how to verify the change
 
 Stop and ask for human decision if:
-
-- a change requires altering canonical schema without a version plan
-- you cannot map a UI feature to events + projections cleanly
-- adding a shortcut would bypass auth or ledger
-- the only way forward is to store unstructured blobs as truth
-- any change risks silent data loss
-
-### 7.3 Minimal dependencies
-
-Avoid adding heavy frameworks to “save time” if they:
-
-- obscure truth boundaries
-- increase cold-start time
-- complicate deployment
+- a schema change is needed without migration plan
+- a feature requires unbounded prompt accumulation
+- the only way forward is reading/writing JSON as truth
+- a proposed shortcut risks silent data loss
 
 ---
 
-## 8) Definition of Done (DoD)
+## 8) Definition of Done (Phase 1)
 
-A feature is “done” only when:
-
-- contract is defined and validated
-- event(s) are emitted and persisted
-- read model is updated and queryable
-- UI consumes read model and renders correct states
-- errors are visible and logged
-- tests exist for core logic (at least contract validation + projection correctness)
-
----
-
-## 9) Immediate Build Priorities (Order of Operations)
-
-1. Health/ready endpoints + cold-start UI state
-2. Minimal auth gate (single-user)
-3. Event ledger write path (+ validation)
-4. Read model for Today Plan + Goals
-5. Plan generation (deterministic) + plan_generated event
-6. Task outcome logging + history view
-7. Insight generation loop (rule-based, then optional LLM assist)
-8. Projection rebuild tooling + integrity checks
-
----
-
-## 10) Tone and Behaviour
-
-Othello’s tone should be:
-
-- calm
-- direct
-- execution-focused
-- evidence-driven
-
-No “woo.” No guilt. No fake certainty.  
-If something is a suggestion, it must be labeled as such.
+Phase 1 is done only when:
+- Voice transcript capture works end-to-end.
+- Audio is deleted after transcription success.
+- On-demand analysis creates pending suggestions.
+- Accepting suggestions creates goals/steps in DB.
+- Steps can be ticked; goals can be completed.
+- History is readable from DB.
+- Deleting non-test JSON files does not break Phase 1 flows.
