@@ -3,6 +3,10 @@
 
 Othello is an AI-powered personal goal architect that helps you set, track, and achieve your goals through natural conversation.
 
+## Status
+
+Othello is under active development. Features, structure, and APIs may change as the project evolves.
+
 **Always-on instance:** Othello runs on a paid Render instance—no cold starts or waking delays. The UI includes robust reconnect handling if the API is temporarily unavailable.
 
 ## Features
