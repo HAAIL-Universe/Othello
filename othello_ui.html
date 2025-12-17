@@ -2558,7 +2558,12 @@
         });
 
         if (!res.ok) {
-          const errorText = await res.text();
+          let errorText = "Unknown error";
+          try {
+            errorText = await res.text();
+          } catch (e) {
+            console.warn("[Othello UI] Could not read error response body:", e);
+          }
           console.error("[Othello UI] sendMessage HTTP error:", res.status, errorText);
           addMessage("bot", `[Error ${res.status}]: Unable to process your message. Please try again.`);
           statusEl.textContent = "Error";
