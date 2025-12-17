@@ -1600,8 +1600,37 @@
     let pendingMicStart = false;
     let pendingStartTimeout = null;
 
-    // DOM elements
-    // ...all DOM element declarations are now at the top of the main script block...
+    // DOM elements - declare all elements used in the script
+    const input = document.getElementById('user-input');
+    const sendBtn = document.getElementById('send');
+    const micBtn = document.getElementById('mic-btn');
+    const cancelTranscriptBtn = document.getElementById('cancel-transcript-btn');
+    const chatLog = document.getElementById('chat-log');
+    const statusEl = document.getElementById('status');
+    const modeLabel = document.getElementById('current-mode-label');
+    const modeSubtitle = document.getElementById('mode-subtitle');
+    const middleTab = document.getElementById('middle-tab');
+    const middleTabBadge = document.getElementById('middle-tab-badge');
+    const insightsTabBadge = document.getElementById('insights-tab-badge');
+    const focusRibbonTitle = document.getElementById('focus-ribbon-title');
+    const viewFocusBtn = document.getElementById('view-focus-btn');
+    const goalsList = document.getElementById('goals-list');
+    const goalDetail = document.getElementById('goal-detail');
+    const detailGoalId = document.getElementById('detail-goal-id');
+    const detailGoalTitle = document.getElementById('detail-goal-title');
+    const detailContent = document.getElementById('detail-content');
+    const backFromDetailBtn = document.getElementById('back-from-detail');
+    const continueWorkingBtn = document.getElementById('continue-working-btn');
+    const plannerHeadline = document.getElementById('planner-headline');
+    const plannerEnergy = document.getElementById('planner-energy');
+    const plannerError = document.getElementById('planner-error');
+    const plannerRoutinesList = document.getElementById('planner-routines-list');
+    const plannerRoutinesCount = document.getElementById('planner-routines-count');
+    const plannerGoalsList = document.getElementById('planner-goals-list');
+    const plannerGoalsCount = document.getElementById('planner-goals-count');
+    const insightsList = document.getElementById('insights-list');
+    const insightsEmpty = document.getElementById('insights-empty');
+    const insightsError = document.getElementById('insights-error');
 
     // App state
     const othelloState = {
@@ -2527,6 +2556,14 @@
             current_view: othelloState.currentView,
           })
         });
+
+        if (!res.ok) {
+          const errorText = await res.text();
+          console.error("[Othello UI] sendMessage HTTP error:", res.status, errorText);
+          addMessage("bot", `[Error ${res.status}]: Unable to process your message. Please try again.`);
+          statusEl.textContent = "Error";
+          return;
+        }
 
         const data = await res.json();
         addMessage("bot", data.reply || "[no reply]");
