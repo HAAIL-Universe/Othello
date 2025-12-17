@@ -1,20 +1,41 @@
-@app.route("/api/auth/logout", methods=["POST"])
-def auth_logout():
-    session.clear()
-    return jsonify({"ok": True})
-
-# Asset route registration (after app exists)
-from flask import send_from_directory
+import logging
 import os
+import re
+from datetime import date, timedelta
+from flask import Flask, request, jsonify, send_file, session, send_from_directory
+from flask_cors import CORS
+import asyncio
+from typing import Any, Dict, Optional
+from functools import wraps
+from passlib.hash import bcrypt
+import mimetypes
 
-def register_asset_routes(app):
-    @app.get('/scripts/<path:filename>')
-    def serve_scripts(filename):
-        return send_from_directory(os.path.join(os.getcwd(), 'scripts'), filename)
+# NOTE: Keep import-time work minimal! Do not import LLM/agent modules or connect to DB at module scope unless required for health endpoints.
+from dotenv import load_dotenv
+load_dotenv()
 
-    @app.get('/interface/<path:filename>')
-    def serve_interface(filename):
-        return send_from_directory(os.path.join(os.getcwd(), 'interface'), filename)
+# Configure logging to show DEBUG messages
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+
+# --- Flask App Setup (must be before any route decorators) ---
+app = Flask(__name__, static_folder="static", static_url_path="/static")
+CORS(app)  # Allow requests from frontend
+
+# Harden SECRET_KEY handling for production
+secret = os.getenv("SECRET_KEY")
+if not secret:
+    if os.getenv("RENDER") or os.getenv("RENDER_SERVICE_ID"):
+        logging.warning("[API] WARNING: SECRET_KEY is not set in environment! Using insecure default. Set SECRET_KEY in Render environment variables.")
+    secret = "dev-secret-key"
+app.config["SECRET_KEY"] = secret
+
+# Minimal auth config (compat bridge)
+OTHELLO_PASSWORD = os.environ.get("OTHELLO_PASSWORD")
+OTHELLO_PIN_HASH = os.environ.get("OTHELLO_PIN_HASH")
+
 def get_runtime_config_snapshot():
     """
     Returns a dict with booleans for env presence, selected auth/secret/model/db modes, and build info.
@@ -82,7 +103,6 @@ def get_runtime_config_snapshot():
 
 # Debug config endpoint registration (to avoid import-order issues)
 def register_debug_routes(app):
-    from flask import session, jsonify, request
     def _debug_config_allowed():
         # Only allow if authed session AND DEBUG_CONFIG=1
         if not session.get("authed"):
@@ -95,20 +115,19 @@ def register_debug_routes(app):
             return ("Not found", 404)
         return jsonify(get_runtime_config_snapshot())
 
-import logging
-import os
-import re
-from datetime import date, timedelta
-from flask import Flask, request, jsonify, send_file
-from flask_cors import CORS
-import asyncio
-from typing import Any, Dict, Optional
+# Asset route registration (after app exists)
+def register_asset_routes(app):
+    @app.get('/scripts/<path:filename>')
+    def serve_scripts(filename):
+        return send_from_directory(os.path.join(os.getcwd(), 'scripts'), filename)
 
+    @app.get('/interface/<path:filename>')
+    def serve_interface(filename):
+        return send_from_directory(os.path.join(os.getcwd(), 'interface'), filename)
 
-# NOTE: Keep import-time work minimal! Do not import LLM/agent modules or connect to DB at module scope unless required for health endpoints.
-from dotenv import load_dotenv
-load_dotenv()
-
+# Register debug and asset routes after app/session setup
+register_debug_routes(app)
+register_asset_routes(app)
 
 def serialize_insight(insight: Dict[str, Any]) -> Dict[str, Any]:
     """Convert a repository row into a JSON-safe dict for the UI."""
@@ -155,15 +174,10 @@ def serialize_goal_task_history(row: Dict[str, Any]) -> Dict[str, Any]:
         "updated_at": updated_at.isoformat() if hasattr(updated_at, "isoformat") else updated_at,
     }
 
-# Configure logging to show DEBUG messages
-logging.basicConfig(
-    level=logging.DEBUG,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-
 # Initialize database connection pool
 db_initialized = False
 try:
+    from db.database import init_pool, ensure_core_schema, fetch_one
     init_pool()
     ensure_core_schema()
     db_initialized = True
@@ -183,6 +197,49 @@ except Exception as e:
     print(f"[API] ✗ Warning: Failed to initialize database: {e}")
     print("[API] ✗ The app will run but goal persistence may not work correctly")
     print("[API] ✗ Check that DATABASE_URL is set in .env and the database is accessible")
+
+# Lazy initialization of agent components (imported when first accessed)
+# These are initialized here to avoid circular imports and heavy startup cost
+try:
+    from core.architect_brain import Architect
+    from core.llm_wrapper import AsyncLLMWrapper
+    from core.input_router import InputRouter
+    from core.othello_engine import OthelloEngine
+    from utils.postprocessor import postprocess_and_save
+    from db import plan_repository
+    from db import goal_task_history_repository
+    from db.db_goal_manager import DbGoalManager
+    from core.memory_manager import MemoryManager
+    from db import insights_repository
+    from insights_service import extract_insights_from_exchange
+    
+    # Model selection: try pick_model if available, else fallback
+    try:
+        from core.llm_wrapper import pick_model
+        model = pick_model(default=os.getenv("FELLO_MODEL", "gpt-4o-mini"))
+    except Exception:
+        model = os.getenv("FELLO_MODEL", "gpt-4o-mini")
+    
+    openai_model = AsyncLLMWrapper(model=model)
+    architect_agent = Architect(model=openai_model)
+    architect_agent.goal_mgr = DbGoalManager()
+    architect_agent.memory_mgr = MemoryManager()
+    othello_engine = OthelloEngine(goal_manager=architect_agent.goal_mgr, memory_manager=architect_agent.memory_mgr)
+    DEFAULT_USER_ID = DbGoalManager.DEFAULT_USER_ID
+    
+    print("[API] ✓ Agent components initialized successfully")
+except Exception as e:
+    print(f"[API] ✗ Warning: Failed to initialize agent components: {e}")
+    print("[API] ✗ The app will run but agentic features may not work correctly")
+    # Set to None so routes can check if they're initialized
+    architect_agent = None
+    othello_engine = None
+    DEFAULT_USER_ID = "default"
+    insights_repository = None
+    plan_repository = None
+    goal_task_history_repository = None
+    postprocess_and_save = None
+    extract_insights_from_exchange = None
 
 
 def is_goal_list_request(text: str) -> bool:
@@ -239,39 +296,6 @@ def format_goal_list(goals) -> str:
 
 
 def parse_goal_selection_request(text: str) -> Optional[int]:
-
-    # === Model selector and agent/LLM/DB lazy loader ===
-    import os
-    SELECTED_MODEL = os.getenv("FELLO_MODEL", "gpt-4o-mini")
-
-    # Canonical lazy loader for agent/LLM/DB modules and model selection
-    def get_agent_components():
-        # Import only when needed (not for health endpoints)
-        from core.architect_brain import Architect
-        from core.llm_wrapper import AsyncLLMWrapper
-        from core.input_router import InputRouter
-        from core.othello_engine import OthelloEngine
-        from utils.postprocessor import postprocess_and_save
-        from db.database import ensure_core_schema, fetch_one
-        from db import plan_repository
-        from db import goal_task_history_repository
-        from db.db_goal_manager import DbGoalManager
-        from core.memory_manager import MemoryManager
-        from db import insights_repository
-        from insights_service import extract_insights_from_exchange
-        # Model selection: try pick_model if available, else fallback
-        try:
-            from core.llm_wrapper import pick_model
-            model = pick_model(default=os.getenv("FELLO_MODEL", "gpt-4o-mini"))
-        except Exception:
-            model = os.getenv("FELLO_MODEL", "gpt-4o-mini")
-        openai_model = AsyncLLMWrapper(model=model)
-        architect_agent = Architect(model=openai_model)
-        architect_agent.goal_mgr = DbGoalManager()
-        architect_agent.memory_mgr = MemoryManager()
-        othello_engine = OthelloEngine(goal_manager=architect_agent.goal_mgr, memory_manager=architect_agent.memory_mgr)
-        DEFAULT_USER_ID = DbGoalManager.DEFAULT_USER_ID
-        return locals()
     """
     Try to parse EXPLICIT goal selection commands like:
     - "goal 1"
@@ -307,35 +331,6 @@ def parse_goal_selection_request(text: str) -> Optional[int]:
 
 
 
-
-
-
-# --- Flask App Setup ---
-import mimetypes
-
-app = Flask(__name__, static_folder="static", static_url_path="/static")
-CORS(app)  # Allow requests from frontend
-# Harden SECRET_KEY handling for production
-secret = os.getenv("SECRET_KEY")
-if not secret:
-    if os.getenv("RENDER") or os.getenv("RENDER_SERVICE_ID"):
-        logging.warning("[API] WARNING: SECRET_KEY is not set in environment! Using insecure default. Set SECRET_KEY in Render environment variables.")
-    secret = "dev-secret-key"
-app.config["SECRET_KEY"] = secret
-
-# Register debug and asset routes after app/session setup
-register_debug_routes(app)
-register_asset_routes(app)
-
-
-# Minimal auth config (compat bridge)
-from flask import session, abort
-from functools import wraps
-from passlib.hash import bcrypt
-
-OTHELLO_PASSWORD = os.environ.get("OTHELLO_PASSWORD")
-OTHELLO_PIN_HASH = os.environ.get("OTHELLO_PIN_HASH")
-
 def require_auth(f):
     @wraps(f)
     def decorated(*args, **kwargs):
@@ -346,7 +341,6 @@ def require_auth(f):
             return jsonify({"error": "Authentication required"}), 401
         return f(*args, **kwargs)
     return decorated
-
 
 
 # Always-on health endpoint for connection checks (does not check DB)
@@ -401,6 +395,11 @@ def auth_login():
 @app.route("/api/auth/me", methods=["GET"])
 def auth_me():
     return jsonify({"authenticated": bool(session.get("authed"))})
+
+@app.route("/api/auth/logout", methods=["POST"])
+def auth_logout():
+    session.clear()
+    return jsonify({"ok": True})
 
 
 def log_pending_insights_on_startup():
