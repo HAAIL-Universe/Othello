@@ -9,6 +9,7 @@ from typing import Any, Dict, Optional
 from functools import wraps
 from passlib.hash import bcrypt
 import mimetypes
+from utils.llm_config import is_openai_configured
 
 # NOTE: Keep import-time work minimal! Do not import LLM/agent modules or connect to DB at module scope unless required for health endpoints.
 from dotenv import load_dotenv
@@ -19,6 +20,59 @@ logging.basicConfig(
     level=logging.DEBUG,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
+
+# Helper function to classify OpenAI errors and return appropriate JSON responses
+def handle_llm_error(e: Exception, logger: logging.Logger) -> tuple[dict, int]:
+    """
+    Classify LLM/OpenAI errors and return structured JSON response with appropriate status code.
+    
+    Args:
+        e: The exception that was raised
+        logger: Logger instance for logging the error
+        
+    Returns:
+        Tuple of (json_dict, status_code)
+    """
+    import openai
+    
+    # Log the exception class and message (sanitized - no API keys)
+    error_class = type(e).__name__
+    error_msg = str(e)
+    logger.error(f"LLM error: {error_class}: {error_msg[:200]}", exc_info=False)
+    
+    # Authentication errors
+    if isinstance(e, openai.AuthenticationError):
+        return {
+            "error": "LLM auth failed",
+            "reason": "Invalid API key or auth failure"
+        }, 503
+    
+    # Rate limit errors  
+    if isinstance(e, openai.RateLimitError):
+        return {
+            "error": "LLM rate limit",
+            "reason": "API rate limit exceeded. Please try again later."
+        }, 429
+    
+    # Connection/timeout errors
+    if isinstance(e, (openai.APIConnectionError, openai.APITimeoutError)):
+        return {
+            "error": "LLM connection error",
+            "reason": "Could not connect to LLM service"
+        }, 502
+    
+    # Other OpenAI API errors
+    if isinstance(e, openai.OpenAIError):
+        return {
+            "error": "LLM upstream error",
+            "reason": f"LLM service error: {error_class}"
+        }, 502
+    
+    # Generic error for non-OpenAI exceptions
+    return {
+        "error": "Internal error",
+        "reason": f"An unexpected error occurred: {error_class}"
+    }, 500
 
 # --- Flask App Setup (must be before any route decorators) ---
 app = Flask(__name__, static_folder="static", static_url_path="/static")
@@ -464,6 +518,22 @@ def handle_message():
     
     logger.info(f"API: Received message: {user_input[:100]}...")
     
+    # Check if OpenAI is configured
+    if not is_openai_configured():
+        logger.error("API: OPENAI_API_KEY is not configured")
+        return jsonify({
+            "error": "LLM unavailable",
+            "reason": "Missing OPENAI_API_KEY"
+        }), 503
+    
+    # Check if agent components initialized successfully
+    if architect_agent is None:
+        logger.error("API: Agent components not initialized (likely due to missing or invalid API key)")
+        return jsonify({
+            "error": "LLM unavailable", 
+            "reason": "Agent components failed to initialize. Check OPENAI_API_KEY configuration."
+        }), 503
+    
     # Set active goal from client focus if provided
     if active_goal_id:
         try:
@@ -653,6 +723,14 @@ def handle_message():
                     
             except Exception as e:
                 logger.error(f"API: generate_goal_plan failed: {e}", exc_info=True)
+                
+                # Check if it's an OpenAI error - return structured error
+                import openai
+                if isinstance(e, openai.OpenAIError):
+                    error_response, status_code = handle_llm_error(e, logger)
+                    return jsonify(error_response), status_code
+                
+                # Otherwise provide generic error message in response
                 agentic_reply = (
                     "I encountered an error while generating the plan. "
                     "Please try again or rephrase your request."
@@ -691,6 +769,14 @@ def handle_message():
                     agent_status["planner_active"] = True
             except Exception as e:
                 logger.error(f"API: Architect planning failed with exception for goal_id={active_goal['id']}: {e}", exc_info=True)
+                
+                # Check if it's an OpenAI error - return structured error
+                import openai
+                if isinstance(e, openai.OpenAIError):
+                    error_response, status_code = handle_llm_error(e, logger)
+                    return jsonify(error_response), status_code
+                
+                # Otherwise provide generic error message in response
                 agentic_reply = (
                     "I ran into an internal error while updating your goal plan. "
                     "Please try again or rephrase your message."
@@ -753,6 +839,14 @@ def handle_message():
             
         except Exception as e:
             logger.error(f"API: Casual chat failed with exception: {e}", exc_info=True)
+            
+            # Check if it's an OpenAI error - return structured error
+            import openai
+            if isinstance(e, openai.OpenAIError):
+                error_response, status_code = handle_llm_error(e, logger)
+                return jsonify(error_response), status_code
+            
+            # Otherwise provide generic error message in response
             agentic_reply = "I'm having trouble processing that right now. Could you try again?"
             agent_status = {"planner_active": False, "had_goal_update_xml": False}
 
