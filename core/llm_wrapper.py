@@ -3,6 +3,7 @@ import openai
 import logging
 from typing import Optional
 from dotenv import load_dotenv
+from utils.llm_config import get_openai_api_key
 
 def pick_model(default: str = "gpt-4o"):
     print("Which model would you like FELLO to use this session?")
@@ -39,7 +40,7 @@ def pick_model(default: str = "gpt-4o"):
 class LLMWrapper:
     def __init__(self, model: Optional[str] = None):
         load_dotenv()
-        api_key = os.getenv("OPENAI_API_KEY")
+        api_key = get_openai_api_key()
         if not api_key:
             raise ValueError("OPENAI_API_KEY environment variable not set.")
 
