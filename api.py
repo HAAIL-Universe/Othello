@@ -10,6 +10,7 @@ from functools import wraps
 from passlib.hash import bcrypt
 import mimetypes
 from utils.llm_config import is_openai_configured
+import openai
 
 # NOTE: Keep import-time work minimal! Do not import LLM/agent modules or connect to DB at module scope unless required for health endpoints.
 from dotenv import load_dotenv
@@ -20,6 +21,9 @@ logging.basicConfig(
     level=logging.DEBUG,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
+
+# Constants
+MAX_ERROR_MSG_LENGTH = 200  # Maximum length for error message logging
 
 # Helper function to classify OpenAI errors and return appropriate JSON responses
 def handle_llm_error(e: Exception, logger: logging.Logger) -> tuple[dict, int]:
@@ -33,12 +37,10 @@ def handle_llm_error(e: Exception, logger: logging.Logger) -> tuple[dict, int]:
     Returns:
         Tuple of (json_dict, status_code)
     """
-    import openai
-    
     # Log the exception class and message (sanitized - no API keys)
     error_class = type(e).__name__
     error_msg = str(e)
-    logger.error(f"LLM error: {error_class}: {error_msg[:200]}", exc_info=False)
+    logger.error(f"LLM error: {error_class}: {error_msg[:MAX_ERROR_MSG_LENGTH]}", exc_info=False)
     
     # Authentication errors
     if isinstance(e, openai.AuthenticationError):
@@ -730,7 +732,6 @@ def handle_message():
                 logger.error(f"API: generate_goal_plan failed: {e}", exc_info=True)
                 
                 # Check if it's an OpenAI error - return structured error
-                import openai
                 if isinstance(e, openai.OpenAIError):
                     error_response, status_code = handle_llm_error(e, logger)
                     return jsonify(error_response), status_code
@@ -776,7 +777,6 @@ def handle_message():
                 logger.error(f"API: Architect planning failed with exception for goal_id={active_goal['id']}: {e}", exc_info=True)
                 
                 # Check if it's an OpenAI error - return structured error
-                import openai
                 if isinstance(e, openai.OpenAIError):
                     error_response, status_code = handle_llm_error(e, logger)
                     return jsonify(error_response), status_code
@@ -846,7 +846,6 @@ def handle_message():
             logger.error(f"API: Casual chat failed with exception: {e}", exc_info=True)
             
             # Check if it's an OpenAI error - return structured error
-            import openai
             if isinstance(e, openai.OpenAIError):
                 error_response, status_code = handle_llm_error(e, logger)
                 return jsonify(error_response), status_code
