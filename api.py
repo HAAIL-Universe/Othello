@@ -268,11 +268,16 @@ try:
     from insights_service import extract_insights_from_exchange
     
     # Model selection: try pick_model if available, else fallback
-    try:
-        from core.llm_wrapper import pick_model
-        model = pick_model(default=os.getenv("FELLO_MODEL", "gpt-4o-mini"))
-    except Exception:
-        model = os.getenv("FELLO_MODEL", "gpt-4o-mini")
+    # Skip interactive prompt if OTHELLO_MODEL or FELLO_MODEL is set
+    model_from_env = os.getenv("OTHELLO_MODEL") or os.getenv("FELLO_MODEL")
+    if model_from_env:
+        model = model_from_env
+    else:
+        try:
+            from core.llm_wrapper import pick_model
+            model = pick_model(default=os.getenv("FELLO_MODEL", "gpt-4o-mini"))
+        except Exception:
+            model = os.getenv("FELLO_MODEL", "gpt-4o-mini")
     
     openai_model = AsyncLLMWrapper(model=model)
     architect_agent = Architect(model=openai_model)
