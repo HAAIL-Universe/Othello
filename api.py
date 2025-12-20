@@ -443,6 +443,7 @@ def get_agent_components():
         from core.memory_manager import MemoryManager
         from db import insights_repository
         from insights_service import extract_insights_from_exchange
+        from db.goal_events_repository import ensure_goal_events_table
 
         model = (
             (os.getenv("OTHELLO_MODEL") or "").strip()
@@ -472,6 +473,10 @@ def get_agent_components():
             'extract_insights_from_exchange': extract_insights_from_exchange,
             'model': model,
         }
+        try:
+            ensure_goal_events_table()
+        except Exception as exc:
+            logger.warning("Goal events table ensure failed: %s", exc, exc_info=True)
         globals().update(
             architect_agent=architect_agent,
             othello_engine=othello_engine,
@@ -1300,50 +1305,49 @@ def handle_message():
                 return bool(result.get("ok", False)), result.get("reason")
             return False, "unknown"
 
+        event_storage_ok = True
+        event_emitted = True
         try:
             user_event = architect_agent.goal_mgr.add_note_to_goal(active_goal["id"], "user", user_input)
             assistant_event = architect_agent.goal_mgr.add_note_to_goal(active_goal["id"], "othello", agentic_reply)
+            user_ok, user_reason = _event_ok(user_event)
+            assistant_ok, assistant_reason = _event_ok(assistant_event)
+            if not user_ok or not assistant_ok:
+                event_storage_ok = False
+                event_emitted = False
+                details = {
+                    "user_event_ok": user_ok,
+                    "assistant_event_ok": assistant_ok,
+                    "goal_id": active_goal.get("id"),
+                }
+                if user_reason:
+                    details["user_reason"] = user_reason
+                if assistant_reason:
+                    details["assistant_reason"] = assistant_reason
+                logger.warning(
+                    "API: goal event storage unavailable request_id=%s details=%s",
+                    request_id,
+                    details,
+                )
         except Exception as e:
+            event_storage_ok = False
+            event_emitted = False
             logger.exception(
-                "API: goal event append failed request_id=%s",
+                "API: goal event append failed request_id=%s goal_id=%s",
                 request_id,
+                active_goal.get("id"),
                 extra={"request_id": request_id},
             )
-            return api_error(
-                "GOAL_EVENT_STORAGE_UNAVAILABLE",
-                "Goal event storage unavailable",
-                503,
-                details=type(e).__name__,
-            )
 
-        user_ok, user_reason = _event_ok(user_event)
-        assistant_ok, assistant_reason = _event_ok(assistant_event)
-        if not user_ok or not assistant_ok:
-            details = {
-                "user_event_ok": user_ok,
-                "assistant_event_ok": assistant_ok,
-            }
-            if user_reason:
-                details["user_reason"] = user_reason
-            if assistant_reason:
-                details["assistant_reason"] = assistant_reason
-            logger.warning(
-                "API: goal event storage unavailable request_id=%s details=%s",
-                request_id,
-                details,
-            )
-            return api_error(
-                "GOAL_EVENT_STORAGE_UNAVAILABLE",
-                "Goal event storage unavailable",
-                503,
-                details=details,
-            )
-
-        logger.debug(f"API: Logged conversation to goal #{active_goal['id']}")
+        if event_storage_ok:
+            logger.debug(f"API: Logged conversation to goal #{active_goal['id']}")
         # ---------------------------------------------------------------------
 
         # Log final response details
         logger.info(f"API: Returning response - planner_active={agent_status.get('planner_active', False)}, had_xml={agent_status.get('had_goal_update_xml', False)}")
+
+        agent_status["event_storage_ok"] = event_storage_ok
+        agent_status["event_emitted"] = event_emitted
 
         response = {
             "reply": agentic_reply,

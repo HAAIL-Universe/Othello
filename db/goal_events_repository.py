@@ -5,6 +5,21 @@ from db.database import execute_query, fetch_one, fetch_all, execute_and_fetch_o
 
 logger = logging.getLogger("GoalEventsRepository")
 
+
+def ensure_goal_events_table() -> None:
+    query = """
+        CREATE TABLE IF NOT EXISTS goal_events (
+            id SERIAL PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            goal_id INTEGER REFERENCES goals(id) ON DELETE CASCADE,
+            step_id INTEGER REFERENCES plan_steps(id) ON DELETE SET NULL,
+            event_type TEXT NOT NULL,
+            payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+            occurred_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+    """
+    execute_query(query)
+
 def append_goal_event(user_id: str, goal_id: int, step_id: Optional[int], event_type: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     query = """
         INSERT INTO goal_events (user_id, goal_id, step_id, event_type, payload, occurred_at)
