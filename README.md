@@ -174,6 +174,12 @@ Expected response:
 4. Once the backend is available, the banner disappears and the app loads.
 5. Confirm the health endpoint returns JSON as above at http://127.0.0.1:5000/api/health/db
 
+## Render Deploy Sanity
+
+- Othello runs as Flask WSGI (`app = Flask(__name__)` in `api.py`).
+- Start command (Render): `gunicorn api:app --bind 0.0.0.0:$PORT --workers 1 --threads 8 --timeout 120`
+- Ensure `Flask>=2.3` is present in `requirements.txt`.
+
 ---
 
 ## Project Structure

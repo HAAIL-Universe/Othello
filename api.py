@@ -998,389 +998,389 @@ def handle_message():
                     detail = f"Agent init failed ({type(_agent_init_error).__name__})"
             return api_error("LLM_INIT_FAILED", "LLM unavailable", 503, details=detail)
 
-    requested_goal_id = _coerce_goal_id(raw_goal_id) if raw_goal_id is not None else None
-    if raw_goal_id is not None and requested_goal_id is None:
-        return api_error(
-            "VALIDATION_ERROR",
-            f"{goal_id_source} must be a positive integer",
-            400,
-            details={"goal_id": raw_goal_id},
-        )
-
-    requested_goal = None
-    if requested_goal_id is not None:
-        try:
-            requested_goal = architect_agent.goal_mgr.get_goal(requested_goal_id)
-        except Exception as exc:
-            logger.error("API: Goal lookup failed request_id=%s", request_id, exc_info=True)
+        requested_goal_id = _coerce_goal_id(raw_goal_id) if raw_goal_id is not None else None
+        if raw_goal_id is not None and requested_goal_id is None:
             return api_error(
-                "GOAL_STORAGE_UNAVAILABLE",
-                "Goal storage unavailable",
-                503,
-                details=type(exc).__name__,
-            )
-        if requested_goal is None:
-            return api_error(
-                "GOAL_NOT_FOUND",
-                "Goal not found",
-                404,
-                details={"goal_id": requested_goal_id},
-            )
-        status = (requested_goal.get("status") or "").strip().lower()
-        if status == "archived":
-            return api_error(
-                "GOAL_ARCHIVED",
-                "Goal is archived",
-                409,
-                details={"goal_id": requested_goal_id},
+                "VALIDATION_ERROR",
+                f"{goal_id_source} must be a positive integer",
+                400,
+                details={"goal_id": raw_goal_id},
             )
 
-    # --- Shortcut 1: user is asking for their goals; answer directly -----
-    if is_goal_list_request(user_input):
-        # Log which phrase triggered the goal list route
-        t = user_input.lower()
-        goal_list_phrases = [
-            "what are my goals",
-            "what's my goals",
-            "what are the goals",
-            "show my goals",
-            "show me my goals",
-            "list my goals",
-            "list the goals",
-            "list goals",
-            "show goals",
-            "view goals",
-            "view my goals",
-            "see my goals",
-            "what goals do i have",
-            "what goals have i",
-        ]
-        matched_phrase = next((p for p in goal_list_phrases if p in t), None)
-        logger.info(f"API: Routing to goal list (shortcut branch) due to phrase: {matched_phrase!r}")
+        requested_goal = None
+        if requested_goal_id is not None:
+            try:
+                requested_goal = architect_agent.goal_mgr.get_goal(requested_goal_id)
+            except Exception as exc:
+                logger.error("API: Goal lookup failed request_id=%s", request_id, exc_info=True)
+                return api_error(
+                    "GOAL_STORAGE_UNAVAILABLE",
+                    "Goal storage unavailable",
+                    503,
+                    details=type(exc).__name__,
+                )
+            if requested_goal is None:
+                return api_error(
+                    "GOAL_NOT_FOUND",
+                    "Goal not found",
+                    404,
+                    details={"goal_id": requested_goal_id},
+                )
+            status = (requested_goal.get("status") or "").strip().lower()
+            if status == "archived":
+                return api_error(
+                    "GOAL_ARCHIVED",
+                    "Goal is archived",
+                    409,
+                    details={"goal_id": requested_goal_id},
+                )
+
+        # --- Shortcut 1: user is asking for their goals; answer directly -----
+        if is_goal_list_request(user_input):
+            # Log which phrase triggered the goal list route
+            t = user_input.lower()
+            goal_list_phrases = [
+                "what are my goals",
+                "what's my goals",
+                "what are the goals",
+                "show my goals",
+                "show me my goals",
+                "list my goals",
+                "list the goals",
+                "list goals",
+                "show goals",
+                "view goals",
+                "view my goals",
+                "see my goals",
+                "what goals do i have",
+                "what goals have i",
+            ]
+            matched_phrase = next((p for p in goal_list_phrases if p in t), None)
+            logger.info(f"API: Routing to goal list (shortcut branch) due to phrase: {matched_phrase!r}")
         
-        goals = architect_agent.goal_mgr.list_goals() or []
-        reply_text = format_goal_list(goals)
-        logger.info(f"API: Returning goal list with {len(goals)} goals")
-        return jsonify(
-            {
-                "reply": reply_text,
-                "goals": goals,
-                "meta": {
-                    "source": "goal_manager",
-                    "intent": "list_goals",
-                },
-            }
-        )
-
-    # --- Shortcut 2: user wants to focus on a specific goal -------------
-    goal_id = parse_goal_selection_request(user_input)
-    if goal_id is not None:
-        logger.info(f"API: User explicitly selecting goal #{goal_id} via goal-selection command")
-        goal = architect_agent.goal_mgr.get_goal(goal_id)
-        if goal is None:
-            logger.warning(f"API: Goal #{goal_id} not found")
-            reply_text = (
-                f"I couldn't find a goal #{goal_id}. "
-                "Ask me to list your goals first if you're not sure of the number."
-            )
+            goals = architect_agent.goal_mgr.list_goals() or []
+            reply_text = format_goal_list(goals)
+            logger.info(f"API: Returning goal list with {len(goals)} goals")
             return jsonify(
                 {
                     "reply": reply_text,
+                    "goals": goals,
                     "meta": {
                         "source": "goal_manager",
-                        "intent": "select_goal_failed",
-                        "requested_goal_id": goal_id,
+                        "intent": "list_goals",
                     },
                 }
             )
 
-        architect_agent.goal_mgr.set_active_goal(goal_id)
-        ctx = architect_agent.goal_mgr.build_goal_context(goal_id, max_notes=5)
-        logger.info(f"API: Set active goal to #{goal_id}: {goal['text'][:50]}...")
-        reply_text = (
-            f"Okay, we'll focus on Goal #{goal_id}: {goal['text']}.\n\n"
-            "I'll attach our next messages to this goal. "
-            "Tell me updates, questions, or ask me to help you plan steps."
-        )
-
-        return jsonify(
-            {
-                "reply": reply_text,
-                "active_goal_id": goal_id,
-                "goal_context": ctx,
-                "meta": {
-                    "source": "goal_manager",
-                    "intent": "select_goal_success",
-                    "selected_goal_id": goal_id,
-                },
-            }
-        )
-    # ---------------------------------------------------------------------
-
-    # === Post-processing (analysis only – no persistence here) ===========
-    summary = postprocess_and_save(user_input)
-    print("[DEBUG] Postprocess summary:", summary)  # Comment/remove in prod
-
-    # === Determine active goal with fallback logic =======================
-    active_goal = requested_goal
-    if active_goal is None:
-        try:
-            active_goal = architect_agent.goal_mgr.get_active_goal()
-        except Exception as exc:
-            logger.error("API: Failed to load active goal: %s", exc, exc_info=True)
-            active_goal = None
-    
-    # Fallback: if no active goal but exactly one goal exists, use it as default
-    if active_goal is None:
-        try:
-            goals = architect_agent.goal_mgr.list_goals() or []
-        except Exception as exc:
-            logger.error("API: Failed to list goals for fallback: %s", exc, exc_info=True)
-            goals = []
-        if goals and len(goals) == 1:
-            single_goal = goals[0]
-            logger.info(
-                f"API: No explicit active goal, but 1 goal exists (#{single_goal.get('id')}). "
-                "Defaulting to this as active planning goal."
-            )
-            try:
-                architect_agent.goal_mgr.set_active_goal(single_goal["id"])
-                active_goal = single_goal
-                logger.info(f"API: Successfully set active goal to #{single_goal.get('id')}")
-            except Exception as e:
-                logger.warning(f"API: Failed to persist active goal default: {e}")
-                # Still use it for this request even if persistence failed
-                active_goal = single_goal
-    
-    # === Build goal_context for Architect (if an active goal exists) =====
-    goal_context = None
-    if isinstance(active_goal, dict) and active_goal.get("id") is not None:
-        goal_context = architect_agent.goal_mgr.build_goal_context(
-            active_goal["id"], max_notes=8
-        ) or ""
-        logger.info(f"API: Active goal #{active_goal['id']}: {active_goal.get('text', '')[:50]}...")
-        logger.info(f"API: Built goal context ({len(goal_context) if goal_context else 0} chars)")
-        logger.info(f"API: Routing message to Architect planning engine for goal_id={active_goal['id']}")
-    else:
-        active_goal = None
-        logger.info("API: No active goal - casual chat mode")
-    # ---------------------------------------------------------------------
-
-    # === Route to Architect planning if active goal exists ===============
-    if active_goal is not None:
-        # Active goal detected - check if this is an explicit plan generation request
-        router = InputRouter()
-        is_plan_request = router.is_plan_request(user_input)
-        
-        if is_plan_request:
-            # Explicit plan generation request - use XML-only planning mode
-            logger.info(f"API: PLAN REQUEST detected for goal #{active_goal['id']}")
-            logger.info(f"API: Routing to generate_goal_plan (XML-only mode)")
-            
-            try:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                plan_result = loop.run_until_complete(
-                    architect_agent.generate_goal_plan(
-                        goal_id=active_goal['id'],
-                        instruction=user_input
-                    )
+        # --- Shortcut 2: user wants to focus on a specific goal -------------
+        goal_id = parse_goal_selection_request(user_input)
+        if goal_id is not None:
+            logger.info(f"API: User explicitly selecting goal #{goal_id} via goal-selection command")
+            goal = architect_agent.goal_mgr.get_goal(goal_id)
+            if goal is None:
+                logger.warning(f"API: Goal #{goal_id} not found")
+                reply_text = (
+                    f"I couldn't find a goal #{goal_id}. "
+                    "Ask me to list your goals first if you're not sure of the number."
                 )
-                loop.close()
-                
-                if plan_result:
-                    # Successfully generated plan - build natural language summary
-                    step_count = len(plan_result.get('plan_steps', []))
-                    next_action = plan_result.get('next_action', 'Begin with the first step')
-                    priority = plan_result.get('priority', 'medium')
-                    status = plan_result.get('status', 'active')
-                    
-                    agentic_reply = (
-                        f"I've created a {step_count}-step plan for this goal.\n\n"
-                        f"Status: {status}\n"
-                        f"Priority: {priority}\n\n"
-                        f"Your next action: {next_action}\n\n"
-                        f"You can review all steps in the GOALS tab."
-                    )
-                    
-                    agent_status = {
-                        "planner_active": True,
-                        "had_goal_update_xml": True,
-                        "plan_generated": True,
-                        "step_count": step_count
+                return jsonify(
+                    {
+                        "reply": reply_text,
+                        "meta": {
+                            "source": "goal_manager",
+                            "intent": "select_goal_failed",
+                            "requested_goal_id": goal_id,
+                        },
                     }
+                )
+
+            architect_agent.goal_mgr.set_active_goal(goal_id)
+            ctx = architect_agent.goal_mgr.build_goal_context(goal_id, max_notes=5)
+            logger.info(f"API: Set active goal to #{goal_id}: {goal['text'][:50]}...")
+            reply_text = (
+                f"Okay, we'll focus on Goal #{goal_id}: {goal['text']}.\n\n"
+                "I'll attach our next messages to this goal. "
+                "Tell me updates, questions, or ask me to help you plan steps."
+            )
+
+            return jsonify(
+                {
+                    "reply": reply_text,
+                    "active_goal_id": goal_id,
+                    "goal_context": ctx,
+                    "meta": {
+                        "source": "goal_manager",
+                        "intent": "select_goal_success",
+                        "selected_goal_id": goal_id,
+                    },
+                }
+            )
+        # ---------------------------------------------------------------------
+
+        # === Post-processing (analysis only – no persistence here) ===========
+        summary = postprocess_and_save(user_input)
+        print("[DEBUG] Postprocess summary:", summary)  # Comment/remove in prod
+
+        # === Determine active goal with fallback logic =======================
+        active_goal = requested_goal
+        if active_goal is None:
+            try:
+                active_goal = architect_agent.goal_mgr.get_active_goal()
+            except Exception as exc:
+                logger.error("API: Failed to load active goal: %s", exc, exc_info=True)
+                active_goal = None
+    
+        # Fallback: if no active goal but exactly one goal exists, use it as default
+        if active_goal is None:
+            try:
+                goals = architect_agent.goal_mgr.list_goals() or []
+            except Exception as exc:
+                logger.error("API: Failed to list goals for fallback: %s", exc, exc_info=True)
+                goals = []
+            if goals and len(goals) == 1:
+                single_goal = goals[0]
+                logger.info(
+                    f"API: No explicit active goal, but 1 goal exists (#{single_goal.get('id')}). "
+                    "Defaulting to this as active planning goal."
+                )
+                try:
+                    architect_agent.goal_mgr.set_active_goal(single_goal["id"])
+                    active_goal = single_goal
+                    logger.info(f"API: Successfully set active goal to #{single_goal.get('id')}")
+                except Exception as e:
+                    logger.warning(f"API: Failed to persist active goal default: {e}")
+                    # Still use it for this request even if persistence failed
+                    active_goal = single_goal
+    
+        # === Build goal_context for Architect (if an active goal exists) =====
+        goal_context = None
+        if isinstance(active_goal, dict) and active_goal.get("id") is not None:
+            goal_context = architect_agent.goal_mgr.build_goal_context(
+                active_goal["id"], max_notes=8
+            ) or ""
+            logger.info(f"API: Active goal #{active_goal['id']}: {active_goal.get('text', '')[:50]}...")
+            logger.info(f"API: Built goal context ({len(goal_context) if goal_context else 0} chars)")
+            logger.info(f"API: Routing message to Architect planning engine for goal_id={active_goal['id']}")
+        else:
+            active_goal = None
+            logger.info("API: No active goal - casual chat mode")
+        # ---------------------------------------------------------------------
+
+        # === Route to Architect planning if active goal exists ===============
+        if active_goal is not None:
+            # Active goal detected - check if this is an explicit plan generation request
+            router = InputRouter()
+            is_plan_request = router.is_plan_request(user_input)
+        
+            if is_plan_request:
+                # Explicit plan generation request - use XML-only planning mode
+                logger.info(f"API: PLAN REQUEST detected for goal #{active_goal['id']}")
+                logger.info(f"API: Routing to generate_goal_plan (XML-only mode)")
+            
+                try:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    plan_result = loop.run_until_complete(
+                        architect_agent.generate_goal_plan(
+                            goal_id=active_goal['id'],
+                            instruction=user_input
+                        )
+                    )
+                    loop.close()
+                
+                    if plan_result:
+                        # Successfully generated plan - build natural language summary
+                        step_count = len(plan_result.get('plan_steps', []))
+                        next_action = plan_result.get('next_action', 'Begin with the first step')
+                        priority = plan_result.get('priority', 'medium')
+                        status = plan_result.get('status', 'active')
                     
-                    logger.info(f"API: Plan generation successful - {step_count} steps created")
+                        agentic_reply = (
+                            f"I've created a {step_count}-step plan for this goal.\n\n"
+                            f"Status: {status}\n"
+                            f"Priority: {priority}\n\n"
+                            f"Your next action: {next_action}\n\n"
+                            f"You can review all steps in the GOALS tab."
+                        )
                     
-                else:
-                    # Plan generation failed
-                    logger.error(f"API: Plan generation returned None for goal #{active_goal['id']}")
+                        agent_status = {
+                            "planner_active": True,
+                            "had_goal_update_xml": True,
+                            "plan_generated": True,
+                            "step_count": step_count
+                        }
+                    
+                        logger.info(f"API: Plan generation successful - {step_count} steps created")
+                    
+                    else:
+                        # Plan generation failed
+                        logger.error(f"API: Plan generation returned None for goal #{active_goal['id']}")
+                        agentic_reply = (
+                            "I had trouble generating a structured plan. "
+                            "Let me try in conversational mode instead."
+                        )
+                        agent_status = {
+                            "planner_active": False,
+                            "had_goal_update_xml": False,
+                            "plan_generated": False
+                        }
+                    
+                except Exception as e:
+                    logger.error(f"API: generate_goal_plan failed: {e}", exc_info=True)
+                
+                    # Check if it's an OpenAI error - return structured error
+                    if isinstance(e, openai.OpenAIError):
+                        error_response, status_code = handle_llm_error(e, logger)
+                        return jsonify(error_response), status_code
+                
+                    # Otherwise provide generic error message in response
                     agentic_reply = (
-                        "I had trouble generating a structured plan. "
-                        "Let me try in conversational mode instead."
+                        "I encountered an error while generating the plan. "
+                        "Please try again or rephrase your request."
                     )
                     agent_status = {
                         "planner_active": False,
                         "had_goal_update_xml": False,
                         "plan_generated": False
                     }
-                    
-            except Exception as e:
-                logger.error(f"API: generate_goal_plan failed: {e}", exc_info=True)
-                
-                # Check if it's an OpenAI error - return structured error
-                if isinstance(e, openai.OpenAIError):
-                    error_response, status_code = handle_llm_error(e, logger)
-                    return jsonify(error_response), status_code
-                
-                # Otherwise provide generic error message in response
-                agentic_reply = (
-                    "I encountered an error while generating the plan. "
-                    "Please try again or rephrase your request."
-                )
-                agent_status = {
-                    "planner_active": False,
-                    "had_goal_update_xml": False,
-                    "plan_generated": False
-                }
         
-        else:
-            # Normal conversational planning mode
-            logger.info(f"API: Planning with active goal #{active_goal['id']}: {active_goal.get('text', '')[:80]}")
+            else:
+                # Normal conversational planning mode
+                logger.info(f"API: Planning with active goal #{active_goal['id']}: {active_goal.get('text', '')[:80]}")
             
-            loop = None
+                loop = None
+                try:
+                    logger.debug(f"API: Calling architect_agent.plan_and_execute with context={goal_context is not None}")
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    agentic_reply, agent_status = loop.run_until_complete(
+                        architect_agent.plan_and_execute(
+                            user_input,
+                            context={
+                                "goal_context": goal_context,
+                                "active_goal": active_goal,
+                            } if goal_context else None,
+                        )
+                    )
+                
+                    logger.info(f"API: Architect planning completed successfully for goal_id={active_goal['id']}")
+                    logger.debug(f"API: Agent status: {agent_status}")
+                    logger.debug(f"API: Reply preview: {agentic_reply[:150]}...")
+                
+                    # Ensure planner_active is True since we routed through Architect
+                    if agent_status.get("planner_active") is None:
+                        agent_status["planner_active"] = True
+                except Exception as e:
+                    logger.error(f"API: Architect planning failed with exception for goal_id={active_goal['id']}: {e}", exc_info=True)
+                
+                    # Check if it's an OpenAI error - return structured error
+                    if isinstance(e, openai.OpenAIError):
+                        error_response, status_code = handle_llm_error(e, logger)
+                        return jsonify(error_response), status_code
+                
+                    # Otherwise provide generic error message in response
+                    agentic_reply = (
+                        "I ran into an internal error while updating your goal plan. "
+                        "Please try again or rephrase your message."
+                    )
+                    agent_status = {"planner_active": False, "had_goal_update_xml": False}
+                finally:
+                    if loop is not None:
+                        try:
+                            loop.close()
+                        except Exception:
+                            logger.debug("API: event loop close failed but continuing")
+
+            if not isinstance(agent_status, dict):
+                agent_status = {}
+
+            # --- Log conversation into active goal -------------------------------
             try:
-                logger.debug(f"API: Calling architect_agent.plan_and_execute with context={goal_context is not None}")
+                architect_agent.goal_mgr.add_note_to_goal(active_goal["id"], "user", user_input)
+                architect_agent.goal_mgr.add_note_to_goal(active_goal["id"], "othello", agentic_reply)
+                logger.debug(f"API: Logged conversation to goal #{active_goal['id']}")
+            except Exception as e:
+                logger.warning(f"API: Failed to log exchange for goal #{active_goal['id']}: {e}")
+            # ---------------------------------------------------------------------
+
+            # Log final response details
+            logger.info(f"API: Returning response - planner_active={agent_status.get('planner_active', False)}, had_xml={agent_status.get('had_goal_update_xml', False)}")
+
+            response = {
+                "reply": agentic_reply,
+                "agent_status": agent_status,
+                "request_id": request_id,
+            }
+            try:
+                logger.info("API: running insight extraction for message (goal mode)")
+                response["insights_meta"] = _normalize_insights_meta(
+                    _process_insights_pipeline(
+                        user_text=raw_user_input,
+                        assistant_text=agentic_reply,
+                        user_id=DEFAULT_USER_ID,
+                    )
+                )
+                logger.info(
+                    "API: insight extraction completed (created=%s)",
+                    response["insights_meta"].get("created", "?"),
+                )
+            except Exception as exc:
+                logger.warning("API: insight extraction skipped due to error: %s", exc, exc_info=True)
+            return jsonify(response)
+    
+        # === Fallback: Casual chat mode (no active goal) ====================
+        else:
+            logger.info("API: No active goal for this message; falling back to casual mode")
+            try:
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
                 agentic_reply, agent_status = loop.run_until_complete(
                     architect_agent.plan_and_execute(
                         user_input,
-                        context={
-                            "goal_context": goal_context,
-                            "active_goal": active_goal,
-                        } if goal_context else None,
+                        context=None,
                     )
                 )
-                
-                logger.info(f"API: Architect planning completed successfully for goal_id={active_goal['id']}")
-                logger.debug(f"API: Agent status: {agent_status}")
+                loop.close()
+            
+                logger.info(f"API: Casual chat completed successfully")
                 logger.debug(f"API: Reply preview: {agentic_reply[:150]}...")
-                
-                # Ensure planner_active is True since we routed through Architect
-                if agent_status.get("planner_active") is None:
-                    agent_status["planner_active"] = True
+            
             except Exception as e:
-                logger.error(f"API: Architect planning failed with exception for goal_id={active_goal['id']}: {e}", exc_info=True)
-                
+                logger.error(f"API: Casual chat failed with exception: {e}", exc_info=True)
+            
                 # Check if it's an OpenAI error - return structured error
                 if isinstance(e, openai.OpenAIError):
                     error_response, status_code = handle_llm_error(e, logger)
                     return jsonify(error_response), status_code
-                
+            
                 # Otherwise provide generic error message in response
-                agentic_reply = (
-                    "I ran into an internal error while updating your goal plan. "
-                    "Please try again or rephrase your message."
-                )
+                agentic_reply = "I'm having trouble processing that right now. Could you try again?"
                 agent_status = {"planner_active": False, "had_goal_update_xml": False}
-            finally:
-                if loop is not None:
-                    try:
-                        loop.close()
-                    except Exception:
-                        logger.debug("API: event loop close failed but continuing")
 
-        if not isinstance(agent_status, dict):
-            agent_status = {}
+            if not isinstance(agent_status, dict):
+                agent_status = {}
 
-        # --- Log conversation into active goal -------------------------------
-        try:
-            architect_agent.goal_mgr.add_note_to_goal(active_goal["id"], "user", user_input)
-            architect_agent.goal_mgr.add_note_to_goal(active_goal["id"], "othello", agentic_reply)
-            logger.debug(f"API: Logged conversation to goal #{active_goal['id']}")
-        except Exception as e:
-            logger.warning(f"API: Failed to log exchange for goal #{active_goal['id']}: {e}")
-        # ---------------------------------------------------------------------
-
-        # Log final response details
-        logger.info(f"API: Returning response - planner_active={agent_status.get('planner_active', False)}, had_xml={agent_status.get('had_goal_update_xml', False)}")
-
-        response = {
-            "reply": agentic_reply,
-            "agent_status": agent_status,
-            "request_id": request_id,
-        }
-        try:
-            logger.info("API: running insight extraction for message (goal mode)")
-            response["insights_meta"] = _normalize_insights_meta(
-                _process_insights_pipeline(
-                    user_text=raw_user_input,
-                    assistant_text=agentic_reply,
-                    user_id=DEFAULT_USER_ID,
+            response = {
+                "reply": agentic_reply,
+                "agent_status": agent_status,
+                "request_id": request_id,
+            }
+            try:
+                logger.info("API: running insight extraction for message (casual mode)")
+                response["insights_meta"] = _normalize_insights_meta(
+                    _process_insights_pipeline(
+                        user_text=raw_user_input,
+                        assistant_text=agentic_reply,
+                        user_id=DEFAULT_USER_ID,
+                    )
                 )
-            )
-            logger.info(
-                "API: insight extraction completed (created=%s)",
-                response["insights_meta"].get("created", "?"),
-            )
-        except Exception as exc:
-            logger.warning("API: insight extraction skipped due to error: %s", exc, exc_info=True)
-        return jsonify(response)
-    
-    # === Fallback: Casual chat mode (no active goal) ====================
-    else:
-        logger.info("API: No active goal for this message; falling back to casual mode")
-        try:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            agentic_reply, agent_status = loop.run_until_complete(
-                architect_agent.plan_and_execute(
-                    user_input,
-                    context=None,
+                logger.info(
+                    "API: insight extraction completed (created=%s)",
+                    response["insights_meta"].get("created", "?"),
                 )
-            )
-            loop.close()
-            
-            logger.info(f"API: Casual chat completed successfully")
-            logger.debug(f"API: Reply preview: {agentic_reply[:150]}...")
-            
-        except Exception as e:
-            logger.error(f"API: Casual chat failed with exception: {e}", exc_info=True)
-            
-            # Check if it's an OpenAI error - return structured error
-            if isinstance(e, openai.OpenAIError):
-                error_response, status_code = handle_llm_error(e, logger)
-                return jsonify(error_response), status_code
-            
-            # Otherwise provide generic error message in response
-            agentic_reply = "I'm having trouble processing that right now. Could you try again?"
-            agent_status = {"planner_active": False, "had_goal_update_xml": False}
-
-        if not isinstance(agent_status, dict):
-            agent_status = {}
-
-        response = {
-            "reply": agentic_reply,
-            "agent_status": agent_status,
-            "request_id": request_id,
-        }
-        try:
-            logger.info("API: running insight extraction for message (casual mode)")
-            response["insights_meta"] = _normalize_insights_meta(
-                _process_insights_pipeline(
-                    user_text=raw_user_input,
-                    assistant_text=agentic_reply,
-                    user_id=DEFAULT_USER_ID,
-                )
-            )
-            logger.info(
-                "API: insight extraction completed (created=%s)",
-                response["insights_meta"].get("created", "?"),
-            )
-        except Exception as exc:
-            logger.warning("API: insight extraction skipped due to error: %s", exc, exc_info=True)
-        return jsonify(response)
+            except Exception as exc:
+                logger.warning("API: insight extraction skipped due to error: %s", exc, exc_info=True)
+            return jsonify(response)
 
     except Exception as exc:
         logger.exception(
