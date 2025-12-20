@@ -11,6 +11,7 @@ from passlib.hash import bcrypt
 import mimetypes
 from utils.llm_config import is_openai_configured, get_openai_api_key
 import openai
+import httpx
 import uuid
 
 # NOTE: Keep import-time work minimal! Do not import LLM/agent modules or connect to DB at module scope unless required for health endpoints.
@@ -304,6 +305,19 @@ def log_llm_startup_status():
     logger.info("[Startup] OPENAI_API_KEY_present=%s model=%s", key_present, model)
 
 
+def log_library_versions():
+    """Log library versions for diagnostics (no secrets)."""
+    logger = logging.getLogger("API.Startup")
+    try:
+        logger.info(
+            "LibraryVersions: openai=%s httpx=%s",
+            getattr(openai, "__version__", "?"),
+            getattr(httpx, "__version__", "?"),
+        )
+    except Exception as exc:
+        logger.warning("LibraryVersions: failed to log versions: %s", exc)
+
+
 def get_agent_components():
     global _agent_components, _agent_init_error, _agent_init_error_message
     if _agent_components is not None:
@@ -377,6 +391,7 @@ def get_agent_components():
 
 
 log_llm_startup_status()
+log_library_versions()
 
 architect_agent = None
 othello_engine = None
