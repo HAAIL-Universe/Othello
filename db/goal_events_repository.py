@@ -1,12 +1,18 @@
 """Repository helpers for goal_events (append-only event ledger for goals)."""
 from typing import Any, Dict, List, Optional
 import logging
+import psycopg2
 from db.database import execute_query, fetch_one, fetch_all, execute_and_fetch_one
 
 logger = logging.getLogger("GoalEventsRepository")
+_goal_events_ensure_attempted = False
 
 
 def ensure_goal_events_table() -> None:
+    global _goal_events_ensure_attempted
+    if _goal_events_ensure_attempted:
+        return
+    _goal_events_ensure_attempted = True
     query = """
         CREATE TABLE IF NOT EXISTS goal_events (
             id SERIAL PRIMARY KEY,
@@ -18,7 +24,10 @@ def ensure_goal_events_table() -> None:
             occurred_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
     """
-    execute_query(query)
+    try:
+        execute_query(query)
+    except psycopg2.Error as exc:
+        logger.warning("Goal events table ensure failed: %s", exc, exc_info=True)
 
 def append_goal_event(user_id: str, goal_id: int, step_id: Optional[int], event_type: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     query = """
@@ -26,7 +35,11 @@ def append_goal_event(user_id: str, goal_id: int, step_id: Optional[int], event_
         VALUES (%s, %s, %s, %s, %s, NOW())
         RETURNING id, user_id, goal_id, step_id, event_type, payload, occurred_at
     """
-    return execute_and_fetch_one(query, (user_id, goal_id, step_id, event_type, payload)) or {}
+    try:
+        return execute_and_fetch_one(query, (user_id, goal_id, step_id, event_type, payload)) or {}
+    except psycopg2.Error as exc:
+        logger.warning("Goal events insert failed: %s", exc, exc_info=True)
+        return {}
 
 def list_goal_events(user_id: str, goal_id: int, limit: int = 50) -> List[Dict[str, Any]]:
     query = """

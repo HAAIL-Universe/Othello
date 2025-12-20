@@ -1,6 +1,7 @@
 import logging
 import os
 import re
+import time
 from datetime import date, timedelta
 from flask import Flask, request, jsonify, send_file, session, send_from_directory, g
 from flask_cors import CORS
@@ -94,6 +95,15 @@ def handle_llm_error(e: Exception, logger: logging.Logger) -> tuple[dict, int]:
         exc_info=False,
     )
     
+    # Timeout errors
+    if isinstance(e, (openai.APITimeoutError, httpx.TimeoutException)):
+        return {
+            "error_code": "LLM_TIMEOUT",
+            "message": "LLM timeout",
+            "details": "LLM request timed out",
+            "request_id": request_id,
+        }, 504
+
     # Authentication errors
     if isinstance(e, openai.AuthenticationError):
         return {
@@ -112,8 +122,8 @@ def handle_llm_error(e: Exception, logger: logging.Logger) -> tuple[dict, int]:
             "request_id": request_id,
         }, 429
     
-    # Connection/timeout errors
-    if isinstance(e, (openai.APIConnectionError, openai.APITimeoutError)):
+    # Connection errors
+    if isinstance(e, openai.APIConnectionError):
         return {
             "error_code": "LLM_CONNECTION_ERROR",
             "message": "LLM connection error",
@@ -137,6 +147,15 @@ def handle_llm_error(e: Exception, logger: logging.Logger) -> tuple[dict, int]:
         "details": f"An unexpected error occurred: {error_class}",
         "request_id": request_id,
     }, 500
+
+
+def _unwrap_llm_exception(exc: Exception) -> Optional[Exception]:
+    if isinstance(exc, (openai.OpenAIError, httpx.TimeoutException)):
+        return exc
+    cause = getattr(exc, "__cause__", None)
+    if isinstance(cause, (openai.OpenAIError, httpx.TimeoutException)):
+        return cause
+    return None
 
 # --- Flask App Setup (must be before any route decorators) ---
 app = Flask(__name__, static_folder="static", static_url_path="/static")
@@ -956,11 +975,38 @@ def handle_message():
     """
     logger = logging.getLogger("API")
     request_id = _get_request_id()
+    start_time = time.monotonic()
+    payload_bytes = request.content_length or 0
+    log_started = False
+    event_storage_ok: Optional[bool] = None
+
+    def _log_request_start(goal_value: Optional[Any]) -> None:
+        nonlocal log_started
+        if log_started:
+            return
+        logger.info(
+            "API: handle_message start request_id=%s payload_bytes=%s goal_id=%s",
+            request_id,
+            payload_bytes,
+            goal_value,
+        )
+        log_started = True
+
+    def _log_request_end() -> None:
+        elapsed_ms = int((time.monotonic() - start_time) * 1000)
+        logger.info(
+            "API: handle_message done request_id=%s elapsed_ms=%s goal_events_ok=%s",
+            request_id,
+            elapsed_ms,
+            event_storage_ok,
+        )
     try:
         if not request.is_json:
+            _log_request_start(None)
             return api_error("VALIDATION_ERROR", "JSON body required", 400)
         data = request.get_json(silent=True)
         if not isinstance(data, dict):
+            _log_request_start(None)
             return api_error("VALIDATION_ERROR", "JSON object required", 400)
         raw_user_input = data.get("message")
         if raw_user_input is None:
@@ -975,6 +1021,8 @@ def handle_message():
             goal_id_source = "active_goal_id"
         current_mode = (data.get("current_mode") or "companion").strip().lower()
         current_view = data.get("current_view")
+
+        _log_request_start(raw_goal_id)
 
         if not user_input:
             return api_error("VALIDATION_ERROR", "message is required", 400)
@@ -1088,10 +1136,10 @@ def handle_message():
                     f"I couldn't find a goal #{goal_id}. "
                     "Ask me to list your goals first if you're not sure of the number."
                 )
-                return jsonify(
-                    {
-                        "reply": reply_text,
-                        "meta": {
+            return jsonify(
+                {
+                    "reply": reply_text,
+                    "meta": {
                             "source": "goal_manager",
                             "intent": "select_goal_failed",
                             "requested_goal_id": goal_id,
@@ -1210,9 +1258,10 @@ def handle_message():
                 except Exception as e:
                     logger.error(f"API: generate_goal_plan failed: {e}", exc_info=True)
                 
-                    # Check if it's an OpenAI error - return structured error
-                    if isinstance(e, openai.OpenAIError):
-                        error_response, status_code = handle_llm_error(e, logger)
+                    # Check if it's an LLM error - return structured error
+                    llm_exc = _unwrap_llm_exception(e)
+                    if llm_exc:
+                        error_response, status_code = handle_llm_error(llm_exc, logger)
                         return jsonify(error_response), status_code
                 
                     # Otherwise provide generic error message in response
@@ -1255,9 +1304,10 @@ def handle_message():
                 except Exception as e:
                     logger.error(f"API: Architect planning failed with exception for goal_id={active_goal['id']}: {e}", exc_info=True)
                 
-                    # Check if it's an OpenAI error - return structured error
-                    if isinstance(e, openai.OpenAIError):
-                        error_response, status_code = handle_llm_error(e, logger)
+                    # Check if it's an LLM error - return structured error
+                    llm_exc = _unwrap_llm_exception(e)
+                    if llm_exc:
+                        error_response, status_code = handle_llm_error(llm_exc, logger)
                         return jsonify(error_response), status_code
                 
                     # Otherwise provide generic error message in response
@@ -1295,9 +1345,10 @@ def handle_message():
             except Exception as e:
                 logger.error("API: Casual chat failed with exception: %s", e, exc_info=True)
 
-                # Check if it's an OpenAI error - return structured error
-                if isinstance(e, openai.OpenAIError):
-                    error_response, status_code = handle_llm_error(e, logger)
+                # Check if it's an LLM error - return structured error
+                llm_exc = _unwrap_llm_exception(e)
+                if llm_exc:
+                    error_response, status_code = handle_llm_error(llm_exc, logger)
                     return jsonify(error_response), status_code
 
                 # Otherwise provide generic error message in response
@@ -1409,6 +1460,8 @@ def handle_message():
             extra={"request_id": request_id},
         )
         return api_error("INTERNAL_ERROR", "Internal server error", 500)
+    finally:
+        _log_request_end()
 
 
 @app.route("/api/today-plan", methods=["GET"])

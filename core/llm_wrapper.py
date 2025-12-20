@@ -44,7 +44,7 @@ class LLMWrapper:
         if not api_key:
             raise ValueError("OPENAI_API_KEY environment variable not set or empty.")
 
-        self.client = openai.OpenAI(api_key=api_key)
+        self.client = openai.OpenAI(api_key=api_key, timeout=45.0, max_retries=2)
 
         # Check for cached model
         model_cache_path = ".llm_model_cache"
@@ -72,8 +72,7 @@ class LLMWrapper:
                 model=self.model,
                 messages=messages,
                 temperature=temperature,
-                max_tokens=max_tokens,
-                timeout=10  # Set timeout for 10 seconds
+                max_tokens=max_tokens
             )
             logging.debug("API call completed.")
             response_content = response.choices[0].message.content

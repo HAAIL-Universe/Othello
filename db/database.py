@@ -77,6 +77,10 @@ def get_connection():
             pool.putconn(conn)
 
 
+def _is_ssl_closed_error(exc: psycopg2.OperationalError) -> bool:
+    return "SSL connection has been closed unexpectedly" in str(exc)
+
+
 def execute_query(query: str, params: Optional[Tuple] = None) -> None:
     """
     Execute an INSERT, UPDATE, or DELETE query.
@@ -85,10 +89,25 @@ def execute_query(query: str, params: Optional[Tuple] = None) -> None:
         query: SQL query with %s placeholders
         params: Tuple of parameters to bind to the query
     """
-    with get_connection() as conn:
+    pool = get_pool()
+    conn = pool.getconn()
+    try:
         with conn.cursor() as cursor:
             cursor.execute(query, params or ())
             conn.commit()
+    except psycopg2.OperationalError as exc:
+        if _is_ssl_closed_error(exc):
+            pool.putconn(conn, close=True)
+            conn = None
+            conn = pool.getconn()
+            with conn.cursor() as cursor:
+                cursor.execute(query, params or ())
+                conn.commit()
+        else:
+            raise
+    finally:
+        if conn:
+            pool.putconn(conn)
 
 
 def fetch_one(query: str, params: Optional[Tuple] = None) -> Optional[Dict[str, Any]]:
@@ -138,12 +157,28 @@ def execute_and_fetch_one(query: str, params: Optional[Tuple] = None) -> Optiona
     Returns:
         Dictionary representing the returned row, or None
     """
-    with get_connection() as conn:
+    pool = get_pool()
+    conn = pool.getconn()
+    try:
         with conn.cursor(cursor_factory=RealDictCursor) as cursor:
             cursor.execute(query, params or ())
             conn.commit()
             result = cursor.fetchone()
             return dict(result) if result else None
+    except psycopg2.OperationalError as exc:
+        if _is_ssl_closed_error(exc):
+            pool.putconn(conn, close=True)
+            conn = None
+            conn = pool.getconn()
+            with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+                cursor.execute(query, params or ())
+                conn.commit()
+                result = cursor.fetchone()
+                return dict(result) if result else None
+        raise
+    finally:
+        if conn:
+            pool.putconn(conn)
 
 
 def ensure_core_schema() -> None:
