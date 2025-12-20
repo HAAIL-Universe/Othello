@@ -1299,6 +1299,59 @@ def handle_message():
             if not isinstance(agent_status, dict):
                 agent_status = {}
 
+        if active_goal is None:
+            logger.info("API: No active goal for this message; falling back to casual mode")
+            try:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                agentic_reply, agent_status = loop.run_until_complete(
+                    architect_agent.plan_and_execute(
+                        user_input,
+                        context=None,
+                    )
+                )
+                loop.close()
+
+                logger.info("API: Casual chat completed successfully")
+                logger.debug("API: Reply preview: %s...", agentic_reply[:150])
+
+            except Exception as e:
+                logger.error("API: Casual chat failed with exception: %s", e, exc_info=True)
+
+                # Check if it's an OpenAI error - return structured error
+                if isinstance(e, openai.OpenAIError):
+                    error_response, status_code = handle_llm_error(e, logger)
+                    return jsonify(error_response), status_code
+
+                # Otherwise provide generic error message in response
+                agentic_reply = "I'm having trouble processing that right now. Could you try again?"
+                agent_status = {"planner_active": False, "had_goal_update_xml": False}
+
+            if not isinstance(agent_status, dict):
+                agent_status = {}
+
+            response = {
+                "reply": agentic_reply,
+                "agent_status": agent_status,
+                "request_id": request_id,
+            }
+            try:
+                logger.info("API: running insight extraction for message (casual mode)")
+                response["insights_meta"] = _normalize_insights_meta(
+                    _process_insights_pipeline(
+                        user_text=raw_user_input,
+                        assistant_text=agentic_reply,
+                        user_id=DEFAULT_USER_ID,
+                    )
+                )
+                logger.info(
+                    "API: insight extraction completed (created=%s)",
+                    response["insights_meta"].get("created", "?"),
+                )
+            except Exception as exc:
+                logger.warning("API: insight extraction skipped due to error: %s", exc, exc_info=True)
+            return jsonify(response)
+
         # --- Log conversation into active goal -------------------------------
         def _event_ok(result):
             if isinstance(result, dict):
@@ -1370,60 +1423,6 @@ def handle_message():
         except Exception as exc:
             logger.warning("API: insight extraction skipped due to error: %s", exc, exc_info=True)
         return jsonify(response)
-    
-        # === Fallback: Casual chat mode (no active goal) ====================
-        if active_goal is None:
-            logger.info("API: No active goal for this message; falling back to casual mode")
-            try:
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                agentic_reply, agent_status = loop.run_until_complete(
-                    architect_agent.plan_and_execute(
-                        user_input,
-                        context=None,
-                    )
-                )
-                loop.close()
-            
-                logger.info(f"API: Casual chat completed successfully")
-                logger.debug(f"API: Reply preview: {agentic_reply[:150]}...")
-            
-            except Exception as e:
-                logger.error(f"API: Casual chat failed with exception: {e}", exc_info=True)
-            
-                # Check if it's an OpenAI error - return structured error
-                if isinstance(e, openai.OpenAIError):
-                    error_response, status_code = handle_llm_error(e, logger)
-                    return jsonify(error_response), status_code
-            
-                # Otherwise provide generic error message in response
-                agentic_reply = "I'm having trouble processing that right now. Could you try again?"
-                agent_status = {"planner_active": False, "had_goal_update_xml": False}
-
-            if not isinstance(agent_status, dict):
-                agent_status = {}
-
-            response = {
-                "reply": agentic_reply,
-                "agent_status": agent_status,
-                "request_id": request_id,
-            }
-            try:
-                logger.info("API: running insight extraction for message (casual mode)")
-                response["insights_meta"] = _normalize_insights_meta(
-                    _process_insights_pipeline(
-                        user_text=raw_user_input,
-                        assistant_text=agentic_reply,
-                        user_id=DEFAULT_USER_ID,
-                    )
-                )
-                logger.info(
-                    "API: insight extraction completed (created=%s)",
-                    response["insights_meta"].get("created", "?"),
-                )
-            except Exception as exc:
-                logger.warning("API: insight extraction skipped due to error: %s", exc, exc_info=True)
-            return jsonify(response)
 
     except Exception as exc:
         logger.exception(
