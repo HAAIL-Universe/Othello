@@ -64,6 +64,8 @@ OPENAI_API_KEY=sk-proj-your-key-here
 DATABASE_URL=postgresql://user:password@host/database?sslmode=require
 ```
 
+Never commit `.env`; use Render environment variables for production secrets.
+
 ### 4. Set Up Python Environment
 
 ```bash

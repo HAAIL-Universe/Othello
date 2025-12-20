@@ -8,7 +8,6 @@ from dotenv import load_dotenv
 
 # Load environment
 load_dotenv()
-chosen_model = LLMWrapper().model
 
 # Agentic Agents
 from modules.agentic_agents.shadow_agent import ShadowAgent
@@ -37,25 +36,24 @@ os.makedirs(SIM_LOG_DIR, exist_ok=True)
 os.makedirs(DEBUG_LOG_DIR, exist_ok=True)
 os.makedirs(SUMMARY_LOG_DIR, exist_ok=True)
 
-# Agents
-shadow_agent = ShadowAgent()
-decision_agent = DecisionVaultAgent()
-prism_agent = PrismAgent(central_hub=None, agentic_hub=None)
-architect_agent = ArchitectAgent(central_hub=None, agentic_hub=None, model=chosen_model)
-psyche_agent = PsycheAgent(central_hub=None, agentic_hub=None)
-goal_agent = GoalManagementAgent(central_hub=None, agentic_hub=None)
-fello = Fello()
-othello = Othello()
-
-behavioral_agent = BehavioralAgent()
-reflective_agent = ReflectiveAgent()
-routine_tracker_agent = RoutineTrackerAgent()
-impatience_agent = ImpatienceDetectionAgent()
-trait_agent = TraitAgent()
-conversation_agent = ConversationAgent()
-
 
 async def run_test_simulation():
+    chosen_model = LLMWrapper().model
+    shadow_agent = ShadowAgent()
+    decision_agent = DecisionVaultAgent()
+    prism_agent = PrismAgent(central_hub=None, agentic_hub=None)
+    architect_agent = ArchitectAgent(central_hub=None, agentic_hub=None, model=chosen_model)
+    psyche_agent = PsycheAgent(central_hub=None, agentic_hub=None)
+    goal_agent = GoalManagementAgent(central_hub=None, agentic_hub=None)
+    fello = Fello()
+    othello = Othello()
+
+    behavioral_agent = BehavioralAgent()
+    reflective_agent = ReflectiveAgent()
+    routine_tracker_agent = RoutineTrackerAgent()
+    impatience_agent = ImpatienceDetectionAgent()
+    trait_agent = TraitAgent()
+    conversation_agent = ConversationAgent()
     test_files = [f for f in os.listdir(TESTS_DIR) if f.startswith("test_") and f.endswith(".json")]
     total = len(test_files)
     passed = 0

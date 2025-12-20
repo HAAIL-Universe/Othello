@@ -78,11 +78,30 @@ class LLMWrapper:
             response_content = response.choices[0].message.content
             if response_content is not None:
                 return response_content.strip()
-            else:
-                return "[LLM Error]: No content returned from LLM."
+            return "[LLM Error]: No content returned from LLM."
         except Exception as e:
-            logging.error(f"Error during LLM API call: {str(e)}")
-            return f"[LLM Error]: {str(e)}"
+            status = getattr(e, "status_code", None)
+            request_id = None
+            error_body = None
+            try:
+                resp = getattr(e, "response", None)
+                if resp is not None:
+                    request_id = getattr(resp, "headers", {}).get("x-request-id")
+                    if hasattr(resp, "json"):
+                        error_body = resp.json()
+                    elif hasattr(resp, "text"):
+                        error_body = resp.text
+            except Exception:
+                pass
+            logging.error(
+                "OpenAI chat.completions error: %s status=%s request_id=%s body=%s",
+                type(e).__name__,
+                status,
+                request_id,
+                error_body,
+                exc_info=True,
+            )
+            raise ValueError("OpenAI chat completion failed") from e
 
 class AsyncLLMWrapper(LLMWrapper):
     async def chat(self, messages):

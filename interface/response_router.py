@@ -28,7 +28,13 @@ parser = ConversationParser()
 profile_builder = UserProfileBuilder()
 reflector = ReflectiveResponse()
 prism = PRISMEngine()
-llm = LLMWrapper()
+_llm_singleton = None
+
+def get_llm():
+    global _llm_singleton
+    if _llm_singleton is None:
+        _llm_singleton = LLMWrapper()
+    return _llm_singleton
 
 def should_interject(goals, traits, user_input):
     """
@@ -98,7 +104,7 @@ def route_input(user_input: str) -> str:
     decision_vault.passive_log_from_input(user_input)
 
     # 1. LLM reply first (natural, uninterrupted chat)
-    llm_reply = llm.generate(
+    llm_reply = get_llm().generate(
         prompt=user_input,
         system_prompt="You are FELLO, a loyal, psychology-powered life assistant. Reply helpfully and supportively."
     )
