@@ -950,52 +950,53 @@ def handle_message():
     6. Returns reply to frontend.
     """
     logger = logging.getLogger("API")
-    if not request.is_json:
-        return api_error("VALIDATION_ERROR", "JSON body required", 400)
-    data = request.get_json(silent=True)
-    if not isinstance(data, dict):
-        return api_error("VALIDATION_ERROR", "JSON object required", 400)
-    raw_user_input = data.get("message")
-    if raw_user_input is None:
-        raw_user_input = ""
-    if not isinstance(raw_user_input, str):
-        raw_user_input = str(raw_user_input)
-    user_input = raw_user_input.strip()
-    raw_goal_id = data.get("goal_id")
-    goal_id_source = "goal_id"
-    if raw_goal_id is None:
-        raw_goal_id = data.get("active_goal_id")
-        goal_id_source = "active_goal_id"
-    current_mode = (data.get("current_mode") or "companion").strip().lower()
-    current_view = data.get("current_view")
     request_id = _get_request_id()
-
-    if not user_input:
-        return api_error("VALIDATION_ERROR", "message is required", 400)
-
-    logger.info("API: Received message: %s request_id=%s", user_input[:100], request_id)
-    
     try:
-        comps = get_agent_components()
-        architect_agent = comps["architect_agent"]
-        othello_engine = comps["othello_engine"]
-        DEFAULT_USER_ID = comps["DEFAULT_USER_ID"]
-        logger.debug(
-            "API: handle_message agent_initialized=True request_id=%s", request_id
-        )
-    except Exception:
-        logger.error(
-            "API: handle_message agent init failed request_id=%s",
-            request_id,
-            exc_info=True,
-        )
-        detail = "Missing or invalid OPENAI_API_KEY"
-        if _agent_init_error:
-            if isinstance(_agent_init_error, ValueError) and "OPENAI_API_KEY" in str(_agent_init_error):
-                detail = "Missing or invalid OPENAI_API_KEY"
-            else:
-                detail = f"Agent init failed ({type(_agent_init_error).__name__})"
-        return api_error("LLM_INIT_FAILED", "LLM unavailable", 503, details=detail)
+        if not request.is_json:
+            return api_error("VALIDATION_ERROR", "JSON body required", 400)
+        data = request.get_json(silent=True)
+        if not isinstance(data, dict):
+            return api_error("VALIDATION_ERROR", "JSON object required", 400)
+        raw_user_input = data.get("message")
+        if raw_user_input is None:
+            raw_user_input = ""
+        if not isinstance(raw_user_input, str):
+            raw_user_input = str(raw_user_input)
+        user_input = raw_user_input.strip()
+        raw_goal_id = data.get("goal_id")
+        goal_id_source = "goal_id"
+        if raw_goal_id is None:
+            raw_goal_id = data.get("active_goal_id")
+            goal_id_source = "active_goal_id"
+        current_mode = (data.get("current_mode") or "companion").strip().lower()
+        current_view = data.get("current_view")
+
+        if not user_input:
+            return api_error("VALIDATION_ERROR", "message is required", 400)
+
+        logger.info("API: Received message: %s request_id=%s", user_input[:100], request_id)
+
+        try:
+            comps = get_agent_components()
+            architect_agent = comps["architect_agent"]
+            othello_engine = comps["othello_engine"]
+            DEFAULT_USER_ID = comps["DEFAULT_USER_ID"]
+            logger.debug(
+                "API: handle_message agent_initialized=True request_id=%s", request_id
+            )
+        except Exception:
+            logger.error(
+                "API: handle_message agent init failed request_id=%s",
+                request_id,
+                exc_info=True,
+            )
+            detail = "Missing or invalid OPENAI_API_KEY"
+            if _agent_init_error:
+                if isinstance(_agent_init_error, ValueError) and "OPENAI_API_KEY" in str(_agent_init_error):
+                    detail = "Missing or invalid OPENAI_API_KEY"
+                else:
+                    detail = f"Agent init failed ({type(_agent_init_error).__name__})"
+            return api_error("LLM_INIT_FAILED", "LLM unavailable", 503, details=detail)
 
     requested_goal_id = _coerce_goal_id(raw_goal_id) if raw_goal_id is not None else None
     if raw_goal_id is not None and requested_goal_id is None:
@@ -1381,6 +1382,14 @@ def handle_message():
             logger.warning("API: insight extraction skipped due to error: %s", exc, exc_info=True)
         return jsonify(response)
 
+    except Exception as exc:
+        logger.exception(
+            "API: handle_message failed request_id=%s error_type=%s",
+            request_id,
+            type(exc).__name__,
+        )
+        return api_error("INTERNAL_ERROR", "Internal server error", 500)
+
 
 @app.route("/api/today-plan", methods=["GET"])
 @require_auth
@@ -1651,8 +1660,8 @@ def archive_goal(goal_id):
     try:
         from db.goal_events_repository import safe_append_goal_event
         payload = {"previous_status": status, "new_status": "archived"}
-        event = safe_append_goal_event(DEFAULT_USER_ID, goal_id, None, "goal_archived", payload)
-        event_emitted = bool(event)
+        result = safe_append_goal_event(DEFAULT_USER_ID, goal_id, None, "goal_archived", payload)
+        event_emitted = bool(result.get("ok"))
     except Exception as exc:
         logger.warning("API: Goal archive event skipped: %s", exc, exc_info=True)
         event_emitted = False

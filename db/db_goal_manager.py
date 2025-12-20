@@ -54,9 +54,13 @@ class DbGoalManager:
             "role": role,
             "content": content,
         }
-        event = safe_append_goal_event(self.DEFAULT_USER_ID, goal_id, None, "note", note)
-        if not event:
-            self.logger.warning("DbGoalManager: goal_events append skipped for goal %s", goal_id)
+        result = safe_append_goal_event(self.DEFAULT_USER_ID, goal_id, None, "note", note)
+        if not result.get("ok", False):
+            self.logger.warning(
+                "DbGoalManager: goal_events append skipped for goal %s reason=%s",
+                goal_id,
+                result.get("reason", "unknown"),
+            )
     
     def get_recent_notes(self, goal_id: int, max_notes: int = 10) -> List[Dict[str, Any]]:
         """
@@ -64,11 +68,30 @@ class DbGoalManager:
         """
         from db.goal_events_repository import safe_list_goal_events
         events = safe_list_goal_events(self.DEFAULT_USER_ID, goal_id, limit=max_notes)
-        notes = [
-            event.get("payload")
-            for event in events
-            if event.get("event_type") == "note" and isinstance(event.get("payload"), dict)
-        ]
+        notes: List[Dict[str, Any]] = []
+        for event in events:
+            if event.get("event_type") != "note":
+                continue
+            payload = event.get("payload")
+            if not isinstance(payload, dict):
+                continue
+            role = payload.get("role")
+            content = payload.get("content") or payload.get("message")
+            if not role or not content:
+                continue
+            if not isinstance(role, str) or not isinstance(content, str):
+                continue
+            occurred_at = event.get("occurred_at")
+            if occurred_at is not None and hasattr(occurred_at, "isoformat"):
+                occurred_at = occurred_at.isoformat()
+            elif occurred_at is not None:
+                occurred_at = str(occurred_at)
+            note = {
+                "timestamp": payload.get("timestamp") or occurred_at or "",
+                "role": role,
+                "content": content,
+            }
+            notes.append(note)
         notes.reverse()
         return notes[:max_notes]
     

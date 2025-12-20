@@ -25,18 +25,22 @@ def list_goal_events(user_id: str, goal_id: int, limit: int = 50) -> List[Dict[s
 
 
 def safe_append_goal_event(user_id: str, goal_id: int, step_id: Optional[int], event_type: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-    """Append a goal event but never raise; returns {} on failure."""
+    """Append a goal event but never raise; returns ok=false payload on failure."""
     try:
-        return append_goal_event(user_id, goal_id, step_id, event_type, payload)
+        event = append_goal_event(user_id, goal_id, step_id, event_type, payload)
+        if event:
+            return {"ok": True, "event": event}
+        return {"ok": False, "reason": "empty_result"}
     except Exception as exc:
         logger.warning("Goal events append failed: %s", exc, exc_info=True)
-        return {}
+        return {"ok": False, "reason": type(exc).__name__}
 
 
 def safe_list_goal_events(user_id: str, goal_id: int, limit: int = 50) -> List[Dict[str, Any]]:
     """List goal events but never raise; returns [] on failure."""
     try:
-        return list_goal_events(user_id, goal_id, limit=limit)
+        events = list_goal_events(user_id, goal_id, limit=limit)
+        return events if isinstance(events, list) else []
     except Exception as exc:
         logger.warning("Goal events list failed: %s", exc, exc_info=True)
         return []
