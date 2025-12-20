@@ -1342,33 +1342,33 @@ def handle_message():
         logger.debug(f"API: Logged conversation to goal #{active_goal['id']}")
         # ---------------------------------------------------------------------
 
-            # Log final response details
-            logger.info(f"API: Returning response - planner_active={agent_status.get('planner_active', False)}, had_xml={agent_status.get('had_goal_update_xml', False)}")
+        # Log final response details
+        logger.info(f"API: Returning response - planner_active={agent_status.get('planner_active', False)}, had_xml={agent_status.get('had_goal_update_xml', False)}")
 
-            response = {
-                "reply": agentic_reply,
-                "agent_status": agent_status,
-                "request_id": request_id,
-            }
-            try:
-                logger.info("API: running insight extraction for message (goal mode)")
-                response["insights_meta"] = _normalize_insights_meta(
-                    _process_insights_pipeline(
-                        user_text=raw_user_input,
-                        assistant_text=agentic_reply,
-                        user_id=DEFAULT_USER_ID,
-                    )
+        response = {
+            "reply": agentic_reply,
+            "agent_status": agent_status,
+            "request_id": request_id,
+        }
+        try:
+            logger.info("API: running insight extraction for message (goal mode)")
+            response["insights_meta"] = _normalize_insights_meta(
+                _process_insights_pipeline(
+                    user_text=raw_user_input,
+                    assistant_text=agentic_reply,
+                    user_id=DEFAULT_USER_ID,
                 )
-                logger.info(
-                    "API: insight extraction completed (created=%s)",
-                    response["insights_meta"].get("created", "?"),
-                )
-            except Exception as exc:
-                logger.warning("API: insight extraction skipped due to error: %s", exc, exc_info=True)
-            return jsonify(response)
+            )
+            logger.info(
+                "API: insight extraction completed (created=%s)",
+                response["insights_meta"].get("created", "?"),
+            )
+        except Exception as exc:
+            logger.warning("API: insight extraction skipped due to error: %s", exc, exc_info=True)
+        return jsonify(response)
     
         # === Fallback: Casual chat mode (no active goal) ====================
-        else:
+        if active_goal is None:
             logger.info("API: No active goal for this message; falling back to casual mode")
             try:
                 loop = asyncio.new_event_loop()
