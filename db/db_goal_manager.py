@@ -10,14 +10,12 @@ maintaining backward compatibility with existing Flask routes.
 
 Key differences from file-based GoalManager:
 - Goals stored in PostgreSQL 'goals' table instead of data/goals.json
-- Conversation logs still use JSONL files (for now) to maintain compatibility
+- Conversation logs stored in goal_events (DB truth)
 - All goals belong to a default user_id (can be extended for multi-user support)
 """
 
 from typing import List, Optional, Dict, Any
 from datetime import datetime
-from pathlib import Path
-import json
 import logging
 
 from db import goals_repository
@@ -36,22 +34,15 @@ class DbGoalManager:
     def __init__(self) -> None:
         self.active_goal_id: Optional[int] = None
         self.logger = logging.getLogger("GoalManager")
-        
-        # Keep the JSONL conversation logs for backward compatibility
-        root = Path(__file__).resolve().parent.parent
-        self._logs_dir = root / "data" / "goal_logs"
-        self._logs_dir.mkdir(parents=True, exist_ok=True)
     
     # ------------------------------------------------------------------
-    # Helpers for per-goal log "folders" (keeping JSONL approach)
+    # Helpers for per-goal log events (DB-backed)
     # ------------------------------------------------------------------
-    def _log_path(self, goal_id: int) -> Path:
-        return self._logs_dir / f"goal_{goal_id}.jsonl"
-    
     def add_note_to_goal(self, goal_id: int, role: str, content: str) -> None:
         """
-        Append a note to this goal's log file (JSONL format).
+        Append a note to this goal's log (DB goal_events).
         """
+        from db.goal_events_repository import safe_append_goal_event
         if role not in ("user", "othello", "system"):
             role = "system"
         
@@ -63,39 +54,23 @@ class DbGoalManager:
             "role": role,
             "content": content,
         }
-        path = self._log_path(goal_id)
-        try:
-            with path.open("a", encoding="utf-8") as f:
-                f.write(json.dumps(note) + "\n")
-        except Exception as e:
-            print(f"[DbGoalManager] Failed to write note for goal {goal_id}: {e}")
+        event = safe_append_goal_event(self.DEFAULT_USER_ID, goal_id, None, "note", note)
+        if not event:
+            self.logger.warning("DbGoalManager: goal_events append skipped for goal %s", goal_id)
     
     def get_recent_notes(self, goal_id: int, max_notes: int = 10) -> List[Dict[str, Any]]:
         """
-        Load up to `max_notes` most recent notes from the goal's log.
+        Load up to `max_notes` most recent notes from goal_events.
         """
-        path = self._log_path(goal_id)
-        if not path.exists():
-            return []
-        
-        notes: List[Dict[str, Any]] = []
-        try:
-            with path.open("r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        note = json.loads(line)
-                        if isinstance(note, dict) and "content" in note:
-                            notes.append(note)
-                    except Exception:
-                        continue
-        except Exception as e:
-            print(f"[DbGoalManager] Failed to read notes for goal {goal_id}: {e}")
-            return []
-        
-        return notes[-max_notes:]
+        from db.goal_events_repository import safe_list_goal_events
+        events = safe_list_goal_events(self.DEFAULT_USER_ID, goal_id, limit=max_notes)
+        notes = [
+            event.get("payload")
+            for event in events
+            if event.get("event_type") == "note" and isinstance(event.get("payload"), dict)
+        ]
+        notes.reverse()
+        return notes[:max_notes]
     
     def build_goal_context(self, goal_id: int, max_notes: int = 10) -> str:
         """
@@ -178,7 +153,7 @@ class DbGoalManager:
         """
         Return all goals for the default user in legacy format.
         """
-        db_goals = goals_repository.list_goals(self.DEFAULT_USER_ID)
+        db_goals = goals_repository.list_goals(self.DEFAULT_USER_ID, include_archived=False)
         return [self._db_to_legacy_format(g) for g in db_goals]
     
     def get_goal(self, goal_id: int) -> Optional[Dict[str, Any]]:
@@ -255,6 +230,16 @@ class DbGoalManager:
         if success:
             print(f"[DbGoalManager] Deleted goal {goal_id}")
         return success
+
+    def archive_goal(self, goal_id: int) -> Optional[Dict[str, Any]]:
+        """
+        Archive a goal by ID (soft delete).
+        """
+        db_goal = goals_repository.archive_goal(goal_id, self.DEFAULT_USER_ID)
+        if db_goal is None:
+            return None
+        self.logger.info("DbGoalManager: Archived goal %s", goal_id)
+        return self._db_to_legacy_format(db_goal)
     
     # ------------------------------------------------------------------
     # Active goal handling

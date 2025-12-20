@@ -87,21 +87,32 @@ def normalize_priority(value: Any) -> int:
     return 3
 
 
-def list_goals(user_id: str) -> List[Dict[str, Any]]:
+def list_goals(user_id: str, *, include_archived: bool = False) -> List[Dict[str, Any]]:
     """
     Retrieve all goals for a specific user.
     
     Args:
         user_id: The user ID to filter goals (as string)
+        include_archived: Include archived goals when True
     
     Returns:
         List of goal dictionaries with all fields
     """
+    if include_archived:
+        query = """
+            SELECT id, user_id, title, description, status, priority, category,
+                   plan, checklist, last_conversation_summary, created_at, updated_at
+            FROM goals
+            WHERE user_id = %s
+            ORDER BY created_at DESC
+        """
+        return fetch_all(query, (user_id,))
+
     query = """
         SELECT id, user_id, title, description, status, priority, category,
                plan, checklist, last_conversation_summary, created_at, updated_at
         FROM goals
-        WHERE user_id = %s
+        WHERE user_id = %s AND (status IS NULL OR status != 'archived')
         ORDER BY created_at DESC
     """
     return fetch_all(query, (user_id,))
@@ -288,14 +299,35 @@ def delete_goal(goal_id: int, user_id: str) -> bool:
         return False
 
 
+def archive_goal(goal_id: int, user_id: str) -> Optional[Dict[str, Any]]:
+    """
+    Archive a goal (soft delete) by setting status to 'archived'.
+    
+    Args:
+        goal_id: The goal ID to archive
+        user_id: The user ID (for authorization, as string)
+    
+    Returns:
+        Archived goal dictionary if successful, None otherwise
+    """
+    query = """
+        UPDATE goals
+        SET status = 'archived', updated_at = NOW()
+        WHERE id = %s AND user_id = %s
+        RETURNING id, user_id, title, description, status, priority, category,
+                  plan, checklist, last_conversation_summary, created_at, updated_at
+    """
+    return execute_and_fetch_one(query, (goal_id, user_id))
+
+
 def add_conversation_note(goal_id: int, role: str, content: str) -> None:
     """
     Append a conversation note to the goal's conversation log.
     This could be stored in a separate 'goal_conversations' table,
     or appended to a JSONB field in the goals table.
     
-    For now, this is a placeholder that matches the existing JSONL approach.
-    Future enhancement: create a goal_conversations table.
+    For now, this is a placeholder until a DB-backed conversation table
+    (or goal_events usage) is fully wired with user_id context.
     
     Args:
         goal_id: The goal ID
@@ -303,7 +335,6 @@ def add_conversation_note(goal_id: int, role: str, content: str) -> None:
         content: The message content
     """
     # TODO: Implement conversation storage in database
-    # For now, we'll keep using the file-based approach from GoalManager
     pass
 
 

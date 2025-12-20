@@ -895,6 +895,23 @@ def _normalize_insights_meta(meta: Any) -> Dict[str, Any]:
     return meta
 
 
+def _coerce_goal_id(value: Any) -> Optional[int]:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value if value > 0 else None
+    try:
+        text = str(value).strip()
+        if not text:
+            return None
+        parsed = int(text)
+        return parsed if parsed > 0 else None
+    except Exception:
+        return None
+
+
 def _process_insights_pipeline(*, user_text: str, assistant_text: str, user_id: str):
     """Extract and persist insights, shielding chat flow from failures."""
     logger = logging.getLogger("API.Insights")
@@ -944,7 +961,11 @@ def handle_message():
     if not isinstance(raw_user_input, str):
         raw_user_input = str(raw_user_input)
     user_input = raw_user_input.strip()
-    active_goal_id = data.get("active_goal_id")
+    raw_goal_id = data.get("goal_id")
+    goal_id_source = "goal_id"
+    if raw_goal_id is None:
+        raw_goal_id = data.get("active_goal_id")
+        goal_id_source = "active_goal_id"
     current_mode = (data.get("current_mode") or "companion").strip().lower()
     current_view = data.get("current_view")
     request_id = _get_request_id()
@@ -975,14 +996,43 @@ def handle_message():
             else:
                 detail = f"Agent init failed ({type(_agent_init_error).__name__})"
         return api_error("LLM_INIT_FAILED", "LLM unavailable", 503, details=detail)
-    
-    # Set active goal from client focus if provided
-    if active_goal_id:
+
+    requested_goal_id = _coerce_goal_id(raw_goal_id) if raw_goal_id is not None else None
+    if raw_goal_id is not None and requested_goal_id is None:
+        return api_error(
+            "VALIDATION_ERROR",
+            f"{goal_id_source} must be a positive integer",
+            400,
+            details={"goal_id": raw_goal_id},
+        )
+
+    requested_goal = None
+    if requested_goal_id is not None:
         try:
-            architect_agent.goal_mgr.set_active_goal(active_goal_id)
-            logger.info(f"API: Active goal set from client focus: #{active_goal_id}")
-        except Exception as e:
-            logger.warning(f"API: Failed to set active goal from client focus: {e}", exc_info=True)
+            requested_goal = architect_agent.goal_mgr.get_goal(requested_goal_id)
+        except Exception as exc:
+            logger.error("API: Goal lookup failed request_id=%s", request_id, exc_info=True)
+            return api_error(
+                "GOAL_STORAGE_UNAVAILABLE",
+                "Goal storage unavailable",
+                503,
+                details=type(exc).__name__,
+            )
+        if requested_goal is None:
+            return api_error(
+                "GOAL_NOT_FOUND",
+                "Goal not found",
+                404,
+                details={"goal_id": requested_goal_id},
+            )
+        status = (requested_goal.get("status") or "").strip().lower()
+        if status == "archived":
+            return api_error(
+                "GOAL_ARCHIVED",
+                "Goal is archived",
+                409,
+                details={"goal_id": requested_goal_id},
+            )
 
     # --- Shortcut 1: user is asking for their goals; answer directly -----
     if is_goal_list_request(user_input):
@@ -1071,11 +1121,21 @@ def handle_message():
     print("[DEBUG] Postprocess summary:", summary)  # Comment/remove in prod
 
     # === Determine active goal with fallback logic =======================
-    active_goal = architect_agent.goal_mgr.get_active_goal()
+    active_goal = requested_goal
+    if active_goal is None:
+        try:
+            active_goal = architect_agent.goal_mgr.get_active_goal()
+        except Exception as exc:
+            logger.error("API: Failed to load active goal: %s", exc, exc_info=True)
+            active_goal = None
     
     # Fallback: if no active goal but exactly one goal exists, use it as default
     if active_goal is None:
-        goals = architect_agent.goal_mgr.list_goals() or []
+        try:
+            goals = architect_agent.goal_mgr.list_goals() or []
+        except Exception as exc:
+            logger.error("API: Failed to list goals for fallback: %s", exc, exc_info=True)
+            goals = []
         if goals and len(goals) == 1:
             single_goal = goals[0]
             logger.info(
@@ -1093,7 +1153,7 @@ def handle_message():
     
     # === Build goal_context for Architect (if an active goal exists) =====
     goal_context = None
-    if active_goal is not None:
+    if isinstance(active_goal, dict) and active_goal.get("id") is not None:
         goal_context = architect_agent.goal_mgr.build_goal_context(
             active_goal["id"], max_notes=8
         ) or ""
@@ -1101,6 +1161,7 @@ def handle_message():
         logger.info(f"API: Built goal context ({len(goal_context) if goal_context else 0} chars)")
         logger.info(f"API: Routing message to Architect planning engine for goal_id={active_goal['id']}")
     else:
+        active_goal = None
         logger.info("API: No active goal - casual chat mode")
     # ---------------------------------------------------------------------
 
@@ -1229,6 +1290,9 @@ def handle_message():
                     except Exception:
                         logger.debug("API: event loop close failed but continuing")
 
+        if not isinstance(agent_status, dict):
+            agent_status = {}
+
         # --- Log conversation into active goal -------------------------------
         try:
             architect_agent.goal_mgr.add_note_to_goal(active_goal["id"], "user", user_input)
@@ -1291,6 +1355,9 @@ def handle_message():
             # Otherwise provide generic error message in response
             agentic_reply = "I'm having trouble processing that right now. Could you try again?"
             agent_status = {"planner_active": False, "had_goal_update_xml": False}
+
+        if not isinstance(agent_status, dict):
+            agent_status = {}
 
         response = {
             "reply": agentic_reply,
@@ -1519,6 +1586,86 @@ def get_goal_with_plan(goal_id):
             details=type(e).__name__,
             extra={"goal_id": goal_id},
         )
+
+
+@app.route("/api/goals/<int:goal_id>/archive", methods=["POST"])
+@require_auth
+def archive_goal(goal_id):
+    """Archive (soft delete) a goal and emit a goal_event if available."""
+    logger = logging.getLogger("API")
+    comps = get_agent_components()
+    architect_agent = comps["architect_agent"]
+    DEFAULT_USER_ID = comps["DEFAULT_USER_ID"]
+    request_id = _get_request_id()
+
+    try:
+        goal = architect_agent.goal_mgr.get_goal(goal_id)
+    except Exception as exc:
+        logger.error("API: Failed to load goal for archive: %s", exc, exc_info=True)
+        return api_error(
+            "GOAL_STORAGE_UNAVAILABLE",
+            "Goal storage unavailable",
+            503,
+            details=type(exc).__name__,
+            extra={"goal_id": goal_id},
+        )
+
+    if goal is None:
+        return api_error(
+            "GOAL_NOT_FOUND",
+            "Goal not found",
+            404,
+            extra={"goal_id": goal_id},
+        )
+
+    status = (goal.get("status") or "").strip().lower()
+    if status == "archived":
+        return api_error(
+            "GOAL_ARCHIVED",
+            "Goal already archived",
+            409,
+            extra={"goal_id": goal_id},
+        )
+
+    try:
+        archived_goal = architect_agent.goal_mgr.archive_goal(goal_id)
+    except Exception as exc:
+        logger.error("API: Failed to archive goal %s: %s", goal_id, exc, exc_info=True)
+        return api_error(
+            "GOAL_ARCHIVE_FAILED",
+            "Failed to archive goal",
+            500,
+            details=type(exc).__name__,
+            extra={"goal_id": goal_id},
+        )
+
+    if archived_goal is None:
+        return api_error(
+            "GOAL_NOT_FOUND",
+            "Goal not found",
+            404,
+            extra={"goal_id": goal_id},
+        )
+
+    event_emitted = False
+    try:
+        from db.goal_events_repository import safe_append_goal_event
+        payload = {"previous_status": status, "new_status": "archived"}
+        event = safe_append_goal_event(DEFAULT_USER_ID, goal_id, None, "goal_archived", payload)
+        event_emitted = bool(event)
+    except Exception as exc:
+        logger.warning("API: Goal archive event skipped: %s", exc, exc_info=True)
+        event_emitted = False
+
+    return jsonify(
+        {
+            "ok": True,
+            "goal_id": goal_id,
+            "status": "archived",
+            "event_emitted": event_emitted,
+            "request_id": request_id,
+        }
+    )
 
 
 @app.route("/api/goals/active-with-next-actions", methods=["GET"])

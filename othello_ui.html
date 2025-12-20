@@ -1171,6 +1171,31 @@
       box-shadow: 0 4px 16px rgba(99, 102, 241, 0.6);
     }
 
+    .goal-detail__actions {
+      position: sticky;
+      bottom: calc(1rem + var(--safe-bottom));
+      margin: 0 1.25rem 1.25rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+
+    .goal-detail__actions .continue-btn {
+      position: static;
+      margin: 0;
+    }
+
+    .goal-archive-btn {
+      width: 100%;
+    }
+
+    .archive-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 0.75rem;
+      flex-wrap: wrap;
+    }
+
     /* Insights View */
     #insights-view {
       padding: 1.25rem;
@@ -1363,6 +1388,22 @@
         </div>
       </div>
     </div>
+    <div id="archive-overlay" class="settings-overlay" style="display:none;">
+      <div class="settings-modal" role="dialog" aria-modal="true" aria-labelledby="archive-title">
+        <div class="settings-header">
+          <div class="settings-title" id="archive-title">Archive goal?</div>
+          <button id="archive-close" class="settings-close" type="button">Close</button>
+        </div>
+        <div class="settings-section">
+          <div class="settings-label" id="archive-goal-label">This will archive the goal.</div>
+          <div id="archive-status" class="settings-status"></div>
+          <div class="archive-actions">
+            <button id="archive-cancel" class="settings-button" type="button">Cancel</button>
+            <button id="archive-confirm" class="settings-button danger" type="button">Archive goal</button>
+          </div>
+        </div>
+      </div>
+    </div>
   <div class="shell">
 
     <!-- HEADER -->
@@ -1495,7 +1536,10 @@
       <div class="goal-detail__content" id="detail-content">
         <!-- Dynamic content injected here -->
       </div>
-      <button class="continue-btn" id="continue-working-btn">Continue working on this goal</button>
+      <div class="goal-detail__actions">
+        <button class="continue-btn" id="continue-working-btn">Continue working on this goal</button>
+        <button class="settings-button danger goal-archive-btn" id="archive-goal-btn">Archive goal</button>
+      </div>
     </div>
 
   </div>
@@ -1526,6 +1570,12 @@
     const devResetConfirm = document.getElementById('dev-reset-confirm');
     const devResetBtn = document.getElementById('dev-reset-btn');
     const settingsStatus = document.getElementById('settings-status');
+    const archiveOverlay = document.getElementById('archive-overlay');
+    const archiveCloseBtn = document.getElementById('archive-close');
+    const archiveCancelBtn = document.getElementById('archive-cancel');
+    const archiveConfirmBtn = document.getElementById('archive-confirm');
+    const archiveStatus = document.getElementById('archive-status');
+    const archiveGoalLabel = document.getElementById('archive-goal-label');
     let settingsWarningLogged = false;
     const BOOT_STATE = {
       CHECKING_AUTH: "checking_auth",
@@ -1793,6 +1843,24 @@
         settingsOverlay.style.display = 'none';
       }
 
+      function closeArchiveModal() {
+        if (!archiveOverlay) return;
+        archiveOverlay.style.display = 'none';
+      }
+
+      function openArchiveModal(goal) {
+        if (!archiveOverlay) return;
+        if (archiveStatus) {
+          archiveStatus.textContent = '';
+          archiveStatus.style.color = '';
+        }
+        if (archiveGoalLabel) {
+          const title = goal && goal.text ? goal.text : 'this goal';
+          archiveGoalLabel.textContent = `Archive "${title}"? This will hide it from your goals list.`;
+        }
+        archiveOverlay.style.display = 'flex';
+      }
+
       function updateSettingsVisibility() {
         if (settingsDevReset) {
           settingsDevReset.style.display = devResetEnabled ? 'flex' : 'none';
@@ -1977,6 +2045,16 @@
         if (devResetBtn) devResetBtn.onclick = handleDevReset;
       }
 
+      if (archiveCloseBtn) archiveCloseBtn.onclick = closeArchiveModal;
+      if (archiveCancelBtn) archiveCancelBtn.onclick = closeArchiveModal;
+      if (archiveOverlay) {
+        archiveOverlay.addEventListener('click', (event) => {
+          if (event.target === archiveOverlay) {
+            closeArchiveModal();
+          }
+        });
+      }
+
       // --- Unified boot sequence ---
       (async function bootUnified() {
         if (BOOT_DEBUG) console.log('[BOOT] Starting unified boot sequence');
@@ -2017,6 +2095,7 @@
     const detailContent = document.getElementById('detail-content');
     const backFromDetailBtn = document.getElementById('back-from-detail');
     const continueWorkingBtn = document.getElementById('continue-working-btn');
+    const archiveGoalBtn = document.getElementById('archive-goal-btn');
     const plannerHeadline = document.getElementById('planner-headline');
     const plannerEnergy = document.getElementById('planner-energy');
     const plannerError = document.getElementById('planner-error');
@@ -2973,6 +3052,7 @@
           headers: {"Content-Type": "application/json"},
           body: JSON.stringify({ 
             message: text,
+            goal_id: othelloState.activeGoalId || null,
             active_goal_id: othelloState.activeGoalId || null,
             current_mode: othelloState.currentMode,
             current_view: othelloState.currentView,
@@ -3353,6 +3433,60 @@
       goalDetail.classList.add("visible");
     }
 
+    async function archiveGoal(goalId) {
+      if (!goalId) return;
+      if (archiveStatus) {
+        archiveStatus.textContent = "Archiving.";
+        archiveStatus.style.color = "";
+      }
+      if (archiveConfirmBtn) archiveConfirmBtn.disabled = true;
+      try {
+        const res = await fetch(`/api/goals/${goalId}/archive`, {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          credentials: "include"
+        });
+        if (res.status === 401 || res.status === 403) {
+          await handleUnauthorized("goal-archive");
+          return;
+        }
+        if (!res.ok) {
+          let errMsg = "Unable to archive goal.";
+          let reqId = null;
+          const contentType = res.headers.get("content-type") || "";
+          if (contentType.includes("application/json")) {
+            const data = await res.json();
+            errMsg = (data && (data.message || data.error)) || errMsg;
+            reqId = data && data.request_id;
+          } else {
+            const text = await res.text();
+            if (text) errMsg = text.slice(0, 200);
+          }
+          if (archiveStatus) {
+            archiveStatus.textContent = reqId ? `${errMsg} (request_id: ${reqId})` : errMsg;
+            archiveStatus.style.color = "#fca5a5";
+          }
+          return;
+        }
+        await res.json();
+        closeArchiveModal();
+        if (othelloState.activeGoalId === goalId) {
+          othelloState.activeGoalId = null;
+          updateFocusRibbon();
+        }
+        hideGoalDetail();
+        await refreshGoals();
+      } catch (err) {
+        console.error("[Othello UI] archiveGoal error:", err);
+        if (archiveStatus) {
+          archiveStatus.textContent = "Network error.";
+          archiveStatus.style.color = "#fca5a5";
+        }
+      } finally {
+        if (archiveConfirmBtn) archiveConfirmBtn.disabled = false;
+      }
+    }
+
     function hideGoalDetail() {
       goalDetail.classList.remove("visible");
       othelloState.currentDetailGoalId = null;
@@ -3368,6 +3502,23 @@
         input.focus();
       }
     });
+
+    if (archiveGoalBtn) {
+      archiveGoalBtn.addEventListener("click", () => {
+        const goalId = othelloState.currentDetailGoalId;
+        const goal = othelloState.goals.find(g => g.id === goalId);
+        if (goalId == null) return;
+        openArchiveModal(goal);
+      });
+    }
+
+    if (archiveConfirmBtn) {
+      archiveConfirmBtn.addEventListener("click", () => {
+        const goalId = othelloState.currentDetailGoalId;
+        if (goalId == null) return;
+        archiveGoal(goalId);
+      });
+    }
 
     // ===== INITIALIZATION =====
     // Boot sequence (bootUnified) handles auth + data fetches
