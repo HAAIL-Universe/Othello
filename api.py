@@ -283,6 +283,7 @@ except Exception as e:
 # Lazy initialization of agent components (runtime only)
 _agent_components = None
 _agent_init_error = None
+_agent_init_error_message = None
 
 
 def _openai_key_present() -> bool:
@@ -304,7 +305,7 @@ def log_llm_startup_status():
 
 
 def get_agent_components():
-    global _agent_components, _agent_init_error
+    global _agent_components, _agent_init_error, _agent_init_error_message
     if _agent_components is not None:
         return _agent_components
 
@@ -364,11 +365,13 @@ def get_agent_components():
             extract_insights_from_exchange=extract_insights_from_exchange,
         )
         _agent_init_error = None
+        _agent_init_error_message = None
         logger.info("[AgentInit] OPENAI_API_KEY_present=%s model=%s", _openai_key_present(), model)
         return _agent_components
     except Exception as e:
         _agent_components = None
         _agent_init_error = e
+        _agent_init_error_message = str(e)
         logger.error("Agent initialization failed", exc_info=True)
         raise
 
@@ -490,6 +493,7 @@ def _ready_state() -> dict:
     """Return readiness info without exposing secrets."""
     key_present = _openai_key_present()
     agent_error = _agent_init_error
+    agent_error_message = _agent_init_error_message
     ready = key_present and agent_error is None
     reason = None
     if not key_present:
@@ -501,6 +505,7 @@ def _ready_state() -> dict:
         "ready": ready,
         "openai_key_present": key_present,
         "agent_init_error": type(agent_error).__name__ if agent_error else None,
+        "agent_init_error_message": agent_error_message if agent_error_message else None,
         "reason": reason,
     }
 
