@@ -1126,36 +1126,8 @@ def handle_message():
         summary = postprocess_and_save(user_input)
         print("[DEBUG] Postprocess summary:", summary)  # Comment/remove in prod
 
-        # === Determine active goal with fallback logic =======================
+        # === Determine active goal (explicit only) ===========================
         active_goal = requested_goal
-        if active_goal is None:
-            try:
-                active_goal = architect_agent.goal_mgr.get_active_goal()
-            except Exception as exc:
-                logger.error("API: Failed to load active goal: %s", exc, exc_info=True)
-                active_goal = None
-    
-        # Fallback: if no active goal but exactly one goal exists, use it as default
-        if active_goal is None:
-            try:
-                goals = architect_agent.goal_mgr.list_goals() or []
-            except Exception as exc:
-                logger.error("API: Failed to list goals for fallback: %s", exc, exc_info=True)
-                goals = []
-            if goals and len(goals) == 1:
-                single_goal = goals[0]
-                logger.info(
-                    f"API: No explicit active goal, but 1 goal exists (#{single_goal.get('id')}). "
-                    "Defaulting to this as active planning goal."
-                )
-                try:
-                    architect_agent.goal_mgr.set_active_goal(single_goal["id"])
-                    active_goal = single_goal
-                    logger.info(f"API: Successfully set active goal to #{single_goal.get('id')}")
-                except Exception as e:
-                    logger.warning(f"API: Failed to persist active goal default: {e}")
-                    # Still use it for this request even if persistence failed
-                    active_goal = single_goal
     
         # === Build goal_context for Architect (if an active goal exists) =====
         goal_context = None
@@ -1174,8 +1146,13 @@ def handle_message():
         # === Route to Architect planning if active goal exists ===============
         if active_goal is not None:
             # Active goal detected - check if this is an explicit plan generation request
-            router = InputRouter()
-            is_plan_request = router.is_plan_request(user_input)
+            try:
+                from core.input_router import InputRouter
+                router = InputRouter()
+                is_plan_request = router.is_plan_request(user_input)
+            except Exception as exc:
+                logger.warning("API: InputRouter unavailable, skipping plan routing: %s", exc, exc_info=True)
+                is_plan_request = False
         
             if is_plan_request:
                 # Explicit plan generation request - use XML-only planning mode
