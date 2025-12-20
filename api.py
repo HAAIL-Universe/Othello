@@ -11,6 +11,7 @@ from passlib.hash import bcrypt
 import mimetypes
 from utils.llm_config import is_openai_configured
 import openai
+import uuid
 
 # NOTE: Keep import-time work minimal! Do not import LLM/agent modules or connect to DB at module scope unless required for health endpoints.
 from dotenv import load_dotenv
@@ -254,53 +255,103 @@ except Exception as e:
     print("[API] ✗ The app will run but goal persistence may not work correctly")
     print("[API] ✗ Check that DATABASE_URL is set in .env and the database is accessible")
 
-# Lazy initialization of agent components (imported when first accessed)
-# These are initialized here to avoid circular imports and heavy startup cost
-try:
-    from core.architect_brain import Architect
-    from core.llm_wrapper import AsyncLLMWrapper
-    from core.input_router import InputRouter
-    from core.othello_engine import OthelloEngine
-    from utils.postprocessor import postprocess_and_save
-    from db import plan_repository
-    from db import goal_task_history_repository
-    from db.db_goal_manager import DbGoalManager
-    from core.memory_manager import MemoryManager
-    from db import insights_repository
-    from insights_service import extract_insights_from_exchange
-    
-    # Model selection: try pick_model if available, else fallback
-    # Skip interactive prompt if OTHELLO_MODEL or FELLO_MODEL is set
-    model_from_env = os.getenv("OTHELLO_MODEL") or os.getenv("FELLO_MODEL")
-    if model_from_env:
-        model = model_from_env
-    else:
-        try:
-            from core.llm_wrapper import pick_model
-            model = pick_model(default=os.getenv("FELLO_MODEL", "gpt-4o-mini"))
-        except Exception:
-            model = os.getenv("FELLO_MODEL", "gpt-4o-mini")
-    
-    openai_model = AsyncLLMWrapper(model=model)
-    architect_agent = Architect(model=openai_model)
-    architect_agent.goal_mgr = DbGoalManager()
-    architect_agent.memory_mgr = MemoryManager()
-    othello_engine = OthelloEngine(goal_manager=architect_agent.goal_mgr, memory_manager=architect_agent.memory_mgr)
-    DEFAULT_USER_ID = DbGoalManager.DEFAULT_USER_ID
-    
-    print("[API] ✓ Agent components initialized successfully")
-except Exception as e:
-    print(f"[API] ✗ Warning: Failed to initialize agent components: {e}")
-    print("[API] ✗ The app will run but agentic features may not work correctly")
-    # Set to None so routes can check if they're initialized
-    architect_agent = None
-    othello_engine = None
-    DEFAULT_USER_ID = "default"
-    insights_repository = None
-    plan_repository = None
-    goal_task_history_repository = None
-    postprocess_and_save = None
-    extract_insights_from_exchange = None
+# Lazy initialization of agent components (runtime only)
+_agent_components = None
+_agent_init_error = None
+
+
+def log_llm_startup_status():
+    logger = logging.getLogger("API.Startup")
+    model = (
+        os.getenv("OTHELLO_MODEL")
+        or os.getenv("FELLO_MODEL")
+        or os.getenv("OPENAI_MODEL")
+        or "gpt-4o-mini"
+    )
+    key_present = bool(os.getenv("OPENAI_API_KEY"))
+    logger.info("[Startup] OPENAI_API_KEY_present=%s model=%s", key_present, model)
+
+
+def get_agent_components():
+    global _agent_components, _agent_init_error
+    if _agent_components is not None:
+        return _agent_components
+
+    logger = logging.getLogger("API.AgentInit")
+    try:
+        if not is_openai_configured():
+            raise ValueError("Missing OPENAI_API_KEY")
+
+        from core.architect_brain import Architect
+        from core.llm_wrapper import AsyncLLMWrapper
+        from core.input_router import InputRouter
+        from core.othello_engine import OthelloEngine
+        from utils.postprocessor import postprocess_and_save
+        from db import plan_repository
+        from db import goal_task_history_repository
+        from db.db_goal_manager import DbGoalManager
+        from core.memory_manager import MemoryManager
+        from db import insights_repository
+        from insights_service import extract_insights_from_exchange
+
+        model = (
+            os.getenv("OTHELLO_MODEL")
+            or os.getenv("FELLO_MODEL")
+            or os.getenv("OPENAI_MODEL")
+            or "gpt-4o-mini"
+        )
+
+        openai_model = AsyncLLMWrapper(model=model)
+        architect_agent = Architect(model=openai_model)
+        architect_agent.goal_mgr = DbGoalManager()
+        architect_agent.memory_mgr = MemoryManager()
+        othello_engine = OthelloEngine(
+            goal_manager=architect_agent.goal_mgr,
+            memory_manager=architect_agent.memory_mgr,
+        )
+        DEFAULT_USER_ID = DbGoalManager.DEFAULT_USER_ID
+
+        _agent_components = {
+            'architect_agent': architect_agent,
+            'othello_engine': othello_engine,
+            'DEFAULT_USER_ID': DEFAULT_USER_ID,
+            'insights_repository': insights_repository,
+            'plan_repository': plan_repository,
+            'goal_task_history_repository': goal_task_history_repository,
+            'postprocess_and_save': postprocess_and_save,
+            'extract_insights_from_exchange': extract_insights_from_exchange,
+            'model': model,
+        }
+        globals().update(
+            architect_agent=architect_agent,
+            othello_engine=othello_engine,
+            DEFAULT_USER_ID=DEFAULT_USER_ID,
+            insights_repository=insights_repository,
+            plan_repository=plan_repository,
+            goal_task_history_repository=goal_task_history_repository,
+            postprocess_and_save=postprocess_and_save,
+            extract_insights_from_exchange=extract_insights_from_exchange,
+        )
+        _agent_init_error = None
+        logger.info("[AgentInit] OPENAI_API_KEY_present=%s model=%s", bool(os.getenv("OPENAI_API_KEY")), model)
+        return _agent_components
+    except Exception as e:
+        _agent_components = None
+        _agent_init_error = e
+        logger.error("Agent initialization failed", exc_info=True)
+        raise
+
+
+log_llm_startup_status()
+
+architect_agent = None
+othello_engine = None
+DEFAULT_USER_ID = "default"
+insights_repository = None
+plan_repository = None
+goal_task_history_repository = None
+postprocess_and_save = None
+extract_insights_from_exchange = None
 
 
 def is_goal_list_request(text: str) -> bool:
@@ -466,17 +517,11 @@ def auth_logout():
 def log_pending_insights_on_startup():
     logger = logging.getLogger("API.Insights")
     try:
-        counts = insights_repository.count_pending_by_type(DEFAULT_USER_ID)
+        comps = get_agent_components()
+        counts = comps["insights_repository"].count_pending_by_type(comps["DEFAULT_USER_ID"])
         logger.info("API: startup pending insights summary: %s", counts)
     except Exception as exc:
         logger.warning("API: insights summary unavailable at startup: %s", exc)
-
-
-# Run once at import time to avoid Flask 3.x before_first_request removal
-try:
-    log_pending_insights_on_startup()
-except Exception:
-    logging.getLogger("API.Insights").warning("API: startup insights check failed during import", exc_info=True)
 
 
 def _process_insights_pipeline(*, user_text: str, assistant_text: str, user_id: str):
@@ -485,7 +530,8 @@ def _process_insights_pipeline(*, user_text: str, assistant_text: str, user_id: 
     meta: Dict[str, Any] = {"created": 0, "pending_counts": {}}
 
     try:
-        created = extract_insights_from_exchange(
+        comps = get_agent_components()
+        created = comps["extract_insights_from_exchange"](
             user_message=user_text,
             assistant_message=assistant_text,
             user_id=user_id,
@@ -497,7 +543,7 @@ def _process_insights_pipeline(*, user_text: str, assistant_text: str, user_id: 
         return meta
 
     try:
-        meta["pending_counts"] = insights_repository.count_pending_by_type(user_id)
+        meta["pending_counts"] = comps["insights_repository"].count_pending_by_type(user_id)
     except Exception as exc:
         logger.warning("API: failed to fetch pending insight counts: %s", exc, exc_info=True)
 
@@ -522,23 +568,29 @@ def handle_message():
     active_goal_id = data.get("active_goal_id")
     current_mode = (data.get("current_mode") or "companion").strip().lower()
     current_view = data.get("current_view")
+    request_id = str(uuid.uuid4())
     
-    logger.info(f"API: Received message: {user_input[:100]}...")
+    logger.info(f"API: Received message: {user_input[:100]}... request_id={request_id}")
     
-    # Check if OpenAI is configured
-    if not is_openai_configured():
-        logger.error("API: OPENAI_API_KEY is not configured")
+    try:
+        comps = get_agent_components()
+        architect_agent = comps["architect_agent"]
+        othello_engine = comps["othello_engine"]
+        DEFAULT_USER_ID = comps["DEFAULT_USER_ID"]
+        logger.debug(
+            "API: handle_message agent_initialized=True request_id=%s", request_id
+        )
+    except Exception:
+        logger.error(
+            "API: handle_message agent init failed request_id=%s",
+            request_id,
+            exc_info=True,
+        )
         return jsonify({
-            "error": "LLM unavailable",
-            "reason": "Missing OPENAI_API_KEY"
-        }), 503
-    
-    # Check if agent components initialized successfully
-    if architect_agent is None:
-        logger.error("API: Agent components not initialized (likely due to missing or invalid API key)")
-        return jsonify({
-            "error": "LLM unavailable", 
-            "reason": "Agent components failed to initialize. Check OPENAI_API_KEY configuration."
+            "ok": False,
+            "error_code": "LLM_INIT_FAILED",
+            "message": "LLM unavailable",
+            "details": "Missing or invalid OPENAI_API_KEY"
         }), 503
     
     # Set active goal from client focus if provided
@@ -885,6 +937,8 @@ def get_today_plan():
         time_pressure: truthy flag
     """
     logger = logging.getLogger("API")
+    comps = get_agent_components()
+    othello_engine = comps["othello_engine"]
     args = request.args or {}
     mood_context = {
         "mood": args.get("mood"),
@@ -908,6 +962,8 @@ def get_today_plan():
 def get_today_brief():
     """Return a terse tactical brief for voice/read-out."""
     logger = logging.getLogger("API")
+    comps = get_agent_components()
+    othello_engine = comps["othello_engine"]
     args = request.args or {}
     mood_context = {
         "mood": args.get("mood"),
@@ -928,6 +984,8 @@ def get_today_brief():
 def update_plan_item():
     """Update lifecycle status for a plan item (complete/skip/reschedule)."""
     logger = logging.getLogger("API")
+    comps = get_agent_components()
+    othello_engine = comps["othello_engine"]
     data = request.get_json() or {}
     item_id = data.get("item_id")
     status = data.get("status")
@@ -958,6 +1016,8 @@ def update_plan_item():
 def rebuild_today_plan():
     """Force regeneration of today's plan (used when context shifts)."""
     logger = logging.getLogger("API")
+    comps = get_agent_components()
+    othello_engine = comps["othello_engine"]
     data = request.get_json() or {}
     mood_context = data.get("mood_context") or data
     try:
@@ -976,6 +1036,15 @@ def get_goals():
     Simple read-only endpoint so the UI can see what goals
     the Architect/GoalManager have captured so far.
     """
+    logger = logging.getLogger("API")
+    comps = get_agent_components()
+    architect_agent = comps["architect_agent"]
+    DEFAULT_USER_ID = comps["DEFAULT_USER_ID"]
+    logger.debug(
+        "API: get_goals session_user=%s authed=%s",
+        session.get("user_id"),
+        bool(session.get("authed")),
+    )
     try:
         goals = architect_agent.goal_mgr.list_goals()
         return jsonify({"goals": goals})
@@ -1010,6 +1079,8 @@ def get_goal_with_plan(goal_id):
         }
     """
     logger = logging.getLogger("API")
+    comps = get_agent_components()
+    architect_agent = comps["architect_agent"]
     try:
         goal = architect_agent.goal_mgr.get_goal_with_plan(goal_id)
         
@@ -1056,6 +1127,8 @@ def get_active_goals_with_next_actions():
         }
     """
     logger = logging.getLogger("API")
+    comps = get_agent_components()
+    architect_agent = comps["architect_agent"]
     try:
         all_goals = architect_agent.goal_mgr.list_goals()
         
@@ -1113,6 +1186,8 @@ def update_step_status(goal_id, step_id):
         }
     """
     logger = logging.getLogger("API")
+    comps = get_agent_components()
+    architect_agent = comps["architect_agent"]
     data = request.get_json() or {}
     new_status = data.get("status")
     
@@ -1167,6 +1242,10 @@ def trigger_goal_planning(goal_id):
     - Returns the updated goal with plan steps
     """
     logger = logging.getLogger("API")
+    comps = get_agent_components()
+    architect_agent = comps["architect_agent"]
+    othello_engine = comps["othello_engine"]
+    DEFAULT_USER_ID = comps["DEFAULT_USER_ID"]
     data = request.get_json() or {}
     instruction = data.get("instruction", "").strip()
     
@@ -1233,6 +1312,9 @@ def trigger_goal_planning(goal_id):
 
 def _ensure_today_plan_id() -> Optional[int]:
     logger = logging.getLogger("API.Insights")
+    comps = get_agent_components()
+    othello_engine = comps["othello_engine"]
+    plan_repository = comps["plan_repository"]
     planner_user = getattr(othello_engine.day_planner, "user_id", "default")
 
     def _fetch_plan_row() -> Optional[Dict[str, Any]]:
@@ -1435,6 +1517,9 @@ def _apply_idea_insight(insight: dict) -> None:
 @require_auth
 def insights_summary():
     logger = logging.getLogger("API.Insights")
+    comps = get_agent_components()
+    insights_repository = comps["insights_repository"]
+    DEFAULT_USER_ID = comps["DEFAULT_USER_ID"]
     try:
         counts = insights_repository.count_pending_by_type(DEFAULT_USER_ID)
         logger.info("API: insights summary pending_counts=%s", counts)
@@ -1448,6 +1533,9 @@ def insights_summary():
 @require_auth
 def insights_list():
     logger = logging.getLogger("API.Insights")
+    comps = get_agent_components()
+    insights_repository = comps["insights_repository"]
+    DEFAULT_USER_ID = comps["DEFAULT_USER_ID"]
     status = (request.args.get("status") or "pending").strip().lower()
 
     logger.info("API: /api/insights/list status=%s", status or "any")
@@ -1468,6 +1556,9 @@ def insights_list():
 @app.route("/api/insights/apply", methods=["POST"])
 @require_auth
 def insights_apply():
+    comps = get_agent_components()
+    insights_repository = comps["insights_repository"]
+    DEFAULT_USER_ID = comps["DEFAULT_USER_ID"]
     data = request.get_json() or {}
     insight_id = data.get("id")
     if not insight_id:
@@ -1517,6 +1608,9 @@ def insights_apply():
 @require_auth
 def goal_task_history():
     logger = logging.getLogger("API.GoalTasks")
+    comps = get_agent_components()
+    goal_task_history_repository = comps["goal_task_history_repository"]
+    DEFAULT_USER_ID = comps["DEFAULT_USER_ID"]
     args = request.args or {}
     status = (args.get("status") or "").strip() or None
     start_date_param = args.get("start_date")
@@ -1563,6 +1657,9 @@ def goal_task_history():
 @app.route("/api/insights/dismiss", methods=["POST"])
 @require_auth
 def insights_dismiss():
+    comps = get_agent_components()
+    insights_repository = comps["insights_repository"]
+    DEFAULT_USER_ID = comps["DEFAULT_USER_ID"]
     data = request.get_json() or {}
     insight_id = data.get("id")
     if not insight_id:

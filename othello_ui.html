@@ -1732,7 +1732,7 @@
         return;
       }
       try {
-        const resp = await fetch("/api/insights/summary");
+        const resp = await fetch("/api/insights/summary", { credentials: "include" });
         if (!resp.ok) return;
         const data = await resp.json();
         applyInsightsMeta(data);
@@ -1864,14 +1864,14 @@
     }
 
     async function fetchTodayBrief() {
-      const resp = await fetch("/api/today-brief");
+      const resp = await fetch("/api/today-brief", { credentials: "include" });
       if (!resp.ok) throw new Error("Failed to load brief");
       const data = await resp.json();
       return data.brief || {};
     }
 
     async function fetchTodayPlan() {
-      const resp = await fetch(`/api/today-plan?ts=${Date.now()}`, { cache: "no-store" });
+      const resp = await fetch(`/api/today-plan?ts=${Date.now()}`, { cache: "no-store", credentials: "include" });
       if (!resp.ok) throw new Error("Failed to load plan");
       const data = await resp.json();
       return data.plan || {};
@@ -1969,6 +1969,7 @@
             const resp = await fetch(PLAN_UPDATE_API, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
+              credentials: "include",
               body: JSON.stringify(payload),
             });
             if (!resp.ok) {
@@ -2143,14 +2144,14 @@
     }
 
     async function fetchInsightsList(status = "pending") {
-      const resp = await fetch(`/api/insights/list?status=${encodeURIComponent(status)}`);
+      const resp = await fetch(`/api/insights/list?status=${encodeURIComponent(status)}`, { credentials: "include" });
       if (!resp.ok) throw new Error("Failed to load insights");
       const data = await resp.json();
       return data.insights || [];
     }
 
     async function fetchInsightsSummary() {
-      const resp = await fetch("/api/insights/summary");
+      const resp = await fetch("/api/insights/summary", { credentials: "include" });
       if (!resp.ok) throw new Error("Failed to load insights summary");
       return resp.json();
     }
@@ -2288,6 +2289,7 @@
         const resp = await fetch(endpoint, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
+          credentials: "include",
           body: JSON.stringify(payload),
         });
         if (!resp.ok) {
@@ -2770,7 +2772,7 @@
 
     async function refreshGoals() {
       try {
-        const res = await fetch(GOALS_API);
+        const res = await fetch(GOALS_API, { credentials: "include" });
         if (!res.ok) throw new Error("Failed to fetch goals");
         const data = await res.json();
         const goals = data.goals || [];
