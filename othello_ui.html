@@ -1520,6 +1520,13 @@
     const loginPin = document.getElementById('login-pin');
     const loginBtn = document.getElementById('login-btn');
     const loginError = document.getElementById('login-error');
+    const settingsOverlay = document.getElementById('settings-overlay');
+    const settingsCloseBtn = document.getElementById('settings-close');
+    const settingsDevReset = document.getElementById('settings-dev-reset');
+    const devResetConfirm = document.getElementById('dev-reset-confirm');
+    const devResetBtn = document.getElementById('dev-reset-btn');
+    const settingsStatus = document.getElementById('settings-status');
+    let settingsWarningLogged = false;
     const BOOT_STATE = {
       CHECKING_AUTH: "checking_auth",
       NEEDS_LOGIN: "needs_login",
@@ -1772,10 +1779,18 @@
         await handleLogout();
       }
 
+      function warnSettingsUnavailable() {
+        if (settingsWarningLogged) return;
+        settingsWarningLogged = true;
+        console.warn('[Othello UI] Settings UI unavailable: missing modal elements.');
+      }
+
       function closeSettings() {
-        if (settingsOverlay) {
-          settingsOverlay.style.display = 'none';
+        if (!settingsOverlay) {
+          warnSettingsUnavailable();
+          return;
         }
+        settingsOverlay.style.display = 'none';
       }
 
       function updateSettingsVisibility() {
@@ -1806,7 +1821,10 @@
       }
 
       function openSettings() {
-        if (!settingsOverlay) return;
+        if (!settingsOverlay || !settingsCloseBtn) {
+          warnSettingsUnavailable();
+          return;
+        }
         if (devResetConfirm) devResetConfirm.value = '';
         if (devResetBtn) devResetBtn.disabled = true;
         if (settingsStatus) settingsStatus.textContent = '';
@@ -1937,24 +1955,27 @@
         if (brandRow) brandRow.appendChild(logoutBtn);
       }
       logoutBtn.onclick = handleLogout;
-      if (settingsBtn) settingsBtn.onclick = openSettings;
-
-      if (settingsCloseBtn) settingsCloseBtn.onclick = closeSettings;
-      if (settingsOverlay) {
+      const settingsReady = !!(settingsOverlay && settingsCloseBtn);
+      if (!settingsReady) {
+        warnSettingsUnavailable();
+        if (settingsBtn) settingsBtn.style.display = 'none';
+      } else {
+        if (settingsBtn) settingsBtn.onclick = openSettings;
+        settingsCloseBtn.onclick = closeSettings;
         settingsOverlay.addEventListener('click', (event) => {
           if (event.target === settingsOverlay) {
             closeSettings();
           }
         });
+        if (devResetConfirm) {
+          devResetConfirm.addEventListener('input', () => {
+            if (devResetBtn) {
+              devResetBtn.disabled = devResetConfirm.value.trim() !== 'RESET';
+            }
+          });
+        }
+        if (devResetBtn) devResetBtn.onclick = handleDevReset;
       }
-      if (devResetConfirm) {
-        devResetConfirm.addEventListener('input', () => {
-          if (devResetBtn) {
-            devResetBtn.disabled = devResetConfirm.value.trim() !== 'RESET';
-          }
-        });
-      }
-      if (devResetBtn) devResetBtn.onclick = handleDevReset;
 
       // --- Unified boot sequence ---
       (async function bootUnified() {
@@ -2006,12 +2027,6 @@
     const insightsList = document.getElementById('insights-list');
     const insightsEmpty = document.getElementById('insights-empty');
     const insightsError = document.getElementById('insights-error');
-    const settingsOverlay = document.getElementById('settings-overlay');
-    const settingsCloseBtn = document.getElementById('settings-close');
-    const settingsDevReset = document.getElementById('settings-dev-reset');
-    const devResetConfirm = document.getElementById('dev-reset-confirm');
-    const devResetBtn = document.getElementById('dev-reset-btn');
-    const settingsStatus = document.getElementById('settings-status');
 
     // App state
     const othelloState = {
