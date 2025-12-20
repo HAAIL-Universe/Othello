@@ -86,13 +86,13 @@ def handle_llm_error(e: Exception, logger: logging.Logger) -> tuple[dict, int]:
 app = Flask(__name__, static_folder="static", static_url_path="/static")
 CORS(app)  # Allow requests from frontend
 
-# Harden SECRET_KEY handling for production
-secret = os.getenv("SECRET_KEY")
-if not secret:
+# Harden SECRET_KEY handling for production (support OTHELLO_SECRET_KEY alias)
+_secret_env = (os.getenv("OTHELLO_SECRET_KEY") or os.getenv("SECRET_KEY") or "").strip()
+if not _secret_env:
     if os.getenv("RENDER") or os.getenv("RENDER_SERVICE_ID"):
-        logging.warning("[API] WARNING: SECRET_KEY is not set in environment! Using insecure default. Set SECRET_KEY in Render environment variables.")
-    secret = "dev-secret-key"
-app.config["SECRET_KEY"] = secret
+        logging.warning("[API] WARNING: SECRET_KEY/OTHELLO_SECRET_KEY is not set in environment! Using insecure default. Set SECRET_KEY or OTHELLO_SECRET_KEY in Render environment variables.")
+    _secret_env = "dev-secret-key"
+app.config["SECRET_KEY"] = _secret_env
 
 # Minimal auth config (compat bridge)
 OTHELLO_PASSWORD = os.environ.get("OTHELLO_PASSWORD")
@@ -545,7 +545,7 @@ def auth_login():
     if not pin_hash and not login_key and not plain_pwd:
         return jsonify({
             "error": "AUTH_NOT_CONFIGURED",
-            "detail": "OTHELLO_PIN_HASH or OTHELLO_LOGIN_KEY must be set",
+            "detail": "no_login_configured",
             "auth_mode": auth_mode
         }), 503
 
@@ -553,11 +553,11 @@ def auth_login():
         return jsonify({"error": "VALIDATION_ERROR", "detail": "Access code required", "auth_mode": auth_mode}), 400
 
     # Verify session secret exists
-    secret_key = app.config.get("SECRET_KEY")
-    if not secret_key or not str(secret_key).strip():
+    secret_key = (_env_trim("OTHELLO_SECRET_KEY") or _env_trim("SECRET_KEY"))
+    if not secret_key:
         return jsonify({
             "error": "AUTH_MISCONFIGURED",
-            "detail": "SECRET_KEY/OTHELLO_SECRET_KEY not configured",
+            "detail": "missing_secret_key",
             "auth_mode": auth_mode
         }), 503
 
@@ -571,7 +571,7 @@ def auth_login():
             logger.error("bcrypt verification error", exc_info=True)
             return jsonify({
                 "error": "AUTH_MISCONFIGURED",
-                "detail": "Invalid OTHELLO_PIN_HASH value",
+                "detail": "invalid_pin_hash",
                 "auth_mode": auth_mode
             }), 503
 
