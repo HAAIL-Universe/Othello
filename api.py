@@ -1294,14 +1294,53 @@ def handle_message():
             if not isinstance(agent_status, dict):
                 agent_status = {}
 
-            # --- Log conversation into active goal -------------------------------
-            try:
-                architect_agent.goal_mgr.add_note_to_goal(active_goal["id"], "user", user_input)
-                architect_agent.goal_mgr.add_note_to_goal(active_goal["id"], "othello", agentic_reply)
-                logger.debug(f"API: Logged conversation to goal #{active_goal['id']}")
-            except Exception as e:
-                logger.warning(f"API: Failed to log exchange for goal #{active_goal['id']}: {e}")
-            # ---------------------------------------------------------------------
+        # --- Log conversation into active goal -------------------------------
+        def _event_ok(result):
+            if isinstance(result, dict):
+                return bool(result.get("ok", False)), result.get("reason")
+            return False, "unknown"
+
+        try:
+            user_event = architect_agent.goal_mgr.add_note_to_goal(active_goal["id"], "user", user_input)
+            assistant_event = architect_agent.goal_mgr.add_note_to_goal(active_goal["id"], "othello", agentic_reply)
+        except Exception as e:
+            logger.exception(
+                "API: goal event append failed request_id=%s",
+                request_id,
+                extra={"request_id": request_id},
+            )
+            return api_error(
+                "GOAL_EVENT_STORAGE_UNAVAILABLE",
+                "Goal event storage unavailable",
+                503,
+                details=type(e).__name__,
+            )
+
+        user_ok, user_reason = _event_ok(user_event)
+        assistant_ok, assistant_reason = _event_ok(assistant_event)
+        if not user_ok or not assistant_ok:
+            details = {
+                "user_event_ok": user_ok,
+                "assistant_event_ok": assistant_ok,
+            }
+            if user_reason:
+                details["user_reason"] = user_reason
+            if assistant_reason:
+                details["assistant_reason"] = assistant_reason
+            logger.warning(
+                "API: goal event storage unavailable request_id=%s details=%s",
+                request_id,
+                details,
+            )
+            return api_error(
+                "GOAL_EVENT_STORAGE_UNAVAILABLE",
+                "Goal event storage unavailable",
+                503,
+                details=details,
+            )
+
+        logger.debug(f"API: Logged conversation to goal #{active_goal['id']}")
+        # ---------------------------------------------------------------------
 
             # Log final response details
             logger.info(f"API: Returning response - planner_active={agent_status.get('planner_active', False)}, had_xml={agent_status.get('had_goal_update_xml', False)}")
@@ -1387,6 +1426,7 @@ def handle_message():
             "API: handle_message failed request_id=%s error_type=%s",
             request_id,
             type(exc).__name__,
+            extra={"request_id": request_id},
         )
         return api_error("INTERNAL_ERROR", "Internal server error", 500)
 
@@ -1540,6 +1580,38 @@ def get_goals():
             "Failed to fetch goals",
             500,
             details=type(e).__name__,
+        )
+
+
+@app.route("/api/goals/unfocus", methods=["POST"])
+@require_auth
+def unfocus_goal():
+    logger = logging.getLogger("API")
+    comps = get_agent_components()
+    architect_agent = comps["architect_agent"]
+    request_id = _get_request_id()
+    try:
+        if hasattr(architect_agent.goal_mgr, "active_goal_id"):
+            architect_agent.goal_mgr.active_goal_id = None
+            logger.info("API: Cleared active goal request_id=%s", request_id)
+            return jsonify({"ok": True, "request_id": request_id})
+        return api_error(
+            "GOAL_FOCUS_UNAVAILABLE",
+            "Goal focus unavailable",
+            503,
+            details="active_goal_id not supported",
+        )
+    except Exception as exc:
+        logger.exception(
+            "API: Failed to clear active goal request_id=%s",
+            request_id,
+            extra={"request_id": request_id},
+        )
+        return api_error(
+            "GOAL_UNFOCUS_FAILED",
+            "Failed to clear active goal",
+            500,
+            details=type(exc).__name__,
         )
 
 

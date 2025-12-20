@@ -1452,6 +1452,7 @@
         <div class="focus-ribbon__title" id="focus-ribbon-title">No goal selected</div>
       </div>
       <button class="focus-ribbon__btn" id="view-focus-btn">View Goal</button>
+      <button class="focus-ribbon__btn" id="unfocus-btn">Unfocus</button>
     </div>
 
     <!-- CONTENT CONTAINER -->
@@ -2088,6 +2089,7 @@
     const insightsTabBadge = document.getElementById('insights-tab-badge');
     const focusRibbonTitle = document.getElementById('focus-ribbon-title');
     const viewFocusBtn = document.getElementById('view-focus-btn');
+    const unfocusBtn = document.getElementById('unfocus-btn');
     const goalsList = document.getElementById('goals-list');
     const goalDetail = document.getElementById('goal-detail');
     const detailGoalId = document.getElementById('detail-goal-id');
@@ -2977,6 +2979,49 @@
       }
     });
 
+    async function unfocusGoal() {
+      const hadFocus = othelloState.activeGoalId !== null;
+      if (!hadFocus) return;
+
+      try {
+        const res = await fetch("/api/goals/unfocus", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          credentials: "include",
+        });
+        if (res.status === 401 || res.status === 403) {
+          await handleUnauthorized("goals-unfocus");
+          return;
+        }
+        if (!res.ok) {
+          let errMsg = "Unable to clear focus.";
+          const contentType = res.headers.get("content-type") || "";
+          if (contentType.includes("application/json")) {
+            const data = await res.json();
+            errMsg = (data && (data.message || data.error)) || errMsg;
+            if (data && data.request_id) {
+              console.error("[Othello UI] unfocus request_id:", data.request_id);
+            }
+          }
+          console.warn("[Othello UI] unfocus failed:", errMsg);
+        }
+      } catch (err) {
+        console.warn("[Othello UI] unfocus network error:", err);
+      }
+
+      othelloState.activeGoalId = null;
+      updateFocusRibbon();
+      if (othelloState.currentView === "goals") {
+        renderGoalsList();
+      }
+    }
+
+    if (unfocusBtn) {
+      unfocusBtn.addEventListener("click", () => {
+        unfocusGoal();
+      });
+    }
+
     // ===== CHAT FUNCTIONS =====
     function addMessage(role, text) {
       // Hide chat placeholder when first message appears
@@ -3072,7 +3117,12 @@
             }
             console.error("[Othello UI] sendMessage HTTP error:", res.status, errorData);
             const errMsg = (errorData && (errorData.message || errorData.error)) || "Unable to process your message.";
-            addMessage("bot", `[Error ${res.status}]: ${errMsg}`);
+            const reqId = errorData && errorData.request_id;
+            if (reqId) {
+              console.error("[Othello UI] sendMessage request_id:", reqId);
+            }
+            const detailSuffix = reqId ? ` (request_id: ${reqId})` : "";
+            addMessage("bot", `[Error ${res.status}]: ${errMsg}${detailSuffix}`);
           } else {
             let errorText = "";
             try {

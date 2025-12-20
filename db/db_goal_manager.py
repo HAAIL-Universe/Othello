@@ -38,7 +38,7 @@ class DbGoalManager:
     # ------------------------------------------------------------------
     # Helpers for per-goal log events (DB-backed)
     # ------------------------------------------------------------------
-    def add_note_to_goal(self, goal_id: int, role: str, content: str) -> None:
+    def add_note_to_goal(self, goal_id: int, role: str, content: str) -> Dict[str, Any]:
         """
         Append a note to this goal's log (DB goal_events).
         """
@@ -47,7 +47,7 @@ class DbGoalManager:
             role = "system"
         
         if self.get_goal(goal_id) is None:
-            return
+            return {"ok": False, "reason": "goal_not_found"}
         
         note = {
             "timestamp": datetime.utcnow().isoformat() + "Z",
@@ -61,6 +61,7 @@ class DbGoalManager:
                 goal_id,
                 result.get("reason", "unknown"),
             )
+        return result
     
     def get_recent_notes(self, goal_id: int, max_notes: int = 10) -> List[Dict[str, Any]]:
         """
