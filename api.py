@@ -520,7 +520,15 @@ def auth_login():
     if not isinstance(data, dict):
         return jsonify({"error": "VALIDATION_ERROR", "detail": "JSON object required"}), 400
 
-    password = (data.get("password") or "").strip()
+    # Accept multiple field names for the access code
+    raw_code = (
+        data.get("password")
+        or data.get("access_code")
+        or data.get("code")
+        or data.get("pin")
+        or ""
+    )
+    password = str(raw_code).strip()
 
     def _env_trim(key: str) -> Optional[str]:
         val = os.environ.get(key)
@@ -530,19 +538,28 @@ def auth_login():
         return stripped or None
 
     pin_hash = _env_trim("OTHELLO_PIN_HASH")
-    plain_pwd = _env_trim("OTHELLO_PASSWORD")
-    # Auth precedence: OTHELLO_PIN_HASH > OTHELLO_PASSWORD > misconfig
-    auth_mode = "pin_hash" if pin_hash else ("plaintext_password" if plain_pwd else "none")
+    login_key = _env_trim("OTHELLO_LOGIN_KEY")
+    plain_pwd = _env_trim("OTHELLO_PASSWORD")  # legacy fallback
+    auth_mode = "pin_hash" if pin_hash else ("login_key" if login_key else ("plaintext_password" if plain_pwd else "none"))
 
-    if not pin_hash and not plain_pwd:
+    if not pin_hash and not login_key and not plain_pwd:
         return jsonify({
             "error": "AUTH_NOT_CONFIGURED",
-            "detail": "OTHELLO_PIN_HASH or OTHELLO_PASSWORD must be set",
+            "detail": "OTHELLO_PIN_HASH or OTHELLO_LOGIN_KEY must be set",
             "auth_mode": auth_mode
         }), 503
 
     if not password:
-        return jsonify({"error": "VALIDATION_ERROR", "detail": "Password required", "auth_mode": auth_mode}), 400
+        return jsonify({"error": "VALIDATION_ERROR", "detail": "Access code required", "auth_mode": auth_mode}), 400
+
+    # Verify session secret exists
+    secret_key = app.config.get("SECRET_KEY")
+    if not secret_key or not str(secret_key).strip():
+        return jsonify({
+            "error": "AUTH_MISCONFIGURED",
+            "detail": "SECRET_KEY/OTHELLO_SECRET_KEY not configured",
+            "auth_mode": auth_mode
+        }), 503
 
     if pin_hash:
         try:
@@ -550,16 +567,23 @@ def auth_login():
                 session["authed"] = True
                 return jsonify({"ok": True, "auth_mode": auth_mode})
             return jsonify({"error": "AUTH_INVALID", "auth_mode": auth_mode}), 401
-        except Exception as e:
+        except Exception:
             logger.error("bcrypt verification error", exc_info=True)
             return jsonify({
-                "error": "AUTH_NOT_CONFIGURED",
+                "error": "AUTH_MISCONFIGURED",
                 "detail": "Invalid OTHELLO_PIN_HASH value",
                 "auth_mode": auth_mode
             }), 503
 
-    # Plaintext fallback
-    logger.warning("plaintext password mode enabled; set OTHELLO_PIN_HASH to harden")
+    if login_key:
+        import hmac
+        if hmac.compare_digest(password, login_key):
+            session["authed"] = True
+            return jsonify({"ok": True, "auth_mode": auth_mode})
+        return jsonify({"error": "AUTH_INVALID", "auth_mode": auth_mode}), 401
+
+    # Legacy plaintext password
+    logger.warning("plaintext password mode enabled; set OTHELLO_PIN_HASH or OTHELLO_LOGIN_KEY to harden")
     if password == plain_pwd:
         session["authed"] = True
         return jsonify({"ok": True, "auth_mode": auth_mode})
