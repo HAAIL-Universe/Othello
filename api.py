@@ -511,39 +511,59 @@ def static_files(filename):
 # Minimal auth endpoints
 @app.route("/api/auth/login", methods=["POST"])
 def auth_login():
-    data = request.get_json() or {}
-    password = data.get("password")
+    logger = logging.getLogger("API.Auth")
+
+    if not request.is_json:
+        return jsonify({"error": "VALIDATION_ERROR", "detail": "JSON body required"}), 400
+
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"error": "VALIDATION_ERROR", "detail": "JSON object required"}), 400
+
+    password = (data.get("password") or "").strip()
+
+    def _env_trim(key: str) -> Optional[str]:
+        val = os.environ.get(key)
+        if val is None:
+            return None
+        stripped = str(val).strip()
+        return stripped or None
+
+    pin_hash = _env_trim("OTHELLO_PIN_HASH")
+    plain_pwd = _env_trim("OTHELLO_PASSWORD")
     # Auth precedence: OTHELLO_PIN_HASH > OTHELLO_PASSWORD > misconfig
-    auth_mode = get_runtime_config_snapshot()["auth_mode_selected"]
-    if OTHELLO_PIN_HASH:
-        if not password:
-            return jsonify({"error": "missing_password", "detail": "Password required", "auth_mode": auth_mode}), 400
+    auth_mode = "pin_hash" if pin_hash else ("plaintext_password" if plain_pwd else "none")
+
+    if not pin_hash and not plain_pwd:
+        return jsonify({
+            "error": "AUTH_NOT_CONFIGURED",
+            "detail": "OTHELLO_PIN_HASH or OTHELLO_PASSWORD must be set",
+            "auth_mode": auth_mode
+        }), 503
+
+    if not password:
+        return jsonify({"error": "VALIDATION_ERROR", "detail": "Password required", "auth_mode": auth_mode}), 400
+
+    if pin_hash:
         try:
-            if bcrypt.verify(password, OTHELLO_PIN_HASH):
+            if bcrypt.verify(password, pin_hash):
                 session["authed"] = True
-                return jsonify({"ok": True})
-            else:
-                return jsonify({"error": "Invalid password", "auth_mode": auth_mode}), 401
+                return jsonify({"ok": True, "auth_mode": auth_mode})
+            return jsonify({"error": "AUTH_INVALID", "auth_mode": auth_mode}), 401
         except Exception as e:
-            logging.getLogger("API").error(f"bcrypt verification error: {e}")
-            return jsonify({"error": "server_error", "detail": "bcrypt verification failed", "auth_mode": auth_mode}), 500
-    elif OTHELLO_PASSWORD:
-        logging.getLogger("API").warning("plaintext password mode enabled; set OTHELLO_PIN_HASH to harden")
-        if not password:
-            return jsonify({"error": "missing_password", "detail": "Password required", "auth_mode": auth_mode}), 400
-        if password == OTHELLO_PASSWORD:
-            session["authed"] = True
-            return jsonify({"ok": True})
-        return jsonify({"error": "Invalid password", "auth_mode": auth_mode}), 401
-    else:
-        return (
-            jsonify({
-                "error": "server_misconfigured",
-                "detail": "OTHELLO_PASSWORD not set",
+            logger.error("bcrypt verification error", exc_info=True)
+            return jsonify({
+                "error": "AUTH_NOT_CONFIGURED",
+                "detail": "Invalid OTHELLO_PIN_HASH value",
                 "auth_mode": auth_mode
-            }),
-            503
-        )
+            }), 503
+
+    # Plaintext fallback
+    logger.warning("plaintext password mode enabled; set OTHELLO_PIN_HASH to harden")
+    if password == plain_pwd:
+        session["authed"] = True
+        return jsonify({"ok": True, "auth_mode": auth_mode})
+    return jsonify({"error": "AUTH_INVALID", "auth_mode": auth_mode}), 401
 
 @app.route("/api/auth/me", methods=["GET"])
 def auth_me():
