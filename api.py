@@ -94,6 +94,25 @@ if not _secret_env:
     _secret_env = "dev-secret-key"
 app.config["SECRET_KEY"] = _secret_env
 
+def _log_auth_config():
+    """Log presence booleans for auth-related env; never log values."""
+    logger = logging.getLogger("API.Auth")
+    secret_present = bool(_secret_env)
+    pin_present = bool((os.getenv("OTHELLO_PIN_HASH") or "").strip())
+    login_key_present = bool((os.getenv("OTHELLO_LOGIN_KEY") or "").strip())
+    legacy_pwd_present = bool((os.getenv("OTHELLO_PASSWORD") or "").strip())
+    auth_mode = "pin_hash" if pin_present else ("login_key" if login_key_present else ("plaintext_password" if legacy_pwd_present else "none"))
+    logger.info(
+        "AuthConfig: secret_present=%s pin_hash_present=%s login_key_present=%s legacy_pwd_present=%s auth_mode=%s",
+        secret_present,
+        pin_present,
+        login_key_present,
+        legacy_pwd_present,
+        auth_mode,
+    )
+
+_log_auth_config()
+
 # Minimal auth config (compat bridge)
 OTHELLO_PASSWORD = os.environ.get("OTHELLO_PASSWORD")
 OTHELLO_PIN_HASH = os.environ.get("OTHELLO_PIN_HASH")
@@ -275,9 +294,9 @@ def _openai_key_present() -> bool:
 def log_llm_startup_status():
     logger = logging.getLogger("API.Startup")
     model = (
-        os.getenv("OTHELLO_MODEL")
-        or os.getenv("FELLO_MODEL")
-        or os.getenv("OPENAI_MODEL")
+        (os.getenv("OTHELLO_MODEL") or "").strip()
+        or (os.getenv("FELLO_MODEL") or "").strip()
+        or (os.getenv("OPENAI_MODEL") or "").strip()
         or "gpt-4o-mini"
     )
     key_present = _openai_key_present()
@@ -307,9 +326,9 @@ def get_agent_components():
         from insights_service import extract_insights_from_exchange
 
         model = (
-            os.getenv("OTHELLO_MODEL")
-            or os.getenv("FELLO_MODEL")
-            or os.getenv("OPENAI_MODEL")
+            (os.getenv("OTHELLO_MODEL") or "").strip()
+            or (os.getenv("FELLO_MODEL") or "").strip()
+            or (os.getenv("OPENAI_MODEL") or "").strip()
             or "gpt-4o-mini"
         )
 
