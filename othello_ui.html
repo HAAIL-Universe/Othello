@@ -94,6 +94,110 @@
         color: #fca5a5;
         font-size: 0.95rem;
       }
+      .icon-button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 34px;
+        height: 34px;
+        border-radius: 8px;
+        border: 1px solid var(--border);
+        background: var(--card-bg);
+        color: var(--text-main);
+        cursor: pointer;
+        font-size: 1.1rem;
+      }
+      .settings-overlay {
+        position: fixed;
+        z-index: 10000;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgba(2, 6, 23, 0.85);
+      }
+      .settings-modal {
+        width: min(520px, 92%);
+        background: var(--bg-2);
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        padding: 1.5rem;
+        box-shadow: var(--glow);
+      }
+      .settings-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 1rem;
+      }
+      .settings-title {
+        font-size: 1.15rem;
+        font-weight: 700;
+      }
+      .settings-close {
+        border: 1px solid var(--border);
+        background: var(--card-bg);
+        color: var(--text-soft);
+        padding: 0.35rem 0.7rem;
+        border-radius: 8px;
+        cursor: pointer;
+      }
+      .settings-section {
+        display: flex;
+        flex-direction: column;
+        gap: 0.6rem;
+      }
+      .danger-zone {
+        margin-top: 1rem;
+        padding-top: 1rem;
+        border-top: 1px solid var(--border);
+      }
+      .danger-zone__title {
+        font-weight: 700;
+        color: #fca5a5;
+      }
+      .danger-zone__desc {
+        color: var(--text-soft);
+        font-size: 0.9rem;
+      }
+      .settings-label {
+        font-size: 0.9rem;
+        color: var(--text-soft);
+      }
+      .settings-input {
+        padding: 0.7rem 0.85rem;
+        border-radius: 10px;
+        border: 1px solid var(--border);
+        background: var(--card-bg);
+        color: var(--text-main);
+        font-size: 0.95rem;
+      }
+      .settings-button {
+        padding: 0.75rem 1rem;
+        border-radius: 10px;
+        border: 1px solid var(--accent);
+        background: var(--accent-soft);
+        color: var(--accent);
+        font-size: 0.95rem;
+        cursor: pointer;
+      }
+      .settings-button.danger {
+        border-color: #fca5a5;
+        background: rgba(252, 165, 165, 0.12);
+        color: #fca5a5;
+      }
+      .settings-button:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+      .settings-status {
+        min-height: 1rem;
+        font-size: 0.9rem;
+        color: var(--text-soft);
+      }
     </style>
   <meta charset="UTF-8" />
   <title>Othello — Personal Goal Architect</title>
@@ -1241,6 +1345,24 @@
         </form>
       </div>
     </div>
+    <div id="settings-overlay" class="settings-overlay">
+      <div class="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+        <div class="settings-header">
+          <div class="settings-title" id="settings-title">Settings</div>
+          <button id="settings-close" class="settings-close" type="button">Close</button>
+        </div>
+        <div class="settings-section" id="settings-dev-reset" style="display:none;">
+          <div class="danger-zone">
+            <div class="danger-zone__title">Danger zone</div>
+            <div class="danger-zone__desc">Wipe all data in the database. Dev only.</div>
+            <label class="settings-label" for="dev-reset-confirm">Type RESET to confirm.</label>
+            <input id="dev-reset-confirm" class="settings-input" type="text" placeholder="RESET" autocomplete="off" />
+            <button id="dev-reset-btn" class="settings-button danger" type="button" disabled>Wipe all data (dev only)</button>
+            <div id="settings-status" class="settings-status"></div>
+          </div>
+        </div>
+      </div>
+    </div>
   <div class="shell">
 
     <!-- HEADER -->
@@ -1613,20 +1735,15 @@
               bootApp();
               return;
             } else {
-              if (loginError) loginError.textContent = (data && data.error) || 'Invalid PIN.';
+              if (loginError) {
+                loginError.textContent = (data && (data.message || data.error)) || 'Invalid access code.';
+              }
             }
           } else {
             let errMsg = 'Login failed.';
             try {
               const data = await resp.json();
-              // Show backend 503 server_misconfigured error inline
-              if (resp.status === 503 && data && data.error === 'server_misconfigured') {
-                errMsg = data.detail || 'Server misconfigured.';
-              } else if (data && data.error) {
-                errMsg = data.error;
-              } else {
-                errMsg = data.error || errMsg;
-              }
+              errMsg = (data && (data.message || data.error)) || errMsg;
             } catch {}
             if (loginError) loginError.textContent = errMsg;
           }
@@ -1645,6 +1762,7 @@
         } catch {}
         // Clear UI state if needed
         isAuthed = false;
+        closeSettings();
         showLoginOverlay();
         setBootState(BOOT_STATE.NEEDS_LOGIN);
       }
@@ -1652,6 +1770,94 @@
       async function handleUnauthorized(origin) {
         if (BOOT_DEBUG) console.log('[AUTH] Unauthorized', origin || '');
         await handleLogout();
+      }
+
+      function closeSettings() {
+        if (settingsOverlay) {
+          settingsOverlay.style.display = 'none';
+        }
+      }
+
+      function updateSettingsVisibility() {
+        if (settingsDevReset) {
+          settingsDevReset.style.display = devResetEnabled ? 'flex' : 'none';
+        }
+      }
+
+      async function fetchAdminCapabilities() {
+        if (!isAuthed) return false;
+        try {
+          const resp = await fetch('/api/admin/capabilities', { credentials: 'include' });
+          if (resp.status === 401 || resp.status === 403) {
+            await handleUnauthorized('admin-capabilities');
+            return false;
+          }
+          if (!resp.ok) {
+            throw new Error('Failed to load capabilities');
+          }
+          const data = await resp.json();
+          devResetEnabled = !!(data && data.dev_reset_enabled);
+        } catch (err) {
+          devResetEnabled = false;
+          console.warn('[Othello UI] admin capabilities unavailable', err);
+        }
+        updateSettingsVisibility();
+        return devResetEnabled;
+      }
+
+      function openSettings() {
+        if (!settingsOverlay) return;
+        if (devResetConfirm) devResetConfirm.value = '';
+        if (devResetBtn) devResetBtn.disabled = true;
+        if (settingsStatus) settingsStatus.textContent = '';
+        settingsOverlay.style.display = 'flex';
+        fetchAdminCapabilities();
+      }
+
+      async function handleDevReset() {
+        if (!devResetEnabled) return;
+        const confirmText = (devResetConfirm && devResetConfirm.value || '').trim();
+        if (confirmText !== 'RESET') {
+          if (settingsStatus) settingsStatus.textContent = 'Type RESET to confirm.';
+          return;
+        }
+        if (devResetBtn) devResetBtn.disabled = true;
+        if (settingsStatus) settingsStatus.textContent = 'Wiping data...';
+        try {
+          const resp = await fetch('/api/admin/reset', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'include',
+            body: JSON.stringify({ confirm: 'RESET' })
+          });
+          if (resp.status === 401 || resp.status === 403) {
+            await handleUnauthorized('admin-reset');
+            return;
+          }
+          if (!resp.ok) {
+            let errMsg = `Reset failed (${resp.status}).`;
+            const contentType = resp.headers.get('content-type') || '';
+            if (contentType.includes('application/json')) {
+              const data = await resp.json();
+              errMsg = data && (data.message || data.error) || errMsg;
+            } else {
+              const text = await resp.text();
+              console.error('[Othello UI] reset non-JSON error:', text.slice(0, 200));
+            }
+            if (settingsStatus) settingsStatus.textContent = errMsg;
+            if (devResetBtn) devResetBtn.disabled = false;
+            return;
+          }
+          if (settingsStatus) settingsStatus.textContent = 'Wipe complete. Reloading...';
+          othelloState.goals = [];
+          othelloState.activeGoalId = null;
+          othelloState.goalUpdateCounts = {};
+          setTimeout(() => window.location.reload(), 500);
+        } catch (err) {
+          console.error('[Othello UI] dev reset failed', err);
+          if (settingsStatus) settingsStatus.textContent = 'Reset failed.';
+          if (devResetBtn) devResetBtn.disabled = false;
+        }
       }
 
       function bootApp() {
@@ -1673,6 +1879,7 @@
             if (typeof loadTodayPlanner === 'function') {
               await loadTodayPlanner();
             }
+            await fetchAdminCapabilities();
             setBootState(BOOT_STATE.AUTHENTICATED);
           } catch (e) {
             if (e && (e.status === 401 || e.status === 403)) {
@@ -1710,17 +1917,44 @@
         });
       }
 
-      // Add logout button to header (minimal UI)
+      // Add settings + logout buttons to header (minimal UI)
+      const brandRow = document.querySelector('.brand-row');
+      let settingsBtn = document.getElementById('settings-btn');
+      if (!settingsBtn) {
+        settingsBtn = document.createElement('button');
+        settingsBtn.id = 'settings-btn';
+        settingsBtn.className = 'icon-button';
+        settingsBtn.setAttribute('aria-label', 'Settings');
+        settingsBtn.textContent = '⚙';
+        if (brandRow) brandRow.appendChild(settingsBtn);
+      }
       let logoutBtn = document.getElementById('logout-btn');
       if (!logoutBtn) {
         logoutBtn = document.createElement('button');
         logoutBtn.id = 'logout-btn';
         logoutBtn.textContent = 'Logout';
         logoutBtn.style = 'margin-left:1.5rem;font-size:1rem;padding:0.3rem 1.1rem;border-radius:8px;border:1px solid var(--accent);background:var(--accent-soft);color:var(--accent);';
-        const brandRow = document.querySelector('.brand-row');
         if (brandRow) brandRow.appendChild(logoutBtn);
       }
       logoutBtn.onclick = handleLogout;
+      if (settingsBtn) settingsBtn.onclick = openSettings;
+
+      if (settingsCloseBtn) settingsCloseBtn.onclick = closeSettings;
+      if (settingsOverlay) {
+        settingsOverlay.addEventListener('click', (event) => {
+          if (event.target === settingsOverlay) {
+            closeSettings();
+          }
+        });
+      }
+      if (devResetConfirm) {
+        devResetConfirm.addEventListener('input', () => {
+          if (devResetBtn) {
+            devResetBtn.disabled = devResetConfirm.value.trim() !== 'RESET';
+          }
+        });
+      }
+      if (devResetBtn) devResetBtn.onclick = handleDevReset;
 
       // --- Unified boot sequence ---
       (async function bootUnified() {
@@ -1772,6 +2006,12 @@
     const insightsList = document.getElementById('insights-list');
     const insightsEmpty = document.getElementById('insights-empty');
     const insightsError = document.getElementById('insights-error');
+    const settingsOverlay = document.getElementById('settings-overlay');
+    const settingsCloseBtn = document.getElementById('settings-close');
+    const settingsDevReset = document.getElementById('settings-dev-reset');
+    const devResetConfirm = document.getElementById('dev-reset-confirm');
+    const devResetBtn = document.getElementById('dev-reset-btn');
+    const settingsStatus = document.getElementById('settings-status');
 
     // App state
     const othelloState = {
@@ -1783,6 +2023,7 @@
       goalUpdateCounts: {},
       currentAgentStatus: null
     };
+    let devResetEnabled = false;
 
     const insightsCounts = {
       plan_pending: 0,
@@ -2723,15 +2964,31 @@
           })
         });
 
+        console.log("[Othello UI] /api/message status", res.status);
+
         if (!res.ok) {
-          let errorText = "Unknown error";
-          try {
-            errorText = await res.text();
-          } catch (e) {
-            console.warn("[Othello UI] Could not read error response body:", e);
+          const contentType = res.headers.get("content-type") || "";
+          if (contentType.includes("application/json")) {
+            let errorData = null;
+            try {
+              errorData = await res.json();
+            } catch (e) {
+              console.warn("[Othello UI] Could not parse JSON error body:", e);
+            }
+            console.error("[Othello UI] sendMessage HTTP error:", res.status, errorData);
+            const errMsg = (errorData && (errorData.message || errorData.error)) || "Unable to process your message.";
+            addMessage("bot", `[Error ${res.status}]: ${errMsg}`);
+          } else {
+            let errorText = "";
+            try {
+              errorText = await res.text();
+            } catch (e) {
+              console.warn("[Othello UI] Could not read error response body:", e);
+            }
+            const preview = (errorText || "").slice(0, 200);
+            console.error("[Othello UI] sendMessage non-JSON error:", res.status, preview);
+            addMessage("bot", `[Error ${res.status}]: Unable to process your message. Please try again.`);
           }
-          console.error("[Othello UI] sendMessage HTTP error:", res.status, errorText);
-          addMessage("bot", `[Error ${res.status}]: Unable to process your message. Please try again.`);
           statusEl.textContent = "Error";
           return;
         }

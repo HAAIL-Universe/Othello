@@ -2,7 +2,7 @@ import logging
 import os
 import re
 from datetime import date, timedelta
-from flask import Flask, request, jsonify, send_file, session, send_from_directory
+from flask import Flask, request, jsonify, send_file, session, send_from_directory, g
 from flask_cors import CORS
 import asyncio
 from typing import Any, Dict, Optional
@@ -13,6 +13,7 @@ from utils.llm_config import is_openai_configured, get_openai_api_key
 import openai
 import httpx
 import uuid
+from werkzeug.exceptions import HTTPException
 
 # NOTE: Keep import-time work minimal! Do not import LLM/agent modules or connect to DB at module scope unless required for health endpoints.
 from dotenv import load_dotenv
@@ -31,6 +32,43 @@ logging.basicConfig(
 
 # Constants
 MAX_ERROR_MSG_LENGTH = 200  # Maximum length for error message logging
+REQUEST_ID_HEADER = "X-Request-ID"
+
+
+def _get_request_id() -> str:
+    request_id = getattr(g, "request_id", None)
+    if not request_id:
+        request_id = str(uuid.uuid4())
+        g.request_id = request_id
+    return request_id
+
+
+def _is_api_request() -> bool:
+    try:
+        return request.path.startswith("/api/")
+    except Exception:
+        return False
+
+
+def api_error(
+    error_code: str,
+    message: str,
+    status_code: int,
+    details: Optional[Any] = None,
+    extra: Optional[Dict[str, Any]] = None,
+):
+    payload = {
+        "error_code": error_code,
+        "message": message,
+        "request_id": _get_request_id(),
+    }
+    if details is not None:
+        payload["details"] = details
+    if extra:
+        payload.update(extra)
+    response = jsonify(payload)
+    response.status_code = status_code
+    return response
 
 # Helper function to classify OpenAI errors and return appropriate JSON responses
 def handle_llm_error(e: Exception, logger: logging.Logger) -> tuple[dict, int]:
@@ -47,40 +85,57 @@ def handle_llm_error(e: Exception, logger: logging.Logger) -> tuple[dict, int]:
     # Log the exception class and message (sanitized - no API keys)
     error_class = type(e).__name__
     error_msg = str(e)
-    logger.error(f"LLM error: {error_class}: {error_msg[:MAX_ERROR_MSG_LENGTH]}", exc_info=False)
+    request_id = _get_request_id()
+    logger.error(
+        "LLM error: %s: %s request_id=%s",
+        error_class,
+        error_msg[:MAX_ERROR_MSG_LENGTH],
+        request_id,
+        exc_info=False,
+    )
     
     # Authentication errors
     if isinstance(e, openai.AuthenticationError):
         return {
-            "error": "LLM auth failed",
-            "reason": "Invalid API key or auth failure"
+            "error_code": "LLM_AUTH_FAILED",
+            "message": "LLM auth failed",
+            "details": "Invalid API key or auth failure",
+            "request_id": request_id,
         }, 503
     
     # Rate limit errors  
     if isinstance(e, openai.RateLimitError):
         return {
-            "error": "LLM rate limit",
-            "reason": "API rate limit exceeded. Please try again later."
+            "error_code": "LLM_RATE_LIMIT",
+            "message": "LLM rate limit reached",
+            "details": "API rate limit exceeded. Please try again later.",
+            "request_id": request_id,
         }, 429
     
     # Connection/timeout errors
     if isinstance(e, (openai.APIConnectionError, openai.APITimeoutError)):
         return {
-            "error": "LLM connection error",
-            "reason": "Could not connect to LLM service"
+            "error_code": "LLM_CONNECTION_ERROR",
+            "message": "LLM connection error",
+            "details": "Could not connect to LLM service",
+            "request_id": request_id,
         }, 502
     
     # Other OpenAI API errors
     if isinstance(e, openai.OpenAIError):
         return {
-            "error": "LLM upstream error",
-            "reason": f"LLM service error: {error_class}"
+            "error_code": "LLM_UPSTREAM_ERROR",
+            "message": "LLM upstream error",
+            "details": f"LLM service error: {error_class}",
+            "request_id": request_id,
         }, 502
     
     # Generic error for non-OpenAI exceptions
     return {
-        "error": "Internal error",
-        "reason": f"An unexpected error occurred: {error_class}"
+        "error_code": "LLM_INTERNAL_ERROR",
+        "message": "Internal error",
+        "details": f"An unexpected error occurred: {error_class}",
+        "request_id": request_id,
     }, 500
 
 # --- Flask App Setup (must be before any route decorators) ---
@@ -195,7 +250,7 @@ def register_debug_routes(app):
     @app.route("/api/debug/config", methods=["GET"])
     def debug_config():
         if not _debug_config_allowed():
-            return ("Not found", 404)
+            return api_error("NOT_FOUND", "Not found", 404)
         return jsonify(get_runtime_config_snapshot())
 
 # Asset route registration (after app exists)
@@ -211,6 +266,55 @@ def register_asset_routes(app):
 # Register debug and asset routes after app/session setup
 register_debug_routes(app)
 register_asset_routes(app)
+
+
+@app.before_request
+def assign_request_id():
+    g.request_id = str(uuid.uuid4())
+    if _is_api_request():
+        logging.getLogger("API").info(
+            "API: request start request_id=%s method=%s path=%s",
+            g.request_id,
+            request.method,
+            request.path,
+        )
+
+
+@app.after_request
+def attach_request_id(response):
+    request_id = getattr(g, "request_id", None)
+    if request_id:
+        response.headers[REQUEST_ID_HEADER] = request_id
+    return response
+
+
+@app.errorhandler(HTTPException)
+def handle_http_exception(exc: HTTPException):
+    if not _is_api_request():
+        return exc
+    logger = logging.getLogger("API")
+    logger.warning(
+        "API: HTTPException status=%s name=%s request_id=%s",
+        exc.code,
+        exc.name,
+        _get_request_id(),
+    )
+    return api_error(
+        f"HTTP_{exc.code}",
+        exc.description or "Request failed",
+        exc.code or 500,
+        details={"name": exc.name},
+    )
+
+
+@app.errorhandler(Exception)
+def handle_unhandled_exception(exc: Exception):
+    if not _is_api_request():
+        raise exc
+    logging.getLogger("API").error(
+        "API: unhandled exception request_id=%s", _get_request_id(), exc_info=True
+    )
+    return api_error("INTERNAL_ERROR", "Internal server error", 500)
 
 def serialize_insight(insight: Dict[str, Any]) -> Dict[str, Any]:
     """Convert a repository row into a JSON-safe dict for the UI."""
@@ -499,7 +603,7 @@ def require_auth(f):
         if request.path in ["/api/health", "/api/auth/login", "/api/auth/me", "/"]:
             return f(*args, **kwargs)
         if not session.get("authed"):
-            return jsonify({"error": "Authentication required"}), 401
+            return api_error("AUTH_REQUIRED", "Authentication required", 401)
         return f(*args, **kwargs)
     return decorated
 
@@ -539,6 +643,7 @@ def ready_check():
         status = 200 if state["ready"] else 503
         body = {k: v for k, v in state.items() if v is not None}
         body["ok"] = bool(state["ready"])
+        body["request_id"] = _get_request_id()
         if not state["ready"]:
             body["error_code"] = "NOT_READY"
             body["message"] = "Service not ready"
@@ -549,6 +654,7 @@ def ready_check():
         return jsonify({
             "ok": False,
             "ready": False,
+            "request_id": _get_request_id(),
             "error_code": "NOT_READY",
             "message": "Service not ready",
             "details": "ready_check_exception",
@@ -567,11 +673,11 @@ def auth_login():
     logger = logging.getLogger("API.Auth")
 
     if not request.is_json:
-        return jsonify({"error": "VALIDATION_ERROR", "detail": "JSON body required"}), 400
+        return api_error("VALIDATION_ERROR", "JSON body required", 400)
 
     data = request.get_json(silent=True)
     if not isinstance(data, dict):
-        return jsonify({"error": "VALIDATION_ERROR", "detail": "JSON object required"}), 400
+        return api_error("VALIDATION_ERROR", "JSON object required", 400)
 
     # Accept multiple field names for the access code
     raw_code = (
@@ -596,51 +702,62 @@ def auth_login():
     auth_mode = "pin_hash" if pin_hash else ("login_key" if login_key else ("plaintext_password" if plain_pwd else "none"))
 
     if not pin_hash and not login_key and not plain_pwd:
-        return jsonify({
-            "error": "AUTH_NOT_CONFIGURED",
-            "detail": "no_login_configured",
-            "auth_mode": auth_mode
-        }), 503
+        return api_error(
+            "AUTH_NOT_CONFIGURED",
+            "Authentication not configured",
+            503,
+            details="no_login_configured",
+            extra={"auth_mode": auth_mode},
+        )
 
     if not password:
-        return jsonify({"error": "VALIDATION_ERROR", "detail": "Access code required", "auth_mode": auth_mode}), 400
+        return api_error(
+            "VALIDATION_ERROR",
+            "Access code required",
+            400,
+            extra={"auth_mode": auth_mode},
+        )
 
     # Verify session secret exists
     secret_key = (_env_trim("OTHELLO_SECRET_KEY") or _env_trim("SECRET_KEY"))
     if not secret_key:
-        return jsonify({
-            "error": "AUTH_MISCONFIGURED",
-            "detail": "missing_secret_key",
-            "auth_mode": auth_mode
-        }), 503
+        return api_error(
+            "AUTH_MISCONFIGURED",
+            "Authentication misconfigured",
+            503,
+            details="missing_secret_key",
+            extra={"auth_mode": auth_mode},
+        )
 
     if pin_hash:
         try:
             if bcrypt.verify(password, pin_hash):
                 session["authed"] = True
                 return jsonify({"ok": True, "auth_mode": auth_mode})
-            return jsonify({"error": "AUTH_INVALID", "auth_mode": auth_mode}), 401
+            return api_error("AUTH_INVALID", "Invalid access code", 401, extra={"auth_mode": auth_mode})
         except Exception:
             logger.error("bcrypt verification error", exc_info=True)
-            return jsonify({
-                "error": "AUTH_MISCONFIGURED",
-                "detail": "invalid_pin_hash",
-                "auth_mode": auth_mode
-            }), 503
+            return api_error(
+                "AUTH_MISCONFIGURED",
+                "Authentication misconfigured",
+                503,
+                details="invalid_pin_hash",
+                extra={"auth_mode": auth_mode},
+            )
 
     if login_key:
         import hmac
         if hmac.compare_digest(password, login_key):
             session["authed"] = True
             return jsonify({"ok": True, "auth_mode": auth_mode})
-        return jsonify({"error": "AUTH_INVALID", "auth_mode": auth_mode}), 401
+        return api_error("AUTH_INVALID", "Invalid access code", 401, extra={"auth_mode": auth_mode})
 
     # Legacy plaintext password
     logger.warning("plaintext password mode enabled; set OTHELLO_PIN_HASH or OTHELLO_LOGIN_KEY to harden")
     if password == plain_pwd:
         session["authed"] = True
         return jsonify({"ok": True, "auth_mode": auth_mode})
-    return jsonify({"error": "AUTH_INVALID", "auth_mode": auth_mode}), 401
+    return api_error("AUTH_INVALID", "Invalid access code", 401, extra={"auth_mode": auth_mode})
 
 @app.route("/api/auth/me", methods=["GET"])
 def auth_me():
@@ -652,6 +769,107 @@ def auth_logout():
     return jsonify({"ok": True})
 
 
+def _dev_reset_enabled() -> bool:
+    return (os.getenv("OTHELLO_ENABLE_DEV_RESET") or "").strip().lower() == "true"
+
+
+def _wipe_database() -> list[str]:
+    from db.database import get_connection
+
+    tables = [
+        "goal_events",
+        "plan_steps",
+        "goals",
+        "plans",
+        "plan_items",
+        "insights",
+        "goal_task_history",
+        "suggestions",
+        "reflection_entries",
+        "memory_entries",
+        "profile_snapshots",
+        "audit_events",
+    ]
+    with get_connection() as conn:
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT table_name
+                    FROM information_schema.tables
+                    WHERE table_schema = 'public'
+                      AND table_type = 'BASE TABLE';
+                    """
+                )
+                rows = cursor.fetchall() or []
+                existing = set()
+                for row in rows:
+                    if isinstance(row, dict):
+                        table_name = row.get("table_name")
+                    else:
+                        table_name = row[0] if row else None
+                    if table_name:
+                        existing.add(table_name)
+                to_truncate = [name for name in tables if name in existing]
+                if to_truncate:
+                    cursor.execute(
+                        f"TRUNCATE {', '.join(to_truncate)} RESTART IDENTITY CASCADE;"
+                    )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+    return to_truncate
+
+
+@app.route("/api/admin/capabilities", methods=["GET"])
+@require_auth
+def admin_capabilities():
+    return jsonify({"dev_reset_enabled": _dev_reset_enabled()})
+
+
+@app.route("/api/admin/reset", methods=["POST"])
+@require_auth
+def admin_reset():
+    logger = logging.getLogger("API.Admin")
+    if not _dev_reset_enabled():
+        return api_error("DEV_RESET_DISABLED", "Dev reset disabled", 403)
+
+    if not request.is_json:
+        return api_error("VALIDATION_ERROR", "JSON body required", 400)
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return api_error("VALIDATION_ERROR", "JSON object required", 400)
+    if data.get("confirm") != "RESET":
+        return api_error(
+            "VALIDATION_ERROR",
+            "Confirmation required",
+            400,
+            details="confirm must be RESET",
+        )
+
+    try:
+        tables = _wipe_database()
+        logger.warning(
+            "API: dev reset completed request_id=%s tables=%s",
+            _get_request_id(),
+            tables,
+        )
+        return jsonify({"ok": True, "request_id": _get_request_id(), "tables": tables})
+    except Exception as exc:
+        logger.error(
+            "API: dev reset failed request_id=%s",
+            _get_request_id(),
+            exc_info=True,
+        )
+        return api_error(
+            "DEV_RESET_FAILED",
+            "Dev reset failed",
+            500,
+            details=type(exc).__name__,
+        )
+
+
 def log_pending_insights_on_startup():
     logger = logging.getLogger("API.Insights")
     try:
@@ -660,6 +878,21 @@ def log_pending_insights_on_startup():
         logger.info("API: startup pending insights summary: %s", counts)
     except Exception as exc:
         logger.warning("API: insights summary unavailable at startup: %s", exc)
+
+
+def _normalize_insights_meta(meta: Any) -> Dict[str, Any]:
+    if not isinstance(meta, dict):
+        return {"created": 0, "pending_counts": {}}
+    pending_counts = meta.get("pending_counts")
+    if not isinstance(pending_counts, dict):
+        meta["pending_counts"] = {}
+    created = meta.get("created")
+    if not isinstance(created, int):
+        try:
+            meta["created"] = int(created)
+        except Exception:
+            meta["created"] = 0
+    return meta
 
 
 def _process_insights_pipeline(*, user_text: str, assistant_text: str, user_id: str):
@@ -673,15 +906,15 @@ def _process_insights_pipeline(*, user_text: str, assistant_text: str, user_id: 
             user_message=user_text,
             assistant_message=assistant_text,
             user_id=user_id,
-        )
-        meta["created"] = len(created)
+        ) or []
+        meta["created"] = len(created) if isinstance(created, (list, tuple)) else 0
         logger.info("API: insight extraction persisted %s candidates", meta["created"])
     except Exception as exc:
         logger.warning("API: insight extraction failed: %s", exc, exc_info=True)
         return meta
 
     try:
-        meta["pending_counts"] = comps["insights_repository"].count_pending_by_type(user_id)
+        meta["pending_counts"] = comps["insights_repository"].count_pending_by_type(user_id) or {}
     except Exception as exc:
         logger.warning("API: failed to fetch pending insight counts: %s", exc, exc_info=True)
 
@@ -700,15 +933,26 @@ def handle_message():
     6. Returns reply to frontend.
     """
     logger = logging.getLogger("API")
-    data = request.get_json() or {}
-    raw_user_input = data.get("message") or ""
+    if not request.is_json:
+        return api_error("VALIDATION_ERROR", "JSON body required", 400)
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return api_error("VALIDATION_ERROR", "JSON object required", 400)
+    raw_user_input = data.get("message")
+    if raw_user_input is None:
+        raw_user_input = ""
+    if not isinstance(raw_user_input, str):
+        raw_user_input = str(raw_user_input)
     user_input = raw_user_input.strip()
     active_goal_id = data.get("active_goal_id")
     current_mode = (data.get("current_mode") or "companion").strip().lower()
     current_view = data.get("current_view")
-    request_id = str(uuid.uuid4())
-    
-    logger.info(f"API: Received message: {user_input[:100]}... request_id={request_id}")
+    request_id = _get_request_id()
+
+    if not user_input:
+        return api_error("VALIDATION_ERROR", "message is required", 400)
+
+    logger.info("API: Received message: %s request_id=%s", user_input[:100], request_id)
     
     try:
         comps = get_agent_components()
@@ -730,13 +974,7 @@ def handle_message():
                 detail = "Missing or invalid OPENAI_API_KEY"
             else:
                 detail = f"Agent init failed ({type(_agent_init_error).__name__})"
-        return jsonify({
-            "ok": False,
-            "error_code": "LLM_INIT_FAILED",
-            "message": "LLM unavailable",
-            "details": detail,
-            "request_id": request_id
-        }), 503
+        return api_error("LLM_INIT_FAILED", "LLM unavailable", 503, details=detail)
     
     # Set active goal from client focus if provided
     if active_goal_id:
@@ -769,7 +1007,7 @@ def handle_message():
         matched_phrase = next((p for p in goal_list_phrases if p in t), None)
         logger.info(f"API: Routing to goal list (shortcut branch) due to phrase: {matched_phrase!r}")
         
-        goals = architect_agent.goal_mgr.list_goals()
+        goals = architect_agent.goal_mgr.list_goals() or []
         reply_text = format_goal_list(goals)
         logger.info(f"API: Returning goal list with {len(goals)} goals")
         return jsonify(
@@ -837,7 +1075,7 @@ def handle_message():
     
     # Fallback: if no active goal but exactly one goal exists, use it as default
     if active_goal is None:
-        goals = architect_agent.goal_mgr.list_goals()
+        goals = architect_agent.goal_mgr.list_goals() or []
         if goals and len(goals) == 1:
             single_goal = goals[0]
             logger.info(
@@ -858,7 +1096,7 @@ def handle_message():
     if active_goal is not None:
         goal_context = architect_agent.goal_mgr.build_goal_context(
             active_goal["id"], max_notes=8
-        )
+        ) or ""
         logger.info(f"API: Active goal #{active_goal['id']}: {active_goal.get('text', '')[:50]}...")
         logger.info(f"API: Built goal context ({len(goal_context) if goal_context else 0} chars)")
         logger.info(f"API: Routing message to Architect planning engine for goal_id={active_goal['id']}")
@@ -1005,14 +1243,17 @@ def handle_message():
 
         response = {
             "reply": agentic_reply,
-            "agent_status": agent_status
+            "agent_status": agent_status,
+            "request_id": request_id,
         }
         try:
             logger.info("API: running insight extraction for message (goal mode)")
-            response["insights_meta"] = _process_insights_pipeline(
-                user_text=raw_user_input,
-                assistant_text=agentic_reply,
-                user_id=DEFAULT_USER_ID,
+            response["insights_meta"] = _normalize_insights_meta(
+                _process_insights_pipeline(
+                    user_text=raw_user_input,
+                    assistant_text=agentic_reply,
+                    user_id=DEFAULT_USER_ID,
+                )
             )
             logger.info(
                 "API: insight extraction completed (created=%s)",
@@ -1053,14 +1294,17 @@ def handle_message():
 
         response = {
             "reply": agentic_reply,
-            "agent_status": agent_status
+            "agent_status": agent_status,
+            "request_id": request_id,
         }
         try:
             logger.info("API: running insight extraction for message (casual mode)")
-            response["insights_meta"] = _process_insights_pipeline(
-                user_text=raw_user_input,
-                assistant_text=agentic_reply,
-                user_id=DEFAULT_USER_ID,
+            response["insights_meta"] = _normalize_insights_meta(
+                _process_insights_pipeline(
+                    user_text=raw_user_input,
+                    assistant_text=agentic_reply,
+                    user_id=DEFAULT_USER_ID,
+                )
             )
             logger.info(
                 "API: insight extraction completed (created=%s)",
@@ -1099,7 +1343,12 @@ def get_today_plan():
         return jsonify({"plan": plan})
     except Exception as exc:
         logger.error(f"API: Failed to build today plan: {exc}", exc_info=True)
-        return jsonify({"error": str(exc)}), 500
+        return api_error(
+            "TODAY_PLAN_FAILED",
+            "Failed to build today plan",
+            500,
+            details=type(exc).__name__,
+        )
 
 
 @app.route("/api/today-brief", methods=["GET"])
@@ -1121,7 +1370,12 @@ def get_today_brief():
         return jsonify({"brief": brief})
     except Exception as exc:
         logger.error(f"API: Failed to build today brief: {exc}", exc_info=True)
-        return jsonify({"error": str(exc)}), 500
+        return api_error(
+            "TODAY_BRIEF_FAILED",
+            "Failed to build today brief",
+            500,
+            details=type(exc).__name__,
+        )
 
 
 @app.route("/api/plan/update", methods=["POST"])
@@ -1139,7 +1393,7 @@ def update_plan_item():
     reschedule_to = data.get("reschedule_to")
 
     if not item_id or not status:
-        return jsonify({"error": "item_id and status are required"}), 400
+        return api_error("VALIDATION_ERROR", "item_id and status are required", 400)
 
     try:
         plan = othello_engine.update_plan_item(
@@ -1153,7 +1407,12 @@ def update_plan_item():
         return jsonify({"plan": plan})
     except Exception as exc:
         logger.error(f"API: Failed to update plan item {item_id}: {exc}", exc_info=True)
-        return jsonify({"error": str(exc)}), 400
+        return api_error(
+            "PLAN_UPDATE_FAILED",
+            "Failed to update plan item",
+            500,
+            details=type(exc).__name__,
+        )
 
 
 @app.route("/api/plan/rebuild", methods=["POST"])
@@ -1171,7 +1430,12 @@ def rebuild_today_plan():
         return jsonify({"plan": plan})
     except Exception as exc:
         logger.error(f"API: Failed to rebuild plan: {exc}", exc_info=True)
-        return jsonify({"error": str(exc)}), 500
+        return api_error(
+            "PLAN_REBUILD_FAILED",
+            "Failed to rebuild plan",
+            500,
+            details=type(exc).__name__,
+        )
 
 
 @app.route("/api/goals", methods=["GET"])
@@ -1195,7 +1459,12 @@ def get_goals():
         return jsonify({"goals": goals})
     except Exception as e:
         logging.getLogger("ARCHITECT").error(f"Failed to fetch goals: {e}")
-        return jsonify({"goals": [], "error": str(e)}), 500
+        return api_error(
+            "GOALS_FETCH_FAILED",
+            "Failed to fetch goals",
+            500,
+            details=type(e).__name__,
+        )
 
 
 @app.route("/api/goals/<int:goal_id>", methods=["GET"])
@@ -1231,20 +1500,25 @@ def get_goal_with_plan(goal_id):
         
         if goal is None:
             logger.warning(f"API: Goal #{goal_id} not found")
-            return jsonify({
-                "error": "Goal not found",
-                "goal_id": goal_id
-            }), 404
+            return api_error(
+                "GOAL_NOT_FOUND",
+                "Goal not found",
+                404,
+                extra={"goal_id": goal_id},
+            )
         
         logger.info(f"API: Retrieved goal #{goal_id} with {len(goal.get('plan_steps', []))} steps")
         return jsonify({"goal": goal})
         
     except Exception as e:
         logger.error(f"API: Failed to fetch goal #{goal_id}: {e}", exc_info=True)
-        return jsonify({
-            "error": str(e),
-            "goal_id": goal_id
-        }), 500
+        return api_error(
+            "GOAL_FETCH_FAILED",
+            "Failed to fetch goal",
+            500,
+            details=type(e).__name__,
+            extra={"goal_id": goal_id},
+        )
 
 
 @app.route("/api/goals/active-with-next-actions", methods=["GET"])
@@ -1301,10 +1575,12 @@ def get_active_goals_with_next_actions():
         
     except Exception as e:
         logger.error(f"API: Failed to fetch active goals with next actions: {e}", exc_info=True)
-        return jsonify({
-            "error": str(e),
-            "goals": []
-        }), 500
+        return api_error(
+            "GOALS_FETCH_FAILED",
+            "Failed to fetch active goals with next actions",
+            500,
+            details=type(e).__name__,
+        )
 
 
 @app.route("/api/goals/<int:goal_id>/steps/<int:step_id>/status", methods=["POST"])
@@ -1339,10 +1615,12 @@ def update_step_status(goal_id, step_id):
     # Validate status
     valid_statuses = ["pending", "in_progress", "done"]
     if not new_status or new_status not in valid_statuses:
-        return jsonify({
-            "error": "Invalid status. Must be one of: pending, in_progress, done",
-            "valid_statuses": valid_statuses
-        }), 400
+        return api_error(
+            "VALIDATION_ERROR",
+            "Invalid status. Must be one of: pending, in_progress, done",
+            400,
+            extra={"valid_statuses": valid_statuses},
+        )
     
     try:
         updated_step = architect_agent.goal_mgr.update_plan_step_status(
@@ -1351,22 +1629,25 @@ def update_step_status(goal_id, step_id):
         
         if updated_step is None:
             logger.warning(f"API: Failed to update step #{step_id} for goal #{goal_id}")
-            return jsonify({
-                "error": "Step not found or does not belong to this goal",
-                "goal_id": goal_id,
-                "step_id": step_id
-            }), 404
+            return api_error(
+                "STEP_NOT_FOUND",
+                "Step not found or does not belong to this goal",
+                404,
+                extra={"goal_id": goal_id, "step_id": step_id},
+            )
         
         logger.info(f"API: Updated step #{step_id} status to '{new_status}'")
         return jsonify({"step": updated_step})
         
     except Exception as e:
         logger.error(f"API: Failed to update step status: {e}", exc_info=True)
-        return jsonify({
-            "error": str(e),
-            "goal_id": goal_id,
-            "step_id": step_id
-        }), 500
+        return api_error(
+            "STEP_UPDATE_FAILED",
+            "Failed to update step status",
+            500,
+            details=type(e).__name__,
+            extra={"goal_id": goal_id, "step_id": step_id},
+        )
 
 
 @app.route("/api/goals/<int:goal_id>/plan", methods=["POST"])
@@ -1402,10 +1683,12 @@ def trigger_goal_planning(goal_id):
         goal = architect_agent.goal_mgr.get_goal(goal_id)
         if goal is None:
             logger.warning(f"API: Goal #{goal_id} not found for planning")
-            return jsonify({
-                "error": "Goal not found",
-                "goal_id": goal_id
-            }), 404
+            return api_error(
+                "GOAL_NOT_FOUND",
+                "Goal not found",
+                404,
+                extra={"goal_id": goal_id},
+            )
         
         # Set as active goal
         architect_agent.goal_mgr.set_active_goal(goal_id)
@@ -1449,10 +1732,13 @@ def trigger_goal_planning(goal_id):
         
     except Exception as e:
         logger.error(f"API: Failed to trigger planning for goal #{goal_id}: {e}", exc_info=True)
-        return jsonify({
-            "error": str(e),
-            "goal_id": goal_id
-        }), 500
+        return api_error(
+            "GOAL_PLAN_FAILED",
+            "Failed to trigger goal planning",
+            500,
+            details=type(e).__name__,
+            extra={"goal_id": goal_id},
+        )
 
 
 def _ensure_today_plan_id() -> Optional[int]:
@@ -1671,7 +1957,12 @@ def insights_summary():
         return jsonify({"pending_counts": counts})
     except Exception as exc:
         logger.warning("API: insights summary failed: %s", exc, exc_info=True)
-        return jsonify({"pending_counts": {}, "error": "insights summary unavailable"})
+        return api_error(
+            "INSIGHTS_SUMMARY_FAILED",
+            "Insights summary unavailable",
+            500,
+            details=type(exc).__name__,
+        )
 
 
 @app.route("/api/insights/list", methods=["GET"])
@@ -1695,7 +1986,12 @@ def insights_list():
         return jsonify({"insights": items})
     except Exception as exc:
         logger.warning("API: insights list failed: %s", exc, exc_info=True)
-        return jsonify({"insights": [], "error": "insights list unavailable"})
+        return api_error(
+            "INSIGHTS_LIST_FAILED",
+            "Insights list unavailable",
+            500,
+            details=type(exc).__name__,
+        )
 
 
 @app.route("/api/insights/apply", methods=["POST"])
@@ -1707,10 +2003,10 @@ def insights_apply():
     data = request.get_json() or {}
     insight_id = data.get("id")
     if not insight_id:
-        return jsonify({"error": "id is required"}), 400
+        return api_error("VALIDATION_ERROR", "id is required", 400)
     insight = insights_repository.get_insight_by_id(DEFAULT_USER_ID, insight_id)
     if not insight:
-        return jsonify({"error": "insight not found"}), 404
+        return api_error("INSIGHT_NOT_FOUND", "Insight not found", 404)
 
     try:
         created_count = 0
@@ -1746,7 +2042,12 @@ def insights_apply():
         })
     except Exception as exc:
         logging.getLogger("API").error(f"API: failed to apply insight {insight_id}: {exc}", exc_info=True)
-        return jsonify({"error": str(exc)}), 500
+        return api_error(
+            "INSIGHT_APPLY_FAILED",
+            "Failed to apply insight",
+            500,
+            details=type(exc).__name__,
+        )
 
 
 @app.route("/api/goal-tasks/history", methods=["GET"])
@@ -1796,7 +2097,12 @@ def goal_task_history():
         })
     except Exception as exc:
         logger.warning("API: goal task history fetch failed: %s", exc, exc_info=True)
-        return jsonify({"goal_tasks": [], "error": "history unavailable"}), 500
+        return api_error(
+            "GOAL_TASK_HISTORY_FAILED",
+            "History unavailable",
+            500,
+            details=type(exc).__name__,
+        )
 
 
 @app.route("/api/insights/dismiss", methods=["POST"])
@@ -1808,17 +2114,22 @@ def insights_dismiss():
     data = request.get_json() or {}
     insight_id = data.get("id")
     if not insight_id:
-        return jsonify({"error": "id is required"}), 400
+        return api_error("VALIDATION_ERROR", "id is required", 400)
     insight = insights_repository.get_insight_by_id(DEFAULT_USER_ID, insight_id)
     if not insight:
-        return jsonify({"error": "insight not found"}), 404
+        return api_error("INSIGHT_NOT_FOUND", "Insight not found", 404)
 
     try:
         insights_repository.update_insight_status(insight_id, "dismissed", user_id=DEFAULT_USER_ID)
         counts = insights_repository.count_pending_by_type(DEFAULT_USER_ID)
         return jsonify({"ok": True, "insights_meta": {"pending_counts": counts}})
     except Exception as exc:
-        return jsonify({"error": str(exc)}), 500
+        return api_error(
+            "INSIGHT_DISMISS_FAILED",
+            "Failed to dismiss insight",
+            500,
+            details=type(exc).__name__,
+        )
 
 
 @app.route("/api/health/db", methods=["GET"])
@@ -1842,17 +2153,22 @@ def health_check_db():
                 "database": "PostgreSQL (Neon)"
             }), 200
         else:
-            return jsonify({
-                "status": "error",
-                "details": "Query returned unexpected result"
-            }), 500
+            return api_error(
+                "DB_HEALTH_FAILED",
+                "Database health check failed",
+                500,
+                details="unexpected_result",
+                extra={"status": "error"},
+            )
             
     except Exception as e:
-        return jsonify({
-            "status": "error",
-            "details": str(e),
-            "message": "Database connection failed"
-        }), 503
+        return api_error(
+            "DB_HEALTH_FAILED",
+            "Database connection failed",
+            503,
+            details=type(e).__name__,
+            extra={"status": "error"},
+        )
 
 
 @app.route("/", methods=["GET"])
