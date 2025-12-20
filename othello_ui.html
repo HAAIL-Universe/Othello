@@ -48,6 +48,52 @@
       .waking-overlay__retry.visible {
         display: inline-block;
       }
+      .login-card {
+        background: var(--bg-2);
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        padding: 1.5rem;
+        width: min(420px, 90%);
+        box-shadow: var(--glow);
+      }
+      .login-title {
+        font-size: 1.25rem;
+        font-weight: 700;
+        margin-bottom: 0.35rem;
+        color: var(--text-main);
+      }
+      .login-subtitle {
+        color: var(--text-soft);
+        font-size: 0.95rem;
+      }
+      .login-form {
+        display: flex;
+        flex-direction: column;
+        gap: 0.75rem;
+        margin-top: 1rem;
+      }
+      .login-input {
+        padding: 0.85rem 0.9rem;
+        border-radius: 10px;
+        border: 1px solid var(--border);
+        background: var(--card-bg);
+        color: var(--text-main);
+        font-size: 1rem;
+      }
+      .login-button {
+        padding: 0.9rem;
+        border-radius: 10px;
+        border: 1px solid var(--accent);
+        background: var(--accent-soft);
+        color: var(--accent);
+        font-size: 1rem;
+        cursor: pointer;
+      }
+      .login-error {
+        min-height: 1rem;
+        color: #fca5a5;
+        font-size: 0.95rem;
+      }
     </style>
   <meta charset="UTF-8" />
   <title>Othello — Personal Goal Architect</title>
@@ -1184,6 +1230,17 @@
       <div id="connect-status" class="waking-overlay__status" style="margin-top:1.2rem;">Connecting to server…</div>
       <button id="connect-retry" class="waking-overlay__retry">Retry</button>
     </div>
+    <div id="login-overlay" class="waking-overlay" style="display:none;">
+      <div class="login-card">
+        <div class="login-title">Sign in</div>
+        <div class="login-subtitle">Enter your access code to load your goals.</div>
+        <form id="loginForm" class="login-form">
+          <input id="login-pin" class="login-input" type="password" placeholder="Access code" autocomplete="current-password" required />
+          <button id="login-btn" class="login-button" type="submit">Continue</button>
+          <div id="login-error" class="login-error"></div>
+        </form>
+      </div>
+    </div>
   <div class="shell">
 
     <!-- HEADER -->
@@ -1336,6 +1393,19 @@
         console.log('bootState:', state);
       }
     }
+    const loginOverlay = document.getElementById('login-overlay');
+    const loginForm = document.getElementById('loginForm');
+    const loginPin = document.getElementById('login-pin');
+    const loginBtn = document.getElementById('login-btn');
+    const loginError = document.getElementById('login-error');
+    const BOOT_STATE = {
+      CHECKING_AUTH: "checking_auth",
+      NEEDS_LOGIN: "needs_login",
+      BOOTING_APP: "booting_app",
+      AUTHENTICATED: "authenticated",
+      ERROR: "error",
+    };
+    let isAuthed = false;
       // --- Boot State Machine ---
       // BOOT_DEBUG flag for boot instrumentation
       const BOOT_DEBUG = location.search.includes("bootdebug=1");
@@ -1397,6 +1467,34 @@
         connectRetry.classList.remove('visible');
       }
 
+      function showLoginOverlay(message) {
+        if (loginOverlay) {
+          loginOverlay.style.display = 'flex';
+          loginOverlay.style.pointerEvents = 'all';
+        }
+        if (loginError) {
+          loginError.textContent = message || '';
+        }
+        if (loginPin) {
+          loginPin.value = '';
+          loginPin.disabled = false;
+          loginPin.focus();
+        }
+        if (loginBtn) {
+          loginBtn.disabled = false;
+        }
+      }
+
+      function hideLoginOverlay() {
+        if (loginOverlay) {
+          loginOverlay.style.display = 'none';
+          loginOverlay.style.pointerEvents = 'none';
+        }
+        if (loginError) {
+          loginError.textContent = '';
+        }
+      }
+
       let _waitForReadyActive = false;
       async function checkApiHealth() {
         showConnectOverlay('Connecting to server…');
@@ -1406,11 +1504,11 @@
         try {
           const controller = new AbortController();
           const timeout = setTimeout(() => controller.abort(), 10000);
-          resp = await fetch('/api/health', { credentials: 'omit', cache: 'no-store', signal: controller.signal });
+          resp = await fetch('/ready', { credentials: 'omit', cache: 'no-store', signal: controller.signal });
           clearTimeout(timeout);
           if (resp.ok) {
             data = await resp.json();
-            if (data && (data.ok === true || data.status === 'ok')) {
+            if (data && (data.ready === true || data.ok === true || data.status === 'ok')) {
               hideConnectOverlay();
               // Defensive: forcibly hide overlay in case of race/logic bug
               if (connectOverlay) {
@@ -1420,6 +1518,9 @@
               connectBackoff = 500;
               connectAttempts = 0;
               return true;
+            } else if (data && data.reason) {
+              showConnectError(`Server not ready: ${data.reason}`);
+              return false;
             }
           }
           showConnectError('Server is unreachable (bad response).');
@@ -1438,11 +1539,13 @@
         setBootState(BOOT_STATE.CHECKING_AUTH);
         if (BOOT_DEBUG) console.log('[BOOT] Transition: CHECKING_AUTH');
         try {
-          const resp = await fetch('/api/auth/me', { credentials: 'same-origin', cache: 'no-store' });
+          const resp = await fetch('/api/auth/me', { credentials: 'include', cache: 'no-store' });
           if (resp.ok) {
             const data = await resp.json();
             if (BOOT_DEBUG) console.log('[BOOT] /api/auth/me', data);
-            if (data && data.authed) {
+            if (data && (data.authenticated || data.authed)) {
+              isAuthed = true;
+              hideLoginOverlay();
               setBootState(BOOT_STATE.AUTHENTICATED);
               if (BOOT_DEBUG) console.log('[BOOT] Transition: AUTHENTICATED');
               bootApp();
@@ -1452,6 +1555,8 @@
         } catch (e) {
           if (BOOT_DEBUG) console.log('[BOOT] /api/auth/me error', e);
         }
+        isAuthed = false;
+        showLoginOverlay();
         setBootState(BOOT_STATE.NEEDS_LOGIN);
         if (BOOT_DEBUG) console.log('[BOOT] Transition: NEEDS_LOGIN');
             // Global error handlers for bootdebug
@@ -1472,25 +1577,28 @@
       }
 
       async function handleLogin(pin) {
+        if (!loginBtn || !loginPin) return;
         loginBtn.disabled = true;
         loginPin.disabled = true;
-        loginError.textContent = '';
+        if (loginError) loginError.textContent = '';
         try {
           const resp = await fetch('/api/auth/login', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            credentials: 'same-origin',
+            credentials: 'include',
             body: JSON.stringify({ password: pin })
           });
           if (resp.ok) {
             const data = await resp.json();
             if (BOOT_DEBUG) console.log('[BOOT] /api/auth/login', data);
-            if (data && (data.ok || data.authed)) {
+            if (data && (data.ok || data.authed || data.authenticated)) {
+              isAuthed = true;
+              hideLoginOverlay();
               setBootState(BOOT_STATE.AUTHENTICATED);
               bootApp();
               return;
             } else {
-              loginError.textContent = (data && data.error) || 'Invalid PIN.';
+              if (loginError) loginError.textContent = (data && data.error) || 'Invalid PIN.';
             }
           } else {
             let errMsg = 'Login failed.';
@@ -1499,14 +1607,16 @@
               // Show backend 503 server_misconfigured error inline
               if (resp.status === 503 && data && data.error === 'server_misconfigured') {
                 errMsg = data.detail || 'Server misconfigured.';
+              } else if (data && data.error) {
+                errMsg = data.error;
               } else {
                 errMsg = data.error || errMsg;
               }
             } catch {}
-            loginError.textContent = errMsg;
+            if (loginError) loginError.textContent = errMsg;
           }
         } catch (e) {
-          loginError.textContent = 'Network error.';
+          if (loginError) loginError.textContent = 'Network error.';
         }
         loginPin.value = '';
         loginBtn.disabled = false;
@@ -1516,10 +1626,17 @@
 
       async function handleLogout() {
         try {
-          await fetch('/api/auth/logout', { method: 'POST', credentials: 'same-origin' });
+          await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' });
         } catch {}
         // Clear UI state if needed
+        isAuthed = false;
+        showLoginOverlay();
         setBootState(BOOT_STATE.NEEDS_LOGIN);
+      }
+
+      async function handleUnauthorized(origin) {
+        if (BOOT_DEBUG) console.log('[AUTH] Unauthorized', origin || '');
+        await handleLogout();
       }
 
       function bootApp() {
@@ -1527,6 +1644,17 @@
         if (BOOT_DEBUG) console.log('[BOOT] Booting app…');
         setTimeout(async () => {
           try {
+            if (!isAuthed) {
+              await checkAuth();
+              if (!isAuthed) return;
+            }
+            hideLoginOverlay();
+            if (typeof refreshGoals === 'function') {
+              await refreshGoals();
+            }
+            if (typeof refreshInsightsCounts === 'function') {
+              await refreshInsightsCounts();
+            }
             if (typeof loadTodayPlanner === 'function') {
               await loadTodayPlanner();
             }
@@ -1534,7 +1662,7 @@
           } catch (e) {
             if (e && (e.status === 401 || e.status === 403)) {
               if (BOOT_DEBUG) console.log('[BOOT] Data call 401/403, forcing re-auth');
-              await checkAuth();
+              await handleUnauthorized('boot');
             } else {
               // Show in-app error banner (not overlay)
               if (plannerError) {
@@ -1553,7 +1681,7 @@
       });
 
       const loginForm = document.getElementById('loginForm');
-      if (loginForm) {
+      if (loginForm && loginPin) {
         loginForm.addEventListener('submit', (e) => {
           e.preventDefault();
           if (loginPin.value.trim()) {
@@ -1563,7 +1691,7 @@
         loginPin.addEventListener('keydown', (e) => {
           if (e.key === 'Enter') {
             e.preventDefault();
-            loginBtn.click();
+            if (loginBtn) loginBtn.click();
           }
         });
       }
@@ -1585,8 +1713,7 @@
         if (BOOT_DEBUG) console.log('[BOOT] Starting unified boot sequence');
         const healthy = await checkApiHealth();
         if (healthy) {
-          // continue with app init (auth, etc.)
-          // ...existing code for authentication and app boot...
+          await checkAuth();
         }
       })();
     const API = "/api/message";
@@ -1731,8 +1858,13 @@
         applyInsightsMeta(meta);
         return;
       }
+      if (!isAuthed) return;
       try {
         const resp = await fetch("/api/insights/summary", { credentials: "include" });
+        if (resp.status === 401 || resp.status === 403) {
+          await handleUnauthorized('insights-summary');
+          return;
+        }
         if (!resp.ok) return;
         const data = await resp.json();
         applyInsightsMeta(data);
@@ -1865,6 +1997,11 @@
 
     async function fetchTodayBrief() {
       const resp = await fetch("/api/today-brief", { credentials: "include" });
+      if (resp.status === 401 || resp.status === 403) {
+        const err = new Error("Unauthorized");
+        err.status = resp.status;
+        throw err;
+      }
       if (!resp.ok) throw new Error("Failed to load brief");
       const data = await resp.json();
       return data.brief || {};
@@ -1872,6 +2009,11 @@
 
     async function fetchTodayPlan() {
       const resp = await fetch(`/api/today-plan?ts=${Date.now()}`, { cache: "no-store", credentials: "include" });
+      if (resp.status === 401 || resp.status === 403) {
+        const err = new Error("Unauthorized");
+        err.status = resp.status;
+        throw err;
+      }
       if (!resp.ok) throw new Error("Failed to load plan");
       const data = await resp.json();
       return data.plan || {};
@@ -2132,6 +2274,10 @@
         renderPlannerSections(plan, goalTasks);
       } catch (e) {
         let httpStatus = null;
+        if (e && (e.status === 401 || e.status === 403)) {
+          await handleUnauthorized('today-planner');
+          return;
+        }
         if (e && e.response && e.response.status) httpStatus = e.response.status;
         if (e && e.message && e.message.startsWith('Failed to load plan')) {
           // Try to extract HTTP status from error message if present
@@ -2145,6 +2291,10 @@
 
     async function fetchInsightsList(status = "pending") {
       const resp = await fetch(`/api/insights/list?status=${encodeURIComponent(status)}`, { credentials: "include" });
+      if (resp.status === 401 || resp.status === 403) {
+        await handleUnauthorized('insights-list');
+        throw new Error("Unauthorized");
+      }
       if (!resp.ok) throw new Error("Failed to load insights");
       const data = await resp.json();
       return data.insights || [];
@@ -2771,8 +2921,13 @@
     }
 
     async function refreshGoals() {
+      if (!isAuthed) return;
       try {
         const res = await fetch(GOALS_API, { credentials: "include" });
+        if (res.status === 401 || res.status === 403) {
+          await handleUnauthorized('goals');
+          return;
+        }
         if (!res.ok) throw new Error("Failed to fetch goals");
         const data = await res.json();
         const goals = data.goals || [];
@@ -2929,7 +3084,7 @@
     });
 
     // ===== INITIALIZATION =====
-    refreshGoals();
+    // Boot sequence (bootUnified) handles auth + data fetches
   </script>
 </body>
 </html>

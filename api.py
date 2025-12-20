@@ -9,13 +9,18 @@ from typing import Any, Dict, Optional
 from functools import wraps
 from passlib.hash import bcrypt
 import mimetypes
-from utils.llm_config import is_openai_configured
+from utils.llm_config import is_openai_configured, get_openai_api_key
 import openai
 import uuid
 
 # NOTE: Keep import-time work minimal! Do not import LLM/agent modules or connect to DB at module scope unless required for health endpoints.
 from dotenv import load_dotenv
-load_dotenv()
+
+# Preserve any runtime-provided OPENAI_API_KEY (e.g., Render env var) when loading local .env for dev.
+_preexisting_openai_key = os.environ.get("OPENAI_API_KEY")
+load_dotenv(override=False)
+if _preexisting_openai_key and _preexisting_openai_key.strip():
+    os.environ["OPENAI_API_KEY"] = _preexisting_openai_key
 
 # Configure logging to show DEBUG messages
 logging.basicConfig(
@@ -100,7 +105,8 @@ def get_runtime_config_snapshot():
     """
     env = os.environ
     def present(key):
-        return bool(env.get(key))
+        val = env.get(key)
+        return bool(val and str(val).strip())
 
     # Auth mode
     if present("OTHELLO_PIN_HASH"):
@@ -260,6 +266,12 @@ _agent_components = None
 _agent_init_error = None
 
 
+def _openai_key_present() -> bool:
+    """Check for a non-empty OPENAI_API_KEY without logging secrets."""
+    key = os.getenv("OPENAI_API_KEY")
+    return bool(key and key.strip())
+
+
 def log_llm_startup_status():
     logger = logging.getLogger("API.Startup")
     model = (
@@ -268,7 +280,7 @@ def log_llm_startup_status():
         or os.getenv("OPENAI_MODEL")
         or "gpt-4o-mini"
     )
-    key_present = bool(os.getenv("OPENAI_API_KEY"))
+    key_present = _openai_key_present()
     logger.info("[Startup] OPENAI_API_KEY_present=%s model=%s", key_present, model)
 
 
@@ -333,7 +345,7 @@ def get_agent_components():
             extract_insights_from_exchange=extract_insights_from_exchange,
         )
         _agent_init_error = None
-        logger.info("[AgentInit] OPENAI_API_KEY_present=%s model=%s", bool(os.getenv("OPENAI_API_KEY")), model)
+        logger.info("[AgentInit] OPENAI_API_KEY_present=%s model=%s", _openai_key_present(), model)
         return _agent_components
     except Exception as e:
         _agent_components = None
@@ -455,10 +467,39 @@ def require_auth(f):
     return decorated
 
 
+def _ready_state() -> dict:
+    """Return readiness info without exposing secrets."""
+    key_present = _openai_key_present()
+    agent_error = _agent_init_error
+    ready = key_present and agent_error is None
+    reason = None
+    if not key_present:
+        reason = "OPENAI_API_KEY missing or empty"
+    elif agent_error is not None:
+        reason = f"agent_init_error:{type(agent_error).__name__}"
+
+    return {
+        "ready": ready,
+        "openai_key_present": key_present,
+        "agent_init_error": type(agent_error).__name__ if agent_error else None,
+        "reason": reason,
+    }
+
+
 # Always-on health endpoint for connection checks (does not check DB)
 @app.route("/api/health", methods=["GET"])
 def health_check():
     return jsonify({"ok": True})
+
+
+@app.route("/ready", methods=["GET"])
+def ready_check():
+    """Lightweight readiness probe focused on critical runtime config."""
+    state = _ready_state()
+    status = 200 if state["ready"] else 503
+    # Do not include None values in the response
+    body = {k: v for k, v in state.items() if v is not None}
+    return jsonify(body), status
 
 # Serve static assets (JS, CSS, etc.) if referenced as /static/...
 @app.route('/static/<path:filename>')
@@ -586,11 +627,18 @@ def handle_message():
             request_id,
             exc_info=True,
         )
+        detail = "Missing or invalid OPENAI_API_KEY"
+        if _agent_init_error:
+            if isinstance(_agent_init_error, ValueError) and "OPENAI_API_KEY" in str(_agent_init_error):
+                detail = "Missing or invalid OPENAI_API_KEY"
+            else:
+                detail = f"Agent init failed ({type(_agent_init_error).__name__})"
         return jsonify({
             "ok": False,
             "error_code": "LLM_INIT_FAILED",
             "message": "LLM unavailable",
-            "details": "Missing or invalid OPENAI_API_KEY"
+            "details": detail,
+            "request_id": request_id
         }), 503
     
     # Set active goal from client focus if provided

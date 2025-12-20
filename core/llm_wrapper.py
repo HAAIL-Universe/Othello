@@ -39,10 +39,10 @@ def pick_model(default: str = "gpt-4o"):
 
 class LLMWrapper:
     def __init__(self, model: Optional[str] = None):
-        load_dotenv()
+        load_dotenv(override=False)
         api_key = get_openai_api_key()
         if not api_key:
-            raise ValueError("OPENAI_API_KEY environment variable not set.")
+            raise ValueError("OPENAI_API_KEY environment variable not set or empty.")
 
         self.client = openai.OpenAI(api_key=api_key)
 
