@@ -514,11 +514,25 @@ def health_check():
 @app.route("/ready", methods=["GET"])
 def ready_check():
     """Lightweight readiness probe focused on critical runtime config."""
-    state = _ready_state()
-    status = 200 if state["ready"] else 503
-    # Do not include None values in the response
-    body = {k: v for k, v in state.items() if v is not None}
-    return jsonify(body), status
+    try:
+        state = _ready_state()
+        status = 200 if state["ready"] else 503
+        body = {k: v for k, v in state.items() if v is not None}
+        body["ok"] = bool(state["ready"])
+        if not state["ready"]:
+            body["error_code"] = "NOT_READY"
+            body["message"] = "Service not ready"
+            body["details"] = state.get("reason")
+        return jsonify(body), status
+    except Exception as exc:
+        logging.getLogger("API").error("ready_check failed: %s", exc, exc_info=True)
+        return jsonify({
+            "ok": False,
+            "ready": False,
+            "error_code": "NOT_READY",
+            "message": "Service not ready",
+            "details": "ready_check_exception",
+        }), 503
 
 # Serve static assets (JS, CSS, etc.) if referenced as /static/...
 @app.route('/static/<path:filename>')

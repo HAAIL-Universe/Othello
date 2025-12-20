@@ -1506,24 +1506,39 @@
           const timeout = setTimeout(() => controller.abort(), 10000);
           resp = await fetch('/ready', { credentials: 'omit', cache: 'no-store', signal: controller.signal });
           clearTimeout(timeout);
-          if (resp.ok) {
-            data = await resp.json();
-            if (data && (data.ready === true || data.ok === true || data.status === 'ok')) {
-              hideConnectOverlay();
-              // Defensive: forcibly hide overlay in case of race/logic bug
-              if (connectOverlay) {
-                connectOverlay.style.display = 'none';
-                connectOverlay.style.pointerEvents = 'none';
-              }
-              connectBackoff = 500;
-              connectAttempts = 0;
-              return true;
-            } else if (data && data.reason) {
-              showConnectError(`Server not ready: ${data.reason}`);
-              return false;
+          const ct = resp.headers.get('content-type') || '';
+          if (ct.includes('application/json')) {
+            try {
+              data = await resp.json();
+            } catch (e) {
+              // leave data null; will fall through to error messaging
             }
           }
-          showConnectError('Server is unreachable (bad response).');
+
+          const ready = data && (data.ready === true || data.ok === true || data.status === 'ok');
+          if (resp.ok && ready) {
+            hideConnectOverlay();
+            if (connectOverlay) {
+              connectOverlay.style.display = 'none';
+              connectOverlay.style.pointerEvents = 'none';
+            }
+            connectBackoff = 500;
+            connectAttempts = 0;
+            return true;
+          }
+
+          if (data && data.ready === false) {
+            const reason = data.details || data.reason || data.message || `status ${resp.status}`;
+            showConnectError(`Service not ready: ${reason}`);
+            return false;
+          }
+
+          if (resp.status === 503) {
+            showConnectError('Service not ready (503).');
+            return false;
+          }
+
+          showConnectError(`Server is unreachable (status ${resp.status || 'unknown'}).`);
         } catch (e) {
           showConnectError('Server is unreachable.');
         }
