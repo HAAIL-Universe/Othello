@@ -38,7 +38,13 @@ class DbGoalManager:
     # ------------------------------------------------------------------
     # Helpers for per-goal log events (DB-backed)
     # ------------------------------------------------------------------
-    def add_note_to_goal(self, goal_id: int, role: str, content: str) -> Dict[str, Any]:
+    def add_note_to_goal(
+        self,
+        goal_id: int,
+        role: str,
+        content: str,
+        request_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
         """
         Append a note to this goal's log (DB goal_events).
         """
@@ -54,7 +60,14 @@ class DbGoalManager:
             "role": role,
             "content": content,
         }
-        result = safe_append_goal_event(self.DEFAULT_USER_ID, goal_id, None, "note", note)
+        result = safe_append_goal_event(
+            self.DEFAULT_USER_ID,
+            goal_id,
+            None,
+            "note",
+            note,
+            request_id=request_id,
+        )
         if not result.get("ok", False):
             self.logger.warning(
                 "DbGoalManager: goal_events append skipped for goal %s reason=%s",

@@ -72,7 +72,7 @@ def api_error(
     return response
 
 # Helper function to classify OpenAI errors and return appropriate JSON responses
-def handle_llm_error(e: Exception, logger: logging.Logger) -> tuple[dict, int]:
+def handle_llm_error(e: Exception, logger: logging.Logger):
     """
     Classify LLM/OpenAI errors and return structured JSON response with appropriate status code.
     
@@ -97,56 +97,51 @@ def handle_llm_error(e: Exception, logger: logging.Logger) -> tuple[dict, int]:
     
     # Timeout errors
     if isinstance(e, (openai.APITimeoutError, httpx.TimeoutException)):
-        return {
-            "error_code": "LLM_TIMEOUT",
-            "message": "LLM timeout",
-            "details": "LLM request timed out",
-            "request_id": request_id,
-        }, 504
+        return api_error("LLM_TIMEOUT", "LLM timeout", 504, details="LLM request timed out")
 
     # Authentication errors
     if isinstance(e, openai.AuthenticationError):
-        return {
-            "error_code": "LLM_AUTH_FAILED",
-            "message": "LLM auth failed",
-            "details": "Invalid API key or auth failure",
-            "request_id": request_id,
-        }, 503
+        return api_error(
+            "LLM_AUTH_FAILED",
+            "LLM auth failed",
+            503,
+            details="Invalid API key or auth failure",
+        )
     
     # Rate limit errors  
     if isinstance(e, openai.RateLimitError):
-        return {
-            "error_code": "LLM_RATE_LIMIT",
-            "message": "LLM rate limit reached",
-            "details": "API rate limit exceeded. Please try again later.",
-            "request_id": request_id,
-        }, 429
+        return api_error(
+            "LLM_RATE_LIMIT",
+            "LLM rate limit reached",
+            429,
+            details="API rate limit exceeded. Please try again later.",
+        )
     
     # Connection errors
     if isinstance(e, openai.APIConnectionError):
-        return {
-            "error_code": "LLM_CONNECTION_ERROR",
-            "message": "LLM connection error",
-            "details": "Could not connect to LLM service",
-            "request_id": request_id,
-        }, 502
+        return api_error(
+            "LLM_CONNECTION_ERROR",
+            "LLM connection error",
+            502,
+            details="Could not connect to LLM service",
+        )
     
     # Other OpenAI API errors
     if isinstance(e, openai.OpenAIError):
-        return {
-            "error_code": "LLM_UPSTREAM_ERROR",
-            "message": "LLM upstream error",
-            "details": f"LLM service error: {error_class}",
-            "request_id": request_id,
-        }, 502
+        return api_error(
+            "LLM_UPSTREAM_ERROR",
+            "LLM upstream error",
+            502,
+            details=f"LLM service error: {error_class}",
+        )
     
     # Generic error for non-OpenAI exceptions
-    return {
-        "error_code": "LLM_INTERNAL_ERROR",
-        "message": "Internal error",
-        "details": f"An unexpected error occurred: {error_class}",
-        "request_id": request_id,
-    }, 500
+    return api_error(
+        "LLM_INTERNAL_ERROR",
+        "Internal error",
+        500,
+        details=f"An unexpected error occurred: {error_class}",
+    )
 
 
 def _unwrap_llm_exception(exc: Exception) -> Optional[Exception]:
@@ -1261,8 +1256,7 @@ def handle_message():
                     # Check if it's an LLM error - return structured error
                     llm_exc = _unwrap_llm_exception(e)
                     if llm_exc:
-                        error_response, status_code = handle_llm_error(llm_exc, logger)
-                        return jsonify(error_response), status_code
+                        return handle_llm_error(llm_exc, logger)
                 
                     # Otherwise provide generic error message in response
                     agentic_reply = (
@@ -1307,8 +1301,7 @@ def handle_message():
                     # Check if it's an LLM error - return structured error
                     llm_exc = _unwrap_llm_exception(e)
                     if llm_exc:
-                        error_response, status_code = handle_llm_error(llm_exc, logger)
-                        return jsonify(error_response), status_code
+                        return handle_llm_error(llm_exc, logger)
                 
                     # Otherwise provide generic error message in response
                     agentic_reply = (
@@ -1348,8 +1341,7 @@ def handle_message():
                 # Check if it's an LLM error - return structured error
                 llm_exc = _unwrap_llm_exception(e)
                 if llm_exc:
-                    error_response, status_code = handle_llm_error(llm_exc, logger)
-                    return jsonify(error_response), status_code
+                    return handle_llm_error(llm_exc, logger)
 
                 # Otherwise provide generic error message in response
                 agentic_reply = "I'm having trouble processing that right now. Could you try again?"
@@ -1389,8 +1381,18 @@ def handle_message():
         event_storage_ok = True
         event_emitted = True
         try:
-            user_event = architect_agent.goal_mgr.add_note_to_goal(active_goal["id"], "user", user_input)
-            assistant_event = architect_agent.goal_mgr.add_note_to_goal(active_goal["id"], "othello", agentic_reply)
+            user_event = architect_agent.goal_mgr.add_note_to_goal(
+                active_goal["id"],
+                "user",
+                user_input,
+                request_id=request_id,
+            )
+            assistant_event = architect_agent.goal_mgr.add_note_to_goal(
+                active_goal["id"],
+                "othello",
+                agentic_reply,
+                request_id=request_id,
+            )
             user_ok, user_reason = _event_ok(user_event)
             assistant_ok, assistant_reason = _event_ok(assistant_event)
             if not user_ok or not assistant_ok:
@@ -1765,7 +1767,14 @@ def archive_goal(goal_id):
     try:
         from db.goal_events_repository import safe_append_goal_event
         payload = {"previous_status": status, "new_status": "archived"}
-        result = safe_append_goal_event(DEFAULT_USER_ID, goal_id, None, "goal_archived", payload)
+        result = safe_append_goal_event(
+            DEFAULT_USER_ID,
+            goal_id,
+            None,
+            "goal_archived",
+            payload,
+            request_id=request_id,
+        )
         event_emitted = bool(result.get("ok"))
     except Exception as exc:
         logger.warning("API: Goal archive event skipped: %s", exc, exc_info=True)

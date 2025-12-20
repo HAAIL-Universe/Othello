@@ -1,18 +1,24 @@
 """Repository helpers for goal_events (append-only event ledger for goals)."""
 from typing import Any, Dict, List, Optional
 import logging
+import time
 import psycopg2
 from db.database import execute_query, fetch_one, fetch_all, execute_and_fetch_one
 
 logger = logging.getLogger("GoalEventsRepository")
-_goal_events_ensure_attempted = False
+_goal_events_ensure_ok = False
+_goal_events_last_attempt_ts = 0.0
+_goal_events_backoff_sec = 60.0
 
 
 def ensure_goal_events_table() -> None:
-    global _goal_events_ensure_attempted
-    if _goal_events_ensure_attempted:
+    global _goal_events_ensure_ok, _goal_events_last_attempt_ts
+    if _goal_events_ensure_ok:
         return
-    _goal_events_ensure_attempted = True
+    now = time.monotonic()
+    if now - _goal_events_last_attempt_ts < _goal_events_backoff_sec:
+        return
+    _goal_events_last_attempt_ts = now
     query = """
         CREATE TABLE IF NOT EXISTS goal_events (
             id SERIAL PRIMARY KEY,
@@ -26,10 +32,18 @@ def ensure_goal_events_table() -> None:
     """
     try:
         execute_query(query)
+        _goal_events_ensure_ok = True
     except psycopg2.Error as exc:
         logger.warning("Goal events table ensure failed: %s", exc, exc_info=True)
 
-def append_goal_event(user_id: str, goal_id: int, step_id: Optional[int], event_type: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+def append_goal_event(
+    user_id: str,
+    goal_id: int,
+    step_id: Optional[int],
+    event_type: str,
+    payload: Dict[str, Any],
+    request_id: Optional[str] = None,
+) -> Dict[str, Any]:
     query = """
         INSERT INTO goal_events (user_id, goal_id, step_id, event_type, payload, occurred_at)
         VALUES (%s, %s, %s, %s, %s, NOW())
@@ -38,7 +52,11 @@ def append_goal_event(user_id: str, goal_id: int, step_id: Optional[int], event_
     try:
         return execute_and_fetch_one(query, (user_id, goal_id, step_id, event_type, payload)) or {}
     except psycopg2.Error as exc:
-        logger.warning("Goal events insert failed: %s", exc, exc_info=True)
+        logger.warning(
+            "Goal events insert failed request_id=%s reason=%s",
+            request_id,
+            type(exc).__name__,
+        )
         return {}
 
 def list_goal_events(user_id: str, goal_id: int, limit: int = 50) -> List[Dict[str, Any]]:
@@ -52,16 +70,34 @@ def list_goal_events(user_id: str, goal_id: int, limit: int = 50) -> List[Dict[s
     return fetch_all(query, (user_id, goal_id, limit))
 
 
-def safe_append_goal_event(user_id: str, goal_id: int, step_id: Optional[int], event_type: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+def safe_append_goal_event(
+    user_id: str,
+    goal_id: int,
+    step_id: Optional[int],
+    event_type: str,
+    payload: Dict[str, Any],
+    request_id: Optional[str] = None,
+) -> Dict[str, Any]:
     """Append a goal event but never raise; returns ok=false payload on failure."""
+    ensure_goal_events_table()
     try:
-        event = append_goal_event(user_id, goal_id, step_id, event_type, payload)
+        event = append_goal_event(user_id, goal_id, step_id, event_type, payload, request_id=request_id)
         if event:
             return {"ok": True, "event": event}
+        logger.warning(
+            "Goal events append failed request_id=%s reason=%s",
+            request_id,
+            "empty_result",
+        )
         return {"ok": False, "reason": "empty_result"}
     except Exception as exc:
-        logger.warning("Goal events append failed: %s", exc, exc_info=True)
-        return {"ok": False, "reason": type(exc).__name__}
+        reason = type(exc).__name__
+        logger.warning(
+            "Goal events append failed request_id=%s reason=%s",
+            request_id,
+            reason,
+        )
+        return {"ok": False, "reason": reason}
 
 
 def safe_list_goal_events(user_id: str, goal_id: int, limit: int = 50) -> List[Dict[str, Any]]:

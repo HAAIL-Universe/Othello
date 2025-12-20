@@ -60,7 +60,13 @@ class LLMWrapper:
             with open(model_cache_path, "w") as f:
                 f.write(self.model)
 
-    def generate(self, prompt: str, system_prompt: Optional[str] = None, temperature: float = 0.7, max_tokens: int = 300) -> str:
+    def generate(
+        self,
+        prompt: str,
+        system_prompt: Optional[str] = None,
+        temperature: float = 0.7,
+        max_tokens: int = 300,
+    ) -> str:
         messages = []
         if system_prompt:
             messages.append({"role": "system", "content": system_prompt})
@@ -75,6 +81,20 @@ class LLMWrapper:
                 max_tokens=max_tokens
             )
             logging.debug("API call completed.")
+            finish_reason = None
+            if getattr(response, "choices", None):
+                finish_reason = response.choices[0].finish_reason
+            usage = getattr(response, "usage", None)
+            prompt_tokens = getattr(usage, "prompt_tokens", None) if usage else None
+            completion_tokens = getattr(usage, "completion_tokens", None) if usage else None
+            total_tokens = getattr(usage, "total_tokens", None) if usage else None
+            logging.info(
+                "OpenAI response finish_reason=%s prompt_tokens=%s completion_tokens=%s total_tokens=%s",
+                finish_reason,
+                prompt_tokens,
+                completion_tokens,
+                total_tokens,
+            )
             response_content = response.choices[0].message.content
             if response_content is not None:
                 return response_content.strip()
@@ -104,7 +124,7 @@ class LLMWrapper:
             raise ValueError("OpenAI chat completion failed") from e
 
 class AsyncLLMWrapper(LLMWrapper):
-    async def chat(self, messages):
+    async def chat(self, messages, *, max_tokens: Optional[int] = None):
         # messages is a list of dicts: [{role: ..., content: ...}]
         # Pull out system and user prompt for .generate()
         system_prompt = None
@@ -116,4 +136,6 @@ class AsyncLLMWrapper(LLMWrapper):
                 user_prompt = msg.get("content")
         # Run synchronous generate() in a thread so async works
         import asyncio
-        return await asyncio.to_thread(self.generate, user_prompt, system_prompt)
+        if max_tokens is None:
+            return await asyncio.to_thread(self.generate, user_prompt, system_prompt)
+        return await asyncio.to_thread(self.generate, user_prompt, system_prompt, max_tokens=max_tokens)

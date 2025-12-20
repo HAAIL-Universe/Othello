@@ -313,7 +313,7 @@ class Architect:
                 self.logger.debug(f"ARCHITECT FINAL SYSTEM MESSAGE:\n{final_system_prompt}")
 
             # ---- Call LLM -------------------------------------------------------
-            raw_response = await async_retry(self.model.chat, messages)
+            raw_response = await async_retry(self.model.chat, messages, max_tokens=1000)
 
             # Ensure we always end up with a string for type safety / Pylance
             if isinstance(raw_response, str):
