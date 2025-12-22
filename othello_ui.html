@@ -3100,6 +3100,7 @@
       }
 
       othelloState.activeGoalId = null;
+      othelloState.pendingGoalEdit = null;
       updateFocusRibbon();
       if (othelloState.currentView === "goals") {
         renderGoalsList();
@@ -3165,6 +3166,7 @@
       if (!(goalId in othelloState.goalUpdateCounts)) {
         othelloState.goalUpdateCounts[goalId] = 0;
       }
+      othelloState.pendingGoalEdit = null;
       updateFocusRibbon();
     }
 
@@ -3271,7 +3273,15 @@
             };
           }
         } else if (metaIntent === "pending_goal_edit_applied") {
+          const pendingGoalId = othelloState.pendingGoalEdit
+            ? othelloState.pendingGoalEdit.goal_id
+            : null;
           othelloState.pendingGoalEdit = null;
+          if (othelloState.currentDetailGoalId != null) {
+            if (pendingGoalId == null || othelloState.currentDetailGoalId === pendingGoalId) {
+              refreshGoalDetail();
+            }
+          }
           if (statusEl) {
             const prevStatus = statusEl.textContent;
             const ok = !!(data.meta && data.meta.ok);
@@ -3553,6 +3563,33 @@
       });
     }
 
+    function normalizeGoalActivity(goal) {
+      if (!goal) return [];
+      const conversation = Array.isArray(goal.conversation) ? goal.conversation : null;
+      if (conversation && conversation.length) return conversation;
+      const events = Array.isArray(goal.events)
+        ? goal.events
+        : (Array.isArray(goal.goal_events) ? goal.goal_events : []);
+      if (!events || !events.length) return [];
+      return events.map((entry) => {
+        if (!entry || typeof entry !== "object") return null;
+        const payload = entry.payload && typeof entry.payload === "object" ? entry.payload : {};
+        const role = entry.role || payload.role || entry.event_type || "system";
+        const content = entry.content || entry.message || payload.content || payload.message || "";
+        const timestamp = entry.timestamp || entry.occurred_at || payload.timestamp || "";
+        return { role, content, timestamp };
+      }).filter((entry) => entry && entry.content);
+    }
+
+    function escapeHtml(value) {
+      return String(value || "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
+    }
+
     function renderGoalDetail(goal) {
       if (!goal) return;
       detailGoalId.textContent = `Goal #${goal.id}`;
@@ -3562,10 +3599,12 @@
       let contentHtml = "";
 
       // Description / Intent
+      const intentBody = (goal.description || goal.intent || goal.body || "").trim();
+      const intentText = intentBody || goal.text || "No description provided.";
       contentHtml += `
         <div class="detail-section">
           <div class="detail-section__title">Intent</div>
-          <div class="detail-section__body">${goal.text || "No description provided."}</div>
+          <div class="detail-section__body">${escapeHtml(intentText)}</div>
         </div>
       `;
 
@@ -3580,19 +3619,25 @@
       }
 
       // Activity log (conversation history)
-      if (goal.conversation && Array.isArray(goal.conversation) && goal.conversation.length > 0) {
+      const activityEntries = normalizeGoalActivity(goal);
+      if (activityEntries.length > 0) {
         contentHtml += `
           <div class="detail-section">
             <div class="detail-section__title">Activity Log</div>
             <div class="activity-log">
         `;
 
-        goal.conversation.forEach(entry => {
-          const role = entry.role === "user" ? "You" : "Othello";
+        activityEntries.forEach(entry => {
+          const roleRaw = entry.role || "";
+          const role = roleRaw === "user"
+            ? "You"
+            : (roleRaw === "othello" || roleRaw === "assistant" || roleRaw === "bot")
+              ? "Othello"
+              : (roleRaw ? roleRaw.charAt(0).toUpperCase() + roleRaw.slice(1) : "System");
           contentHtml += `
             <div class="activity-item">
-              <div class="activity-item__role">${role}</div>
-              <div class="activity-item__text">${entry.content || ""}</div>
+              <div class="activity-item__role">${escapeHtml(role)}</div>
+              <div class="activity-item__text">${escapeHtml(entry.content || "")}</div>
             </div>
           `;
         });
@@ -3614,9 +3659,9 @@
       const planText = typeof goal.plan === "string" ? goal.plan.trim() : "";
       if (planSteps.length > 0) {
         const stepsHtml = planSteps.map(step => {
-          const label = step.description || step.label || "Step";
-          const status = step.status || "pending";
-          const due = step.due_date ? ` | due ${step.due_date}` : "";
+          const label = escapeHtml(step.description || step.label || "Step");
+          const status = escapeHtml(step.status || "pending");
+          const due = step.due_date ? ` | ${escapeHtml(`due ${step.due_date}`)}` : "";
           return `
             <div class="planner-step">
               <div class="planner-step__label">${label}</div>
@@ -3637,7 +3682,7 @@
         contentHtml += `
           <div class="detail-section">
             <div class="detail-section__title">Current Plan</div>
-            <div class="detail-section__body">${planText}</div>
+            <div class="detail-section__body">${escapeHtml(planText)}</div>
           </div>
         `;
       } else {
