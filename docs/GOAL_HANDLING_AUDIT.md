@@ -146,6 +146,26 @@
 - `GET /api/goals/{goal_id}`
   - `plan_steps[]` now includes optional `detail` and `detail_updated_at`.
 
+## Intelligent UX: Suggestion -> Explicit Commit
+- Suggestion detection is heuristic-only and non-mutating; no goals are created from detection.
+- UI attaches a high-visibility decision panel under the originating user bubble and highlights that bubble (`.ux-goal-intent`).
+- Suggestions do not imply saved state until an explicit commit endpoint returns success.
+- Dismissals are stored locally and optionally sent to `/api/suggestions/dismiss`.
+
+### Payload shapes
+- `POST /api/message` request body includes `client_message_id`.
+- `POST /api/message` response `meta.suggestions[]`:
+  - `{ "type": "goal_intent", "source_client_message_id": "<id>", "confidence": 0.0, "title_suggestion": "...", "body_suggestion": "..." }`
+- `POST /api/goals` request body:
+  - `{ "title": "...", "description": "...", "source_client_message_id": "<id>" }`
+  - Response includes `{ "goal_id": <int>, "meta": { "intent": "goal_created" } }`.
+- `POST /api/goals/{goal_id}/notes` request body:
+  - `{ "text": "...", "source_client_message_id": "<id>" }`
+  - Response includes `{ "meta": { "intent": "goal_note_added" } }`.
+- `POST /api/suggestions/dismiss` request body:
+  - `{ "source_client_message_id": "<id>", "type": "goal_intent" }`
+  - Response `{ "ok": true }`.
+
 ## Manual verification checklist
 - Focus a goal -> confirm "Build plan" buttons render for intent items.
 - Click "Build plan" -> plan steps appear in goal detail.
@@ -155,3 +175,7 @@
 - With BOOT_DEBUG enabled, confirm UI log shows normalized ids and `isFocusedGoal` true for active goal.
 - Verify server logs: step detail type log and no fallback warning during normal use.
 - Force a stale step id (rebuild plan section) -> detail save returns 409 `STEP_ID_STALE` unless `step_index` resolves.
+- Send a goal-intent message -> bubble is highlighted and "Is this a goal?" panel renders under it.
+- Click "Save as Goal" -> editor opens, confirm -> goal created only after success toast.
+- Click "Add to Focused Goal" -> note appended to active goal, no new goal created.
+- Click "Dismiss" -> panel removed and does not reappear after refresh.

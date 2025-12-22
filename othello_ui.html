@@ -896,11 +896,15 @@
 
     .msg-row {
       display: flex;
+      flex-direction: column;
+      align-items: flex-start;
+      gap: 0.45rem;
       animation: fadeIn 0.3s ease;
     }
 
     .msg-row.user {
       justify-content: flex-end;
+      align-items: flex-end;
     }
 
     .bubble {
@@ -925,6 +929,137 @@
       border: 1px solid rgba(71, 85, 105, 0.5);
       border-bottom-left-radius: 0.3rem;
       backdrop-filter: blur(12px);
+    }
+
+    .ux-goal-intent {
+      outline: 2px solid var(--accent);
+      box-shadow: 0 0 0 3px rgba(125, 211, 252, 0.3), 0 10px 24px rgba(15, 23, 42, 0.45);
+    }
+
+    .ux-goal-intent-panel {
+      max-width: 85%;
+      width: fit-content;
+      padding: 0.85rem 0.95rem;
+      border-radius: 14px;
+      border: 1px solid var(--accent);
+      background: rgba(2, 6, 23, 0.92);
+      box-shadow: 0 10px 30px rgba(15, 23, 42, 0.55), 0 0 0 2px rgba(125, 211, 252, 0.12);
+      display: flex;
+      flex-direction: column;
+      gap: 0.6rem;
+    }
+
+    .ux-goal-intent-panel__title {
+      font-weight: 700;
+      font-size: 0.95rem;
+      color: var(--text-main);
+    }
+
+    .ux-goal-intent-panel__subtitle {
+      font-size: 0.78rem;
+      color: var(--text-soft);
+    }
+
+    .ux-goal-intent-panel__actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      align-items: center;
+    }
+
+    .ux-goal-intent-btn {
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: rgba(15, 23, 42, 0.9);
+      color: var(--text-main);
+      padding: 0.45rem 0.75rem;
+      font-size: 0.82rem;
+      cursor: pointer;
+      transition: transform 0.12s ease, box-shadow 0.12s ease, border-color 0.12s ease;
+    }
+
+    .ux-goal-intent-btn.primary {
+      border-color: var(--accent);
+      background: var(--accent);
+      color: #0b1120;
+      font-weight: 600;
+      box-shadow: 0 6px 16px rgba(125, 211, 252, 0.35);
+    }
+
+    .ux-goal-intent-btn.secondary {
+      border-color: rgba(148, 163, 184, 0.5);
+      background: rgba(148, 163, 184, 0.12);
+    }
+
+    .ux-goal-intent-btn.link {
+      border: none;
+      background: transparent;
+      color: var(--text-soft);
+      text-decoration: underline;
+      padding: 0.35rem 0.4rem;
+    }
+
+    .ux-goal-intent-btn:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+      box-shadow: none;
+      transform: none;
+    }
+
+    .ux-goal-intent-editor {
+      margin-top: 0.6rem;
+      padding: 0.75rem;
+      border-radius: 12px;
+      border: 1px dashed rgba(148, 163, 184, 0.5);
+      background: rgba(2, 6, 23, 0.7);
+      display: flex;
+      flex-direction: column;
+      gap: 0.6rem;
+    }
+
+    .ux-goal-intent-input,
+    .ux-goal-intent-textarea {
+      width: 100%;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: rgba(15, 23, 42, 0.95);
+      color: var(--text-main);
+      padding: 0.55rem 0.7rem;
+      font-size: 0.88rem;
+    }
+
+    .ux-goal-intent-textarea {
+      min-height: 90px;
+      resize: vertical;
+    }
+
+    .ux-goal-intent-status {
+      font-size: 0.78rem;
+      color: var(--text-soft);
+      min-height: 1rem;
+    }
+
+    .toast {
+      position: fixed;
+      left: 50%;
+      bottom: calc(var(--input-height) + max(var(--safe-bottom), 0.5rem) + 0.6rem);
+      transform: translateX(-50%);
+      background: rgba(2, 6, 23, 0.96);
+      border: 1px solid var(--accent);
+      color: var(--text-main);
+      padding: 0.55rem 0.95rem;
+      border-radius: 999px;
+      font-size: 0.85rem;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.2s ease, transform 0.2s ease;
+      z-index: 120;
+      box-shadow: 0 10px 24px rgba(15, 23, 42, 0.6);
+    }
+
+    .toast.visible {
+      opacity: 1;
+      transform: translateX(-50%) translateY(-4px);
     }
 
     .meta {
@@ -1718,6 +1853,7 @@
 
   </div>
 
+  <div id="toast" class="toast"></div>
 
   <!-- JS -->
   <script>
@@ -2284,6 +2420,7 @@
     const insightsList = document.getElementById('insights-list');
     const insightsEmpty = document.getElementById('insights-empty');
     const insightsError = document.getElementById('insights-error');
+    const toastEl = document.getElementById('toast');
 
     // App state
     const othelloState = {
@@ -2294,9 +2431,63 @@
       currentDetailGoalId: null,
       pendingGoalEdit: null,
       goalUpdateCounts: {},
-      currentAgentStatus: null
+      currentAgentStatus: null,
+      messagesByClientId: {},
+      dismissedSuggestionIds: new Set()
     };
     let devResetEnabled = false;
+
+    const DISMISSED_SUGGESTIONS_KEY = "othello_dismissed_suggestions_v1";
+    const SUGGESTION_DISMISS_API = "/api/suggestions/dismiss";
+
+    function loadDismissedSuggestionIds() {
+      if (!othelloState.dismissedSuggestionIds) {
+        othelloState.dismissedSuggestionIds = new Set();
+      }
+      try {
+        const raw = localStorage.getItem(DISMISSED_SUGGESTIONS_KEY);
+        if (!raw) return;
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          parsed.forEach((item) => {
+            if (typeof item === "string" && item.trim()) {
+              othelloState.dismissedSuggestionIds.add(item);
+            }
+          });
+        }
+      } catch (err) {
+        console.warn("[Othello UI] dismissed suggestions load failed:", err);
+      }
+    }
+
+    function persistDismissedSuggestionIds() {
+      try {
+        const items = Array.from(othelloState.dismissedSuggestionIds || []);
+        localStorage.setItem(DISMISSED_SUGGESTIONS_KEY, JSON.stringify(items));
+      } catch (err) {
+        console.warn("[Othello UI] dismissed suggestions save failed:", err);
+      }
+    }
+
+    function showToast(message, timeoutMs = 1800) {
+      if (!toastEl) return;
+      toastEl.textContent = message;
+      toastEl.classList.add("visible");
+      window.clearTimeout(showToast._timer);
+      showToast._timer = window.setTimeout(() => {
+        toastEl.classList.remove("visible");
+      }, timeoutMs);
+    }
+
+    function generateClientMessageId() {
+      if (window.crypto && typeof window.crypto.randomUUID === "function") {
+        return window.crypto.randomUUID();
+      }
+      const rand = Math.random().toString(16).slice(2, 10);
+      return `msg_${Date.now()}_${rand}`;
+    }
+
+    loadDismissedSuggestionIds();
 
     const insightsCounts = {
       plan_pending: 0,
@@ -3281,6 +3472,13 @@
       const bubble = document.createElement("div");
       bubble.className = "bubble";
       bubble.textContent = text;
+      const clientMessageId = options && typeof options.clientMessageId === "string"
+        ? options.clientMessageId.trim()
+        : "";
+      if (clientMessageId) {
+        row.dataset.clientMessageId = clientMessageId;
+        bubble.dataset.clientMessageId = clientMessageId;
+      }
 
       const meta = document.createElement("div");
       meta.className = "meta";
@@ -3308,6 +3506,16 @@
       row.appendChild(bubble);
       chatLog.appendChild(row);
 
+      if (role === "user" && clientMessageId) {
+        othelloState.messagesByClientId[clientMessageId] = {
+          bubbleEl: bubble,
+          rowEl: row,
+          text,
+          ts: Date.now(),
+          panelEl: null,
+        };
+      }
+
       // Scroll to latest message
       requestAnimationFrame(() => {
         const chatView = document.getElementById("chat-view");
@@ -3318,6 +3526,350 @@
           });
         }
       });
+      return { row, bubble };
+    }
+
+    function suggestionKey(type, clientMessageId) {
+      return `${type}:${clientMessageId}`;
+    }
+
+    function isSuggestionDismissed(type, clientMessageId) {
+      if (!type || !clientMessageId) return true;
+      const key = suggestionKey(type, clientMessageId);
+      return othelloState.dismissedSuggestionIds && othelloState.dismissedSuggestionIds.has(key);
+    }
+
+    function recordSuggestionDismissal(type, clientMessageId) {
+      if (!type || !clientMessageId) return;
+      const key = suggestionKey(type, clientMessageId);
+      if (!othelloState.dismissedSuggestionIds) {
+        othelloState.dismissedSuggestionIds = new Set();
+      }
+      othelloState.dismissedSuggestionIds.add(key);
+      persistDismissedSuggestionIds();
+    }
+
+    async function postSuggestionDismissal(type, clientMessageId) {
+      if (!type || !clientMessageId) return;
+      try {
+        await fetch(SUGGESTION_DISMISS_API, {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          credentials: "include",
+          body: JSON.stringify({ type, source_client_message_id: clientMessageId })
+        });
+      } catch (err) {
+        console.warn("[Othello UI] suggestion dismiss failed:", err);
+      }
+    }
+
+    function pickSuggestionBody(suggestion, fallbackText) {
+      const raw = suggestion && typeof suggestion.body_suggestion === "string"
+        ? suggestion.body_suggestion.trim()
+        : "";
+      if (raw) return raw;
+      return (fallbackText || "").trim();
+    }
+
+    function pickSuggestionTitle(suggestion, fallbackText) {
+      const raw = suggestion && typeof suggestion.title_suggestion === "string"
+        ? suggestion.title_suggestion.trim()
+        : "";
+      if (raw) return raw;
+      const original = (fallbackText || "").trim();
+      const trimmed = original
+        .replace(/^(my goal is|my goal|next goal|goal)\s*[:\-]?\s*/i, "")
+        .replace(/^(i want to|i'm going to|im going to|we need to|i will|we will)\s+/i, "")
+        .trim() || original;
+      if (!trimmed) return "New goal";
+      return trimmed.length > 60 ? trimmed.slice(0, 60).trim() : trimmed;
+    }
+
+    function clearGoalIntentUI(clientMessageId) {
+      const entry = othelloState.messagesByClientId[clientMessageId];
+      if (!entry) return;
+      if (entry.bubbleEl) {
+        entry.bubbleEl.classList.remove("ux-goal-intent");
+      }
+      if (entry.panelEl && entry.panelEl.parentNode) {
+        entry.panelEl.parentNode.removeChild(entry.panelEl);
+      }
+      entry.panelEl = null;
+    }
+
+    function disablePanelButtons(panelEl, disabled) {
+      if (!panelEl) return;
+      const buttons = panelEl.querySelectorAll("button");
+      buttons.forEach((btn) => {
+        btn.disabled = disabled;
+      });
+    }
+
+    async function createGoalFromSuggestion(opts) {
+      const { title, description, clientMessageId, statusEl, panelEl } = opts;
+      const trimmedTitle = (title || "").trim();
+      const trimmedDesc = (description || "").trim();
+      if (trimmedTitle.length < 3) {
+        if (statusEl) statusEl.textContent = "Title is too short.";
+        return;
+      }
+      disablePanelButtons(panelEl, true);
+      if (statusEl) statusEl.textContent = "Saving goal...";
+      try {
+        const res = await fetch(GOALS_API, {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          credentials: "include",
+          body: JSON.stringify({
+            title: trimmedTitle,
+            description: trimmedDesc,
+            source_client_message_id: clientMessageId
+          })
+        });
+        if (!res.ok) {
+          const contentType = res.headers.get("content-type") || "";
+          let errMsg = "Unable to create goal.";
+          if (contentType.includes("application/json")) {
+            const data = await res.json();
+            errMsg = (data && (data.message || data.error)) || errMsg;
+          }
+          if (statusEl) statusEl.textContent = errMsg;
+          disablePanelButtons(panelEl, false);
+          return;
+        }
+        const data = await res.json();
+        const goal = data && data.goal ? data.goal : null;
+        const goalId = goal && typeof goal.id === "number" ? goal.id : data.goal_id;
+        clearGoalIntentUI(clientMessageId);
+        showToast("Saved as goal");
+        await refreshGoals();
+        if (goalId != null) {
+          setActiveGoal(goalId);
+          if (othelloState.currentView === "goals") {
+            showGoalDetail(goalId);
+          }
+        }
+      } catch (err) {
+        console.error("[Othello UI] create goal failed:", err);
+        if (statusEl) statusEl.textContent = "Network error.";
+        disablePanelButtons(panelEl, false);
+      }
+    }
+
+    async function addNoteToFocusedGoal(opts) {
+      const { text, clientMessageId, statusEl, panelEl } = opts;
+      const goalId = othelloState.activeGoalId;
+      if (goalId == null) {
+        if (statusEl) statusEl.textContent = "No focused goal.";
+        return;
+      }
+      const noteText = (text || "").trim();
+      if (!noteText) {
+        if (statusEl) statusEl.textContent = "Note text is empty.";
+        return;
+      }
+      disablePanelButtons(panelEl, true);
+      if (statusEl) statusEl.textContent = "Adding to focused goal...";
+      try {
+        const res = await fetch(`/api/goals/${goalId}/notes`, {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          credentials: "include",
+          body: JSON.stringify({
+            text: noteText,
+            source_client_message_id: clientMessageId
+          })
+        });
+        if (!res.ok) {
+          const contentType = res.headers.get("content-type") || "";
+          let errMsg = "Unable to add note.";
+          if (contentType.includes("application/json")) {
+            const data = await res.json();
+            errMsg = (data && (data.message || data.error)) || errMsg;
+          }
+          if (statusEl) statusEl.textContent = errMsg;
+          disablePanelButtons(panelEl, false);
+          return;
+        }
+        clearGoalIntentUI(clientMessageId);
+        showToast("Added to focused goal");
+        await refreshGoals();
+        if (othelloState.currentDetailGoalId === goalId) {
+          refreshGoalDetail();
+        }
+      } catch (err) {
+        console.error("[Othello UI] add note failed:", err);
+        if (statusEl) statusEl.textContent = "Network error.";
+        disablePanelButtons(panelEl, false);
+      }
+    }
+
+    function buildGoalIntentPanel(suggestion, entry) {
+      const clientMessageId = suggestion.source_client_message_id;
+      const panel = document.createElement("div");
+      panel.className = "ux-goal-intent-panel";
+      panel.dataset.clientMessageId = clientMessageId;
+      panel.dataset.suggestionType = suggestion.type;
+
+      const title = document.createElement("div");
+      title.className = "ux-goal-intent-panel__title";
+      title.textContent = "Is this a goal?";
+
+      const subtitle = document.createElement("div");
+      subtitle.className = "ux-goal-intent-panel__subtitle";
+      subtitle.textContent = "Nothing is saved until you choose.";
+
+      const actions = document.createElement("div");
+      actions.className = "ux-goal-intent-panel__actions";
+
+      const saveBtn = document.createElement("button");
+      saveBtn.className = "ux-goal-intent-btn primary";
+      saveBtn.textContent = "Save as Goal";
+
+      const editBtn = document.createElement("button");
+      editBtn.className = "ux-goal-intent-btn secondary";
+      editBtn.textContent = "Edit";
+
+      const dismissBtn = document.createElement("button");
+      dismissBtn.className = "ux-goal-intent-btn link";
+      dismissBtn.textContent = "Dismiss";
+
+      const addBtn = document.createElement("button");
+      addBtn.className = "ux-goal-intent-btn secondary";
+      addBtn.textContent = "Add to Focused Goal";
+      const showAddBtn = othelloState.activeGoalId != null;
+      actions.appendChild(saveBtn);
+      if (showAddBtn) {
+        actions.appendChild(addBtn);
+      }
+      actions.appendChild(editBtn);
+      actions.appendChild(dismissBtn);
+
+      const editor = document.createElement("div");
+      editor.className = "ux-goal-intent-editor";
+      editor.style.display = "none";
+
+      const titleInput = document.createElement("input");
+      titleInput.className = "ux-goal-intent-input";
+      titleInput.type = "text";
+      titleInput.value = pickSuggestionTitle(suggestion, entry.text);
+
+      const bodyInput = document.createElement("textarea");
+      bodyInput.className = "ux-goal-intent-textarea";
+      bodyInput.value = pickSuggestionBody(suggestion, entry.text);
+
+      const editorActions = document.createElement("div");
+      editorActions.className = "ux-goal-intent-panel__actions";
+
+      const createBtn = document.createElement("button");
+      createBtn.className = "ux-goal-intent-btn primary";
+      createBtn.textContent = "Create Goal";
+
+      const addFocusedBtn = document.createElement("button");
+      addFocusedBtn.className = "ux-goal-intent-btn secondary";
+      addFocusedBtn.textContent = "Add to Focused Goal";
+
+      const cancelBtn = document.createElement("button");
+      cancelBtn.className = "ux-goal-intent-btn link";
+      cancelBtn.textContent = "Cancel";
+
+      editorActions.appendChild(createBtn);
+      if (showAddBtn) {
+        editorActions.appendChild(addFocusedBtn);
+      }
+      editorActions.appendChild(cancelBtn);
+
+      const status = document.createElement("div");
+      status.className = "ux-goal-intent-status";
+
+      editor.appendChild(titleInput);
+      editor.appendChild(bodyInput);
+      editor.appendChild(editorActions);
+
+      panel.appendChild(title);
+      panel.appendChild(subtitle);
+      panel.appendChild(actions);
+      panel.appendChild(editor);
+      panel.appendChild(status);
+
+      function openEditor() {
+        editor.style.display = "flex";
+        status.textContent = "";
+        setTimeout(() => titleInput.focus(), 0);
+      }
+
+      saveBtn.addEventListener("click", () => {
+        openEditor();
+      });
+
+      editBtn.addEventListener("click", () => {
+        openEditor();
+      });
+
+      dismissBtn.addEventListener("click", () => {
+        recordSuggestionDismissal(suggestion.type, clientMessageId);
+        postSuggestionDismissal(suggestion.type, clientMessageId);
+        clearGoalIntentUI(clientMessageId);
+      });
+
+      if (showAddBtn) {
+        addBtn.addEventListener("click", () => {
+          addNoteToFocusedGoal({
+            text: pickSuggestionBody(suggestion, entry.text),
+            clientMessageId,
+            statusEl: status,
+            panelEl: panel
+          });
+        });
+      }
+
+      createBtn.addEventListener("click", () => {
+        createGoalFromSuggestion({
+          title: titleInput.value,
+          description: bodyInput.value,
+          clientMessageId,
+          statusEl: status,
+          panelEl: panel
+        });
+      });
+
+      if (showAddBtn) {
+        addFocusedBtn.addEventListener("click", () => {
+          addNoteToFocusedGoal({
+            text: bodyInput.value,
+            clientMessageId,
+            statusEl: status,
+            panelEl: panel
+          });
+        });
+      }
+
+      cancelBtn.addEventListener("click", () => {
+        editor.style.display = "none";
+        status.textContent = "";
+        disablePanelButtons(panel, false);
+      });
+
+      return panel;
+    }
+
+    function handleGoalIntentSuggestion(suggestion) {
+      if (!suggestion || suggestion.type !== "goal_intent") return;
+      const clientMessageId = suggestion.source_client_message_id;
+      if (!clientMessageId) return;
+      if (isSuggestionDismissed(suggestion.type, clientMessageId)) return;
+      const entry = othelloState.messagesByClientId[clientMessageId];
+      if (!entry || !entry.bubbleEl || !entry.rowEl) return;
+      if (entry.panelEl) return;
+      entry.bubbleEl.classList.add("ux-goal-intent");
+      const panel = buildGoalIntentPanel(suggestion, entry);
+      entry.panelEl = panel;
+      entry.rowEl.appendChild(panel);
+    }
+
+    function applySuggestionMeta(meta) {
+      const suggestions = meta && Array.isArray(meta.suggestions) ? meta.suggestions : [];
+      suggestions.forEach(handleGoalIntentSuggestion);
     }
 
     function normalizeGoalId(goalId) {
@@ -3353,7 +3905,8 @@
 
       const pendingEdit = othelloState.pendingGoalEdit;
       const metaNote = pendingEdit ? `Editing goal #${pendingEdit.goal_id}` : "";
-      addMessage("user", text, metaNote ? { metaNote } : undefined);
+      const clientMessageId = generateClientMessageId();
+      addMessage("user", text, { metaNote, clientMessageId });
       input.value = "";
       input.focus();
       statusEl.textContent = "Thinking…";
@@ -3368,6 +3921,7 @@
             active_goal_id: othelloState.activeGoalId || null,
             current_mode: othelloState.currentMode,
             current_view: othelloState.currentView,
+            client_message_id: clientMessageId,
           })
         });
 
@@ -3480,6 +4034,10 @@
           applyInsightsMeta(data.insights_meta);
         } else {
           await refreshInsightsCounts();
+        }
+
+        if (data.meta) {
+          applySuggestionMeta(data.meta);
         }
 
         // Always refresh from backend to stay in sync

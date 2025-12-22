@@ -517,6 +517,7 @@ othello_engine = None
 insights_repository = None
 plan_repository = None
 goal_task_history_repository = None
+_suggestion_dismissals: Dict[str, set] = {}
 postprocess_and_save = None
 extract_insights_from_exchange = None
 
@@ -576,6 +577,150 @@ def format_goal_list(goals) -> str:
             lines.append(f"- Goal #{goal_id}: {text}")
 
     return "\n".join(lines)
+
+
+def _suggestion_key(suggestion_type: str, source_client_message_id: str) -> str:
+    return f"{suggestion_type}:{source_client_message_id}"
+
+
+def _is_suggestion_dismissed(
+    user_id: Optional[str],
+    suggestion_type: str,
+    source_client_message_id: str,
+) -> bool:
+    if not user_id or not suggestion_type or not source_client_message_id:
+        return False
+    key = _suggestion_key(suggestion_type, source_client_message_id)
+    dismissed = _suggestion_dismissals.get(str(user_id), set())
+    return key in dismissed
+
+
+def _record_suggestion_dismissal(
+    user_id: Optional[str],
+    suggestion_type: str,
+    source_client_message_id: str,
+) -> bool:
+    if not user_id or not suggestion_type or not source_client_message_id:
+        return False
+    key = _suggestion_key(suggestion_type, source_client_message_id)
+    user_key = str(user_id)
+    dismissed = _suggestion_dismissals.setdefault(user_key, set())
+    dismissed.add(key)
+    return True
+
+
+def _extract_goal_title_suggestion(text: str) -> str:
+    raw = str(text or "").strip()
+    if not raw:
+        return ""
+    cleaned = re.sub(
+        r"^(my goal is|my goal|next goal|goal)\s*[:\-]?\s*",
+        "",
+        raw,
+        flags=re.IGNORECASE,
+    )
+    cleaned = re.sub(
+        r"^(i want to|i'm going to|im going to|we need to|i will|we will)\s+",
+        "",
+        cleaned,
+        flags=re.IGNORECASE,
+    ).strip()
+    if not cleaned:
+        cleaned = raw
+    cleaned = cleaned.strip()
+    if len(cleaned) > 60:
+        cleaned = cleaned[:60].strip()
+    return cleaned
+
+
+def _detect_goal_intent_suggestion(
+    text: str,
+    client_message_id: Optional[str],
+) -> Optional[Dict[str, Any]]:
+    if not text or not client_message_id:
+        return None
+    raw = str(text).strip()
+    if not raw or raw.startswith("__"):
+        return None
+    if is_goal_list_request(raw):
+        return None
+    if parse_goal_selection_request(raw) is not None:
+        return None
+
+    t = raw.lower()
+    starts = (
+        "next goal",
+        "my goal",
+        "i want to",
+        "i'm going to",
+        "im going to",
+        "we need to",
+        "i will",
+        "we will",
+    )
+    intent_phrases = (
+        "want to",
+        "going to",
+        "plan to",
+        "need to",
+        "aim to",
+    )
+    action_verbs = (
+        "build",
+        "create",
+        "implement",
+        "launch",
+        "learn",
+        "become",
+    )
+
+    score = 0.0
+    if any(t.startswith(prefix) for prefix in starts):
+        score += 0.6
+    if any(phrase in t for phrase in intent_phrases):
+        score += 0.25
+    if any(re.search(rf"\\b{verb}\\b", t) for verb in action_verbs):
+        score += 0.25
+    if "goal" in t:
+        score += 0.2
+    score = min(score, 1.0)
+
+    if score < 0.55:
+        return None
+
+    title_suggestion = _extract_goal_title_suggestion(raw)
+    return {
+        "type": "goal_intent",
+        "source_client_message_id": client_message_id,
+        "confidence": round(score, 2),
+        "title_suggestion": title_suggestion,
+        "body_suggestion": raw,
+    }
+
+
+def _attach_goal_intent_suggestion(
+    response: Dict[str, Any],
+    *,
+    user_input: str,
+    client_message_id: Optional[str],
+    user_id: Optional[str],
+    request_id: str,
+    logger: logging.Logger,
+) -> None:
+    suggestion = _detect_goal_intent_suggestion(user_input, client_message_id)
+    if not suggestion:
+        return
+    if _is_suggestion_dismissed(user_id, suggestion["type"], client_message_id or ""):
+        return
+    meta = response.setdefault("meta", {})
+    suggestions = meta.setdefault("suggestions", [])
+    suggestions.append(suggestion)
+    logger.info(
+        "API: suggestion goal_intent request_id=%s client_message_id=%s confidence=%s",
+        request_id,
+        client_message_id,
+        suggestion.get("confidence"),
+    )
 
 
 def _normalize_goal_title(title: str) -> str:
@@ -1228,6 +1373,12 @@ def handle_message():
         ui_action = raw_ui_action.strip().lower() if isinstance(raw_ui_action, str) else ""
         current_mode = (data.get("current_mode") or "companion").strip().lower()
         current_view = data.get("current_view")
+        raw_client_message_id = data.get("client_message_id")
+        if raw_client_message_id is None:
+            raw_client_message_id = data.get("clientMessageId")
+        client_message_id = None
+        if raw_client_message_id is not None:
+            client_message_id = str(raw_client_message_id).strip() or None
 
         logger.info(
             "API: message meta request_id=%s current_view=%s current_mode=%s keys=%s goal_id=%s active_goal_id=%s",
@@ -2153,6 +2304,14 @@ def handle_message():
                     )
             except Exception as exc:
                 logger.warning("API: insight extraction skipped due to error: %s", exc, exc_info=True)
+            _attach_goal_intent_suggestion(
+                response,
+                user_input=user_input,
+                client_message_id=client_message_id,
+                user_id=user_id,
+                request_id=request_id,
+                logger=logger,
+            )
             return jsonify(response)
 
         # --- Log conversation into active goal -------------------------------
@@ -2238,6 +2397,14 @@ def handle_message():
                 )
         except Exception as exc:
             logger.warning("API: insight extraction skipped due to error: %s", exc, exc_info=True)
+        _attach_goal_intent_suggestion(
+            response,
+            user_input=user_input,
+            client_message_id=client_message_id,
+            user_id=user_id,
+            request_id=request_id,
+            logger=logger,
+        )
         return jsonify(response)
 
     except Exception as exc:
@@ -2250,6 +2417,36 @@ def handle_message():
         return api_error("INTERNAL_ERROR", "Internal server error", 500)
     finally:
         _log_request_end()
+
+
+@app.route("/api/suggestions/dismiss", methods=["POST"])
+@require_auth
+def dismiss_suggestion():
+    logger = logging.getLogger("API")
+    request_id = _get_request_id()
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return api_error("VALIDATION_ERROR", "JSON object required", 400)
+    suggestion_type = str(data.get("type") or "").strip()
+    source_client_message_id = str(data.get("source_client_message_id") or "").strip()
+    if not suggestion_type or not source_client_message_id:
+        return api_error(
+            "VALIDATION_ERROR",
+            "type and source_client_message_id are required",
+            400,
+        )
+    user_id, error = _get_user_id_or_error()
+    if error:
+        return error
+    if not _record_suggestion_dismissal(user_id, suggestion_type, source_client_message_id):
+        return api_error("SUGGESTION_DISMISS_FAILED", "Failed to dismiss suggestion", 400)
+    logger.info(
+        "API: suggestion dismiss request_id=%s type=%s client_message_id=%s",
+        request_id,
+        suggestion_type,
+        source_client_message_id,
+    )
+    return jsonify({"ok": True})
 
 
 @app.route("/api/today-plan", methods=["GET"])
@@ -2444,6 +2641,13 @@ def goals():
     if len(title) < 3:
         return api_error("VALIDATION_ERROR", "title is too short", 400)
 
+    raw_description = data.get("description")
+    description = ""
+    if raw_description is not None:
+        description = str(raw_description).strip()
+
+    source_client_message_id = data.get("source_client_message_id")
+
     normalized_title = _normalize_goal_title(title)
     request_id = _get_request_id()
     user_id, error = _get_user_id_or_error()
@@ -2468,10 +2672,18 @@ def goals():
                     normalized_title,
                     False,
                 )
-                return jsonify({"ok": True, "created": False, "goal": goal_payload})
+                return jsonify(
+                    {
+                        "ok": True,
+                        "created": False,
+                        "goal": goal_payload,
+                        "goal_id": goal_payload.get("id"),
+                        "meta": {"intent": "goal_exists"},
+                    }
+                )
 
         created = goals_repository.create_goal(
-            {"title": title, "description": "", "status": "active"},
+            {"title": title, "description": description, "status": "active"},
             user_id,
         )
         goal_id = created.get("id") if isinstance(created, dict) else None
@@ -2489,7 +2701,21 @@ def goals():
             normalized_title,
             True,
         )
-        return jsonify({"ok": True, "created": True, "goal": goal_payload})
+        logger.info(
+            "API: commit create_goal request_id=%s source_client_message_id=%s goal_id=%s",
+            request_id,
+            source_client_message_id,
+            goal_id,
+        )
+        return jsonify(
+            {
+                "ok": True,
+                "created": True,
+                "goal": goal_payload,
+                "goal_id": goal_id,
+                "meta": {"intent": "goal_created"},
+            }
+        )
     except Exception as exc:
         logger.error("API: create_goal failed: %s", exc, exc_info=True)
         return api_error(
@@ -2498,6 +2724,79 @@ def goals():
             500,
             details=type(exc).__name__,
         )
+
+
+@app.route("/api/goals/<int:goal_id>/notes", methods=["POST"])
+@require_auth
+def add_goal_note(goal_id: int):
+    logger = logging.getLogger("API")
+    request_id = _get_request_id()
+    comps = get_agent_components()
+    architect_agent = comps["architect_agent"]
+    user_id, error = _get_user_id_or_error()
+    if error:
+        return error
+
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return api_error("VALIDATION_ERROR", "JSON object required", 400)
+
+    raw_text = data.get("text")
+    if raw_text is None:
+        return api_error("VALIDATION_ERROR", "text is required", 400)
+    text = str(raw_text).strip()
+    if not text:
+        return api_error("VALIDATION_ERROR", "text is required", 400)
+
+    source_client_message_id = data.get("source_client_message_id")
+
+    try:
+        goal = architect_agent.goal_mgr.get_goal(user_id, goal_id)
+    except Exception as exc:
+        logger.error(
+            "API: add_goal_note lookup failed request_id=%s goal_id=%s",
+            request_id,
+            goal_id,
+            exc_info=True,
+        )
+        return api_error(
+            "GOAL_STORAGE_UNAVAILABLE",
+            "Goal storage unavailable",
+            503,
+            details=type(exc).__name__,
+        )
+
+    if goal is None:
+        return api_error("GOAL_NOT_FOUND", "Goal not found", 404, details={"goal_id": goal_id})
+
+    status = (goal.get("status") or "").strip().lower()
+    if status == "archived":
+        return api_error("GOAL_ARCHIVED", "Goal is archived", 409, details={"goal_id": goal_id})
+
+    result = architect_agent.goal_mgr.add_note_to_goal(
+        user_id,
+        goal_id,
+        "user",
+        text,
+        request_id=request_id,
+    )
+    ok = isinstance(result, dict) and result.get("ok")
+    if not ok:
+        reason = result.get("reason") if isinstance(result, dict) else "unknown"
+        return api_error(
+            "GOAL_NOTE_FAILED",
+            "Failed to add note",
+            500,
+            details={"reason": reason},
+        )
+
+    logger.info(
+        "API: commit add_goal_note request_id=%s goal_id=%s source_client_message_id=%s",
+        request_id,
+        goal_id,
+        source_client_message_id,
+    )
+    return jsonify({"ok": True, "goal_id": goal_id, "meta": {"intent": "goal_note_added"}})
 
 
 @app.route("/api/goals/unfocus", methods=["POST"])
