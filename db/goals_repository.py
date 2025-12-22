@@ -507,3 +507,31 @@ def delete_plan_steps_for_goal(goal_id: int) -> None:
     except Exception as e:
         print(f"[GoalsRepository] Failed to delete plan steps for goal {goal_id}: {e}")
 
+
+def delete_plan_steps_for_goal_section(goal_id: int, section_prefix: str) -> None:
+    """
+    Delete plan steps for a goal that belong to a specific section prefix.
+    """
+    if not section_prefix:
+        return
+    escaped = section_prefix.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    query = "DELETE FROM plan_steps WHERE goal_id = %s AND description LIKE %s ESCAPE '\\\\'"
+    try:
+        execute_query(query, (goal_id, f"{escaped}%"))
+    except Exception as e:
+        print(f"[GoalsRepository] Failed to delete plan steps for goal {goal_id} section {section_prefix}: {e}")
+
+
+def get_max_plan_step_index(goal_id: int) -> int:
+    """
+    Return the current max step_index for a goal (0 if none).
+    """
+    query = "SELECT COALESCE(MAX(step_index), 0) AS max_index FROM plan_steps WHERE goal_id = %s"
+    try:
+        row = fetch_one(query, (goal_id,))
+        if row and row.get("max_index") is not None:
+            return int(row.get("max_index") or 0)
+    except Exception as e:
+        print(f"[GoalsRepository] Failed to fetch max step index for goal {goal_id}: {e}")
+    return 0
+

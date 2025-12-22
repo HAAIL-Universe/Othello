@@ -33,6 +33,7 @@ class DbGoalManager:
     def __init__(self) -> None:
         self.active_goal_id: Dict[str, Optional[int]] = {}
         self.logger = logging.getLogger("GoalManager")
+        self._section_prefix = "[[SECTION:"
 
     def _require_user_id(self, user_id: str) -> str:
         uid = str(user_id or "").strip()
@@ -182,6 +183,23 @@ class DbGoalManager:
             "plan": db_goal.get("plan", ""),
             "checklist": db_goal.get("checklist", []),
         }
+
+    def _encode_plan_step_description(self, description: str, section: Optional[str]) -> str:
+        desc = (description or "").strip()
+        sec = (section or "").strip()
+        if not sec:
+            return desc
+        return f"{self._section_prefix}{sec}]] {desc}"
+
+    def _decode_plan_step_description(self, description: str) -> Dict[str, Optional[str]]:
+        desc = description or ""
+        if desc.startswith(self._section_prefix):
+            end_idx = desc.find("]]")
+            if end_idx != -1:
+                section = desc[len(self._section_prefix):end_idx].strip()
+                remaining = desc[end_idx + 2 :].lstrip()
+                return {"section": section or None, "description": remaining}
+        return {"section": None, "description": desc}
     
     def add_goal(self, user_id: str, text: str, deadline: Optional[str] = None) -> Dict[str, Any]:
         """
@@ -490,13 +508,77 @@ class DbGoalManager:
             return []
         try:
             goals_repository.delete_plan_steps_for_goal(goal_id)
-            created_steps = goals_repository.create_plan_steps(goal_id, plan_steps)
+            prepared_steps: List[Dict[str, Any]] = []
+            for idx, step in enumerate(plan_steps):
+                description = step.get("description") or step.get("label") or ""
+                if not description:
+                    continue
+                section = step.get("section")
+                prepared_steps.append(
+                    {
+                        "step_index": step.get("step_index", idx + 1),
+                        "description": self._encode_plan_step_description(description, section),
+                        "status": step.get("status", "pending"),
+                        "due_date": step.get("due_date"),
+                    }
+                )
+            created_steps = goals_repository.create_plan_steps(goal_id, prepared_steps)
             self.logger.info(f"DbGoalManager: Saved {len(created_steps)} plan steps for goal {goal_id}")
             return created_steps
         except Exception as exc:
             # In environments without the plan_steps table, gracefully degrade to no-op
             self.logger.warning(
                 f"DbGoalManager: plan_steps storage unavailable, skipping DB save for goal {goal_id}: {exc}"
+            )
+            return []
+
+    def save_goal_plan_section(
+        self,
+        user_id: str,
+        goal_id: int,
+        plan_steps: List[Dict[str, Any]],
+        section_label: str,
+        section_prefix: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Save plan steps for a single section without overwriting other sections.
+        """
+        uid = self._require_user_id(user_id)
+        if self.get_goal(uid, goal_id, include_conversation=False) is None:
+            self.logger.error(f"DbGoalManager: Cannot save plan for non-existent goal {goal_id}")
+            return []
+        section = (section_label or "").strip()
+        section_key = (section_prefix or section_label or "").strip()
+        if not section or not section_key:
+            return []
+        try:
+            prefix = f"{self._section_prefix}{section_key}]] "
+            goals_repository.delete_plan_steps_for_goal_section(goal_id, prefix)
+            max_index = goals_repository.get_max_plan_step_index(goal_id)
+            prepared_steps: List[Dict[str, Any]] = []
+            for idx, step in enumerate(plan_steps):
+                description = step.get("description") or step.get("label") or ""
+                if not description:
+                    continue
+                prepared_steps.append(
+                    {
+                        "step_index": max_index + idx + 1,
+                        "description": self._encode_plan_step_description(description, section),
+                        "status": step.get("status", "pending"),
+                        "due_date": step.get("due_date"),
+                    }
+                )
+            created_steps = goals_repository.create_plan_steps(goal_id, prepared_steps)
+            self.logger.info(
+                "DbGoalManager: Saved %s plan steps for goal %s section %s",
+                len(created_steps),
+                goal_id,
+                section,
+            )
+            return created_steps
+        except Exception as exc:
+            self.logger.warning(
+                f"DbGoalManager: plan_steps storage unavailable, skipping section save for goal {goal_id}: {exc}"
             )
             return []
     
@@ -523,6 +605,13 @@ class DbGoalManager:
                 f"DbGoalManager: plan_steps storage unavailable, returning goal {goal_id} with no steps: {exc}"
             )
             plan_steps = []
+
+        for step in plan_steps:
+            decoded = self._decode_plan_step_description(step.get("description", ""))
+            if decoded.get("section"):
+                step["section"] = decoded.get("section")
+            if decoded.get("description") is not None:
+                step["description"] = decoded.get("description")
 
         goal["plan_steps"] = plan_steps
         return goal

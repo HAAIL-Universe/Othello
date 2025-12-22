@@ -1124,6 +1124,61 @@
       backdrop-filter: blur(16px);
     }
 
+    .plan-accordion {
+      border: none;
+      background: transparent;
+    }
+
+    .plan-accordion summary {
+      cursor: pointer;
+      list-style: none;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+    }
+
+    .plan-accordion summary::-webkit-details-marker {
+      display: none;
+    }
+
+    .plan-accordion__count {
+      font-size: 0.7rem;
+      color: var(--text-soft);
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+
+    .activity-item__actions {
+      margin-top: 0.6rem;
+    }
+
+    .intent-list {
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+
+    .intent-item {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 1rem;
+      padding: 0.75rem;
+      border: 1px solid var(--border);
+      border-radius: 0.85rem;
+      background: rgba(15, 23, 42, 0.35);
+    }
+
+    .intent-item__text {
+      font-size: 0.95rem;
+      line-height: 1.4;
+    }
+
+    .intent-item__actions {
+      flex-shrink: 0;
+    }
+
     .detail-section__title {
       font-size: 0.75rem;
       text-transform: uppercase;
@@ -3146,6 +3201,11 @@
         }
       }
 
+      if (role === "bot" && othelloState.activeGoalId !== null && isPlanLikeText(text)) {
+        const planBar = createPlanActionBar(text);
+        bubble.appendChild(planBar);
+      }
+
       row.appendChild(bubble);
       chatLog.appendChild(row);
 
@@ -3295,6 +3355,16 @@
           }
         }
 
+        if (metaIntent === "plan_steps_added") {
+          const responseGoalId = typeof data.goal_id === "number" ? data.goal_id : othelloState.activeGoalId;
+          if (othelloState.currentDetailGoalId != null) {
+            if (responseGoalId == null || othelloState.currentDetailGoalId === responseGoalId) {
+              refreshGoalDetail();
+            }
+          }
+          refreshGoals();
+        }
+
         if (data.insights_meta) {
           applyInsightsMeta(data.insights_meta);
         } else {
@@ -3399,6 +3469,104 @@
       return extractListItems(text).length > 0;
     }
 
+    function isPlanLikeText(text) {
+      if (!text) return false;
+      if (/^\s*#{2,6}\s+\S+/m.test(text)) return true;
+      if (/\bplan:\b/i.test(text) || /\bsteps?:\b/i.test(text)) return true;
+      if (/^\s*\d+[.)]\s+\S+/m.test(text)) return true;
+      if (/^\s*[-*•]\s+\S+/m.test(text)) return true;
+      return hasStructuredList(text);
+    }
+
+    function parseIntentItems(text) {
+      if (!text) return [];
+      const lines = text.split(/\r?\n/);
+      const numbered = [];
+      lines.forEach((line) => {
+        const match = line.trim().match(/^(\d+)[.)]\s+(.+)$/);
+        if (match) {
+          numbered.push({ index: parseInt(match[1], 10), text: match[2].trim() });
+        }
+      });
+      if (numbered.length > 0) {
+        return numbered;
+      }
+      const fallback = text.trim();
+      return fallback ? [{ index: 1, text: fallback }] : [];
+    }
+
+    async function postPlanFromText(planText) {
+      const goalId = othelloState.activeGoalId;
+      if (goalId == null) throw new Error("No focused goal.");
+      const res = await fetch(API, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message: "__plan_from_text__",
+          ui_action: "plan_from_text",
+          plan_text: planText,
+          goal_id: goalId,
+          active_goal_id: goalId,
+          current_mode: othelloState.currentMode,
+          current_view: othelloState.currentView,
+        }),
+      });
+      if (res.status === 401 || res.status === 403) {
+        await handleUnauthorized("plan-from-text");
+        throw new Error("Authentication required.");
+      }
+      if (!res.ok) {
+        let errMsg = "Unable to add steps to the plan.";
+        const contentType = res.headers.get("content-type") || "";
+        if (contentType.includes("application/json")) {
+          const data = await res.json();
+          errMsg = (data && (data.message || data.error)) || errMsg;
+        } else {
+          const text = await res.text();
+          if (text) errMsg = text.slice(0, 200);
+        }
+        throw new Error(errMsg);
+      }
+      return res.json();
+    }
+
+    async function postPlanFromIntent(goalId, intentIndex, intentText) {
+      if (goalId == null) throw new Error("No focused goal.");
+      const res = await fetch(API, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message: "__plan_from_intent__",
+          ui_action: "plan_from_intent",
+          intent_index: intentIndex,
+          intent_text: intentText,
+          goal_id: goalId,
+          active_goal_id: goalId,
+          current_mode: othelloState.currentMode,
+          current_view: othelloState.currentView,
+        }),
+      });
+      if (res.status === 401 || res.status === 403) {
+        await handleUnauthorized("plan-from-intent");
+        throw new Error("Authentication required.");
+      }
+      if (!res.ok) {
+        let errMsg = "Unable to build plan from intent.";
+        const contentType = res.headers.get("content-type") || "";
+        if (contentType.includes("application/json")) {
+          const data = await res.json();
+          errMsg = (data && (data.message || data.error)) || errMsg;
+        } else {
+          const text = await res.text();
+          if (text) errMsg = text.slice(0, 200);
+        }
+        throw new Error(errMsg);
+      }
+      return res.json();
+    }
+
     async function postCommitment(action, items, rawText) {
       const safeItems = items && items.length ? items : [rawText];
       const title = (safeItems[0] || "New commitment").trim();
@@ -3486,6 +3654,41 @@
       bar.appendChild(makeBtn("Save as idea", "idea"));
       bar.appendChild(status);
 
+      return bar;
+    }
+
+    function createPlanActionBar(planText) {
+      const bar = document.createElement("div");
+      bar.className = "commitment-bar";
+
+      const status = document.createElement("span");
+      status.className = "commitment-status";
+
+      const btn = document.createElement("button");
+      btn.className = "commitment-btn";
+      btn.textContent = "Add to Current Plan";
+      btn.addEventListener("click", async () => {
+        status.textContent = "Sending.";
+        btn.disabled = true;
+        try {
+          const data = await postPlanFromText(planText);
+          status.textContent = "Saved";
+          if (data && data.meta && data.meta.intent === "plan_steps_added") {
+            if (othelloState.currentDetailGoalId === othelloState.activeGoalId) {
+              refreshGoalDetail();
+            }
+            refreshGoals();
+          }
+        } catch (err) {
+          status.textContent = err && err.message ? err.message : "Failed";
+        } finally {
+          setTimeout(() => { status.textContent = ""; }, 1500);
+          btn.disabled = false;
+        }
+      });
+
+      bar.appendChild(btn);
+      bar.appendChild(status);
       return bar;
     }
 
@@ -3601,12 +3804,43 @@
       // Description / Intent
       const intentBody = (goal.description || goal.intent || goal.body || "").trim();
       const intentText = intentBody || goal.text || "No description provided.";
-      contentHtml += `
-        <div class="detail-section">
-          <div class="detail-section__title">Intent</div>
-          <div class="detail-section__body">${escapeHtml(intentText)}</div>
-        </div>
-      `;
+      const intentItems = parseIntentItems(intentBody || intentText);
+      const canBuildIntentPlan = othelloState.activeGoalId === goal.id;
+      if (intentItems.length > 0) {
+        const itemsHtml = intentItems.map((item, idx) => {
+          const itemIndex = Number.isFinite(item.index) ? item.index : (idx + 1);
+          const itemText = item.text || "";
+          const safeText = escapeHtml(itemText);
+          const planBtn = canBuildIntentPlan
+            ? `
+              <button class="commitment-btn intent-plan-btn" data-intent-index="${itemIndex}" data-intent-text="${encodeURIComponent(itemText)}">
+                Build plan
+              </button>
+            `
+            : "";
+          return `
+            <div class="intent-item">
+              <div class="intent-item__text">${itemIndex}. ${safeText}</div>
+              <div class="intent-item__actions">${planBtn}</div>
+            </div>
+          `;
+        }).join("");
+        contentHtml += `
+          <div class="detail-section">
+            <div class="detail-section__title">Intent</div>
+            <div class="intent-list">
+              ${itemsHtml}
+            </div>
+          </div>
+        `;
+      } else {
+        contentHtml += `
+          <div class="detail-section">
+            <div class="detail-section__title">Intent</div>
+            <div class="detail-section__body">${escapeHtml(intentText)}</div>
+          </div>
+        `;
+      }
 
       // Deadline
       if (goal.deadline) {
@@ -3627,6 +3861,7 @@
             <div class="activity-log">
         `;
 
+        const canPlanFromActivity = othelloState.activeGoalId !== null && othelloState.activeGoalId === goal.id;
         activityEntries.forEach(entry => {
           const roleRaw = entry.role || "";
           const role = roleRaw === "user"
@@ -3634,10 +3869,22 @@
             : (roleRaw === "othello" || roleRaw === "assistant" || roleRaw === "bot")
               ? "Othello"
               : (roleRaw ? roleRaw.charAt(0).toUpperCase() + roleRaw.slice(1) : "System");
+          const isAssistant = roleRaw === "othello" || roleRaw === "assistant" || roleRaw === "bot";
+          const canPlan = canPlanFromActivity && isAssistant && isPlanLikeText(entry.content || "");
+          const planBtn = canPlan
+            ? `
+              <div class="activity-item__actions">
+                <button class="commitment-btn plan-from-activity-btn" data-plan-text="${encodeURIComponent(entry.content || "")}">
+                  Add to Current Plan
+                </button>
+              </div>
+            `
+            : "";
           contentHtml += `
             <div class="activity-item">
               <div class="activity-item__role">${escapeHtml(role)}</div>
               <div class="activity-item__text">${escapeHtml(entry.content || "")}</div>
+              ${planBtn}
             </div>
           `;
         });
@@ -3658,24 +3905,48 @@
       const planSteps = Array.isArray(goal.plan_steps) ? goal.plan_steps : [];
       const planText = typeof goal.plan === "string" ? goal.plan.trim() : "";
       if (planSteps.length > 0) {
-        const stepsHtml = planSteps.map(step => {
-          const label = escapeHtml(step.description || step.label || "Step");
-          const status = escapeHtml(step.status || "pending");
-          const due = step.due_date ? ` | ${escapeHtml(`due ${step.due_date}`)}` : "";
+        const sections = new Map();
+        planSteps.forEach((step) => {
+          const sectionLabel = (step.section || step.section_title || step.section_name || step.section_hint || "").trim();
+          const sectionKey = sectionLabel || "Plan Steps";
+          if (!sections.has(sectionKey)) {
+            sections.set(sectionKey, []);
+          }
+          sections.get(sectionKey).push(step);
+        });
+
+        const sectionHtml = Array.from(sections.entries()).map(([sectionTitle, steps]) => {
+          const safeTitle = escapeHtml(sectionTitle);
+          const count = steps.length;
+          const stepsHtml = steps.map(step => {
+            const label = escapeHtml(step.description || step.label || "Step");
+            const status = escapeHtml(step.status || "pending");
+            const due = step.due_date ? ` | ${escapeHtml(`due ${step.due_date}`)}` : "";
+            return `
+              <div class="planner-step">
+                <div class="planner-step__label">${label}</div>
+                <div class="planner-step__meta">${status}${due}</div>
+              </div>
+            `;
+          }).join("");
+
           return `
-            <div class="planner-step">
-              <div class="planner-step__label">${label}</div>
-              <div class="planner-step__meta">${status}${due}</div>
-            </div>
+            <details class="plan-accordion" open>
+              <summary class="detail-section__title">
+                <span>${safeTitle}</span>
+                <span class="plan-accordion__count">${count} step${count === 1 ? "" : "s"}</span>
+              </summary>
+              <div class="planner-steps">
+                ${stepsHtml}
+              </div>
+            </details>
           `;
         }).join("");
 
         contentHtml += `
           <div class="detail-section">
             <div class="detail-section__title">Current Plan</div>
-            <div class="planner-steps">
-              ${stepsHtml}
-            </div>
+            ${sectionHtml}
           </div>
         `;
       } else if (planText) {
@@ -3808,6 +4079,80 @@
     backFromDetailBtn.addEventListener("click", hideGoalDetail);
     if (goalDetailRefreshBtn) {
       goalDetailRefreshBtn.addEventListener("click", refreshGoalDetail);
+    }
+
+    const detailContentEl = document.getElementById("detail-content");
+    if (detailContentEl) {
+      detailContentEl.addEventListener("click", async (e) => {
+        const btn = e.target.closest(".plan-from-activity-btn");
+        const intentBtn = e.target.closest(".intent-plan-btn");
+        if (btn) {
+          const encoded = btn.getAttribute("data-plan-text") || "";
+          let planText = "";
+          try {
+            planText = decodeURIComponent(encoded);
+          } catch (err) {
+            planText = "";
+          }
+          if (!planText) return;
+          const originalLabel = btn.textContent;
+          btn.textContent = "Adding.";
+          btn.disabled = true;
+          try {
+            const data = await postPlanFromText(planText);
+            btn.textContent = "Added";
+            if (data && data.meta && data.meta.intent === "plan_steps_added") {
+              if (othelloState.currentDetailGoalId === othelloState.activeGoalId) {
+                refreshGoalDetail();
+              }
+              refreshGoals();
+            }
+          } catch (err) {
+            btn.textContent = err && err.message ? err.message : "Failed";
+          } finally {
+            setTimeout(() => {
+              btn.textContent = originalLabel;
+              btn.disabled = false;
+            }, 1500);
+          }
+          return;
+        }
+        if (intentBtn) {
+          const intentIndex = parseInt(intentBtn.getAttribute("data-intent-index") || "0", 10);
+          const encodedText = intentBtn.getAttribute("data-intent-text") || "";
+          let intentText = "";
+          try {
+            intentText = decodeURIComponent(encodedText);
+          } catch (err) {
+            intentText = "";
+          }
+          if (!intentIndex || !intentText) return;
+          const goalId = othelloState.activeGoalId;
+          const originalLabel = intentBtn.textContent;
+          intentBtn.textContent = "Building.";
+          intentBtn.disabled = true;
+          try {
+            const data = await postPlanFromIntent(goalId, intentIndex, intentText);
+            intentBtn.textContent = "Built";
+            if (data && data.reply) {
+              addMessage("bot", data.reply);
+            }
+            if (data && data.meta && data.meta.intent === "plan_steps_added") {
+              if (othelloState.currentDetailGoalId === othelloState.activeGoalId) {
+                refreshGoalDetail();
+              }
+              refreshGoals();
+            }
+          } catch (err) {
+            intentBtn.textContent = err && err.message ? err.message : "Failed";
+          } finally {
+            setTimeout(() => {
+              intentBtn.textContent = originalLabel;
+              intentBtn.disabled = false;
+            }, 1500);
+          }
+        }
+      });
     }
 
     continueWorkingBtn.addEventListener("click", () => {

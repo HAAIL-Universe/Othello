@@ -6,7 +6,7 @@ from datetime import date, timedelta, datetime
 from flask import Flask, request, jsonify, send_file, session, send_from_directory, g
 from flask_cors import CORS
 import asyncio
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List
 from functools import wraps
 from passlib.hash import bcrypt
 import mimetypes
@@ -668,6 +668,53 @@ def _detect_goal_edit_arm(data: Dict[str, Any], text: str) -> Optional[str]:
     return None
 
 
+def _parse_plan_text_to_steps(plan_text: str) -> List[Dict[str, Any]]:
+    steps: List[Dict[str, Any]] = []
+    if not isinstance(plan_text, str):
+        return steps
+    lines = plan_text.splitlines()
+    current_section: Optional[str] = None
+
+    def _is_section_header(line: str) -> Optional[str]:
+        if not line:
+            return None
+        if re.match(r"^#{3,6}\s+\S", line):
+            return line.lstrip("#").strip()
+        if re.match(
+            r"^(long[-\s]?term\s+goal\s+\d+|goal\s+\d+|phase\s+\d+|milestone\s+\d+)\s*[:\-]?\s*$",
+            line,
+            re.IGNORECASE,
+        ):
+            return line.rstrip(":").strip()
+        if line.endswith(":") and len(line) <= 80:
+            return line.rstrip(":").strip()
+        return None
+
+    for raw in lines:
+        line = raw.strip()
+        if not line:
+            continue
+        header = _is_section_header(line)
+        if header:
+            current_section = header
+            continue
+        match = re.match(r"^(?:\d+[.)]|[-*•])\s+(.*)$", line)
+        if not match:
+            continue
+        description = (match.group(1) or "").strip()
+        if not description:
+            continue
+        step = {
+            "step_index": len(steps) + 1,
+            "description": description,
+            "status": "pending",
+        }
+        if current_section:
+            step["section"] = current_section
+        steps.append(step)
+
+    return steps
+
 
 def require_auth(f):
     @wraps(f)
@@ -1175,6 +1222,10 @@ def handle_message():
         if raw_goal_id is None:
             raw_goal_id = data.get("active_goal_id")
             goal_id_source = "active_goal_id"
+        raw_ui_action = data.get("ui_action")
+        if raw_ui_action is None:
+            raw_ui_action = data.get("uiAction")
+        ui_action = raw_ui_action.strip().lower() if isinstance(raw_ui_action, str) else ""
         current_mode = (data.get("current_mode") or "companion").strip().lower()
         current_view = data.get("current_view")
 
@@ -1284,6 +1335,201 @@ def handle_message():
             request_id,
             active_goal.get("id") if isinstance(active_goal, dict) else None,
         )
+
+        if ui_action == "plan_from_text":
+            if user_id is None:
+                return user_error
+            plan_text = data.get("plan_text")
+            if not isinstance(plan_text, str) or not plan_text.strip():
+                return api_error("VALIDATION_ERROR", "plan_text is required", 400)
+            if not isinstance(active_goal, dict) or active_goal.get("id") is None:
+                return api_error("VALIDATION_ERROR", "Please focus a goal first.", 400)
+            status = (active_goal.get("status") or "").strip().lower()
+            if status == "archived":
+                return api_error(
+                    "GOAL_ARCHIVED",
+                    "Goal is archived",
+                    409,
+                    details={"goal_id": active_goal.get("id")},
+                )
+            steps = _parse_plan_text_to_steps(plan_text)
+            if not steps:
+                return api_error("VALIDATION_ERROR", "No steps found in plan text.", 400)
+            try:
+                architect_agent.goal_mgr.save_goal_plan(
+                    user_id,
+                    active_goal["id"],
+                    steps,
+                )
+            except Exception:
+                logger.error(
+                    "API: plan_from_text save failed request_id=%s goal_id=%s",
+                    request_id,
+                    active_goal.get("id"),
+                    exc_info=True,
+                )
+                return api_error("PLAN_SAVE_FAILED", "Failed to save plan steps", 500)
+            try:
+                architect_agent.goal_mgr.update_goal_plan(
+                    user_id,
+                    active_goal["id"],
+                    plan=plan_text,
+                )
+            except Exception:
+                pass
+            try:
+                note_label = f"[Plan Updated] Added {len(steps)} steps from chat"
+                architect_agent.goal_mgr.add_note_to_goal(
+                    user_id,
+                    active_goal["id"],
+                    "system",
+                    note_label,
+                    request_id=request_id,
+                )
+            except Exception:
+                pass
+            return jsonify(
+                {
+                    "reply": f"Added {len(steps)} steps to the current plan.",
+                    "meta": {"intent": "plan_steps_added"},
+                    "goal_id": active_goal["id"],
+                }
+            )
+
+        if ui_action == "plan_from_intent":
+            if user_id is None:
+                return user_error
+            raw_intent_index = data.get("intent_index")
+            if raw_intent_index is None:
+                raw_intent_index = data.get("intentIndex")
+            try:
+                intent_index = int(raw_intent_index)
+            except (TypeError, ValueError):
+                return api_error("VALIDATION_ERROR", "intent_index must be a number", 400)
+            if intent_index <= 0:
+                return api_error("VALIDATION_ERROR", "intent_index must be positive", 400)
+            intent_text = data.get("intent_text") or data.get("intentText") or ""
+            if not isinstance(intent_text, str) or not intent_text.strip():
+                return api_error("VALIDATION_ERROR", "intent_text is required", 400)
+            if not isinstance(active_goal, dict) or active_goal.get("id") is None:
+                return api_error("VALIDATION_ERROR", "Please focus a goal first.", 400)
+            status = (active_goal.get("status") or "").strip().lower()
+            if status == "archived":
+                return api_error(
+                    "GOAL_ARCHIVED",
+                    "Goal is archived",
+                    409,
+                    details={"goal_id": active_goal.get("id")},
+                )
+            instruction = (
+                f"Create a plan for Intent #{intent_index}: {intent_text}.\n"
+                f"Output format: start with a markdown header like "
+                f"\"### Intent {intent_index} Plan: <short title>\" then a numbered list of actionable steps.\n"
+                f"No prose outside the list."
+            )
+            goal_context = ""
+            try:
+                goal_context = architect_agent.goal_mgr.build_goal_context(
+                    user_id, active_goal["id"], max_notes=5
+                ) or ""
+            except Exception:
+                goal_context = ""
+            loop = None
+            try:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                plan_reply, _agent_status = loop.run_until_complete(
+                    architect_agent.plan_and_execute(
+                        instruction,
+                        context={
+                            "goal_context": goal_context,
+                            "active_goal": active_goal,
+                        } if goal_context else None,
+                        user_id=user_id,
+                    )
+                )
+            except Exception as exc:
+                logger.error(
+                    "API: plan_from_intent failed request_id=%s goal_id=%s",
+                    request_id,
+                    active_goal.get("id"),
+                    exc_info=True,
+                )
+                llm_exc = _unwrap_llm_exception(exc)
+                if llm_exc:
+                    return handle_llm_error(llm_exc, logger)
+                return api_error("PLAN_FROM_INTENT_FAILED", "Failed to build plan", 500)
+            finally:
+                if loop is not None:
+                    try:
+                        loop.close()
+                    except Exception:
+                        logger.debug("API: event loop close failed but continuing")
+            plan_text = plan_reply or ""
+            steps = _parse_plan_text_to_steps(plan_text)
+            if not steps:
+                return api_error("VALIDATION_ERROR", "No steps found in plan output.", 400)
+            section_label = None
+            for step in steps:
+                section_label = step.get("section")
+                if section_label:
+                    break
+            section_prefix = f"Intent {intent_index}"
+            if not section_label:
+                section_label = section_prefix
+            elif not section_label.lower().startswith(section_prefix.lower()):
+                section_label = f"{section_prefix}: {section_label}"
+            for step in steps:
+                step["section"] = section_label
+            try:
+                if hasattr(architect_agent.goal_mgr, "save_goal_plan_section"):
+                    architect_agent.goal_mgr.save_goal_plan_section(
+                        user_id,
+                        active_goal["id"],
+                        steps,
+                        section_label,
+                        section_prefix=section_prefix,
+                    )
+                else:
+                    architect_agent.goal_mgr.save_goal_plan(
+                        user_id,
+                        active_goal["id"],
+                        steps,
+                    )
+            except Exception:
+                logger.error(
+                    "API: plan_from_intent save failed request_id=%s goal_id=%s",
+                    request_id,
+                    active_goal.get("id"),
+                    exc_info=True,
+                )
+                return api_error("PLAN_SAVE_FAILED", "Failed to save plan steps", 500)
+            try:
+                architect_agent.goal_mgr.update_goal_plan(
+                    user_id,
+                    active_goal["id"],
+                    plan=plan_text,
+                )
+            except Exception:
+                pass
+            try:
+                note_label = f"[Plan Updated] Added {len(steps)} steps from intent #{intent_index}"
+                architect_agent.goal_mgr.add_note_to_goal(
+                    user_id,
+                    active_goal["id"],
+                    "system",
+                    note_label,
+                    request_id=request_id,
+                )
+            except Exception:
+                pass
+            return jsonify(
+                {
+                    "reply": plan_text,
+                    "meta": {"intent": "plan_steps_added", "intent_index": intent_index},
+                    "goal_id": active_goal["id"],
+                }
+            )
 
         focused_goal_edit = _parse_focused_goal_edit_command(user_input)
         if focused_goal_edit:
