@@ -532,6 +532,50 @@ class DbGoalManager:
             )
             return []
 
+    def append_goal_plan(
+        self,
+        user_id: str,
+        goal_id: int,
+        plan_steps: List[Dict[str, Any]],
+        default_section: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Append plan steps without overwriting existing steps.
+        """
+        uid = self._require_user_id(user_id)
+        if self.get_goal(uid, goal_id, include_conversation=False) is None:
+            self.logger.error(f"DbGoalManager: Cannot append plan for non-existent goal {goal_id}")
+            return []
+        section_label = (default_section or "").strip()
+        try:
+            max_index = goals_repository.get_max_plan_step_index(goal_id)
+            prepared_steps: List[Dict[str, Any]] = []
+            for idx, step in enumerate(plan_steps):
+                description = step.get("description") or step.get("label") or ""
+                if not description:
+                    continue
+                section = (step.get("section") or section_label or "").strip() or None
+                prepared_steps.append(
+                    {
+                        "step_index": max_index + idx + 1,
+                        "description": self._encode_plan_step_description(description, section),
+                        "status": step.get("status", "pending"),
+                        "due_date": step.get("due_date"),
+                    }
+                )
+            created_steps = goals_repository.create_plan_steps(goal_id, prepared_steps)
+            self.logger.info(
+                "DbGoalManager: Appended %s plan steps for goal %s",
+                len(created_steps),
+                goal_id,
+            )
+            return created_steps
+        except Exception as exc:
+            self.logger.warning(
+                f"DbGoalManager: plan_steps storage unavailable, skipping append for goal {goal_id}: {exc}"
+            )
+            return []
+
     def save_goal_plan_section(
         self,
         user_id: str,
@@ -613,6 +657,35 @@ class DbGoalManager:
             if decoded.get("description") is not None:
                 step["description"] = decoded.get("description")
 
+        step_ids = [step.get("id") for step in plan_steps if step.get("id") is not None]
+        if step_ids:
+            try:
+                from db.goal_events_repository import safe_list_latest_step_details
+                detail_rows = safe_list_latest_step_details(uid, goal_id, step_ids=step_ids)
+                detail_map: Dict[int, Dict[str, Any]] = {}
+                for row in detail_rows:
+                    step_id = row.get("step_id")
+                    payload = row.get("payload")
+                    if step_id is None or not isinstance(payload, dict):
+                        continue
+                    detail_map[int(step_id)] = {
+                        "detail": payload.get("detail"),
+                        "occurred_at": row.get("occurred_at"),
+                    }
+                for step in plan_steps:
+                    detail_entry = detail_map.get(step.get("id"))
+                    if not detail_entry:
+                        continue
+                    detail_text = detail_entry.get("detail")
+                    if detail_text is None:
+                        continue
+                    step["detail"] = detail_text
+                    step["detail_updated_at"] = detail_entry.get("occurred_at")
+            except Exception as exc:
+                self.logger.warning(
+                    f"DbGoalManager: step detail lookup failed for goal {goal_id}: {exc}"
+                )
+
         goal["plan_steps"] = plan_steps
         return goal
     
@@ -651,6 +724,60 @@ class DbGoalManager:
         except Exception as exc:
             self.logger.warning(
                 f"DbGoalManager: plan_steps storage unavailable, cannot update step {step_id} for goal {goal_id}: {exc}"
+            )
+            return None
+
+    def update_plan_step_detail(
+        self,
+        user_id: str,
+        goal_id: int,
+        step_id: int,
+        detail: str,
+        request_id: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Append a detail update for a specific plan step.
+        """
+        uid = self._require_user_id(user_id)
+        if self.get_goal(uid, goal_id, include_conversation=False) is None:
+            self.logger.error(f"DbGoalManager: Cannot update detail for non-existent goal {goal_id}")
+            return None
+
+        if not isinstance(detail, str):
+            self.logger.error("DbGoalManager: Step detail must be a string")
+            return None
+
+        try:
+            plan_steps = goals_repository.get_plan_steps_for_goal(goal_id)
+            step_ids = [step["id"] for step in plan_steps]
+            if step_id not in step_ids:
+                self.logger.error(f"DbGoalManager: Step {step_id} does not belong to goal {goal_id}")
+                return None
+
+            payload = {
+                "detail": detail,
+                "updated_at": datetime.utcnow().isoformat() + "Z",
+            }
+            from db.goal_events_repository import safe_append_goal_event
+            result = safe_append_goal_event(
+                uid,
+                goal_id,
+                step_id,
+                "step_detail",
+                payload,
+                request_id=request_id,
+            )
+            if not result.get("ok", False):
+                self.logger.warning(
+                    "DbGoalManager: step detail append skipped for step %s goal %s",
+                    step_id,
+                    goal_id,
+                )
+                return None
+            return {"goal_id": goal_id, "step_id": step_id, "detail": detail}
+        except Exception as exc:
+            self.logger.warning(
+                f"DbGoalManager: step detail update failed for step {step_id} goal {goal_id}: {exc}"
             )
             return None
     

@@ -108,3 +108,38 @@ def safe_list_goal_events(user_id: str, goal_id: int, limit: int = 50) -> List[D
     except Exception as exc:
         logger.warning("Goal events list failed: %s", exc, exc_info=True)
         return []
+
+
+def list_latest_step_details(
+    user_id: str,
+    goal_id: int,
+    step_ids: Optional[List[int]] = None,
+) -> List[Dict[str, Any]]:
+    if not step_ids:
+        return []
+    query = """
+        SELECT DISTINCT ON (step_id) step_id, payload, occurred_at
+        FROM goal_events
+        WHERE user_id = %s
+          AND goal_id = %s
+          AND event_type = 'step_detail'
+          AND step_id IS NOT NULL
+          AND step_id = ANY(%s)
+        ORDER BY step_id, occurred_at DESC
+    """
+    return fetch_all(query, (user_id, goal_id, step_ids))
+
+
+def safe_list_latest_step_details(
+    user_id: str,
+    goal_id: int,
+    step_ids: Optional[List[int]] = None,
+) -> List[Dict[str, Any]]:
+    """List latest step detail events but never raise; returns [] on failure."""
+    ensure_goal_events_table()
+    try:
+        events = list_latest_step_details(user_id, goal_id, step_ids=step_ids)
+        return events if isinstance(events, list) else []
+    except Exception as exc:
+        logger.warning("Goal events step detail list failed: %s", exc, exc_info=True)
+        return []

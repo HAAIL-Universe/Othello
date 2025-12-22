@@ -527,6 +527,105 @@
       margin-top: 0.25rem;
     }
 
+    .plan-step {
+      align-items: flex-start;
+      gap: 0.6rem;
+    }
+
+    .plan-step__toggle {
+      display: flex;
+      align-items: center;
+      padding-top: 0.1rem;
+    }
+
+    .plan-step__checkbox {
+      width: 1rem;
+      height: 1rem;
+      accent-color: var(--accent);
+      cursor: pointer;
+    }
+
+    .plan-step__body {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .plan-step .planner-step__label {
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+
+    .plan-step__label--done {
+      color: var(--text-soft);
+      text-decoration: line-through;
+    }
+
+    .plan-step__detail-preview {
+      color: var(--text-soft);
+      font-size: 0.78rem;
+      margin-top: 0.3rem;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+      white-space: normal;
+    }
+
+    .plan-step__detail-btn {
+      border: 1px solid var(--border);
+      background: transparent;
+      color: var(--text-soft);
+      font-size: 0.72rem;
+      padding: 0.25rem 0.6rem;
+      border-radius: 999px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+
+    .plan-step__detail-editor {
+      display: none;
+      margin-top: 0.35rem;
+      padding-left: 1.8rem;
+    }
+
+    .plan-step__detail-input {
+      width: 100%;
+      min-height: 3.5rem;
+      border-radius: 0.6rem;
+      border: 1px solid var(--border);
+      background: rgba(15, 23, 42, 0.4);
+      color: var(--text-main);
+      font-size: 0.85rem;
+      line-height: 1.4;
+      padding: 0.5rem 0.65rem;
+      resize: vertical;
+    }
+
+    .plan-step__detail-actions {
+      display: flex;
+      gap: 0.5rem;
+      margin-top: 0.4rem;
+    }
+
+    .plan-step__detail-save,
+    .plan-step__detail-cancel {
+      border: 1px solid var(--border);
+      background: rgba(15, 23, 42, 0.35);
+      color: var(--text-main);
+      font-size: 0.72rem;
+      padding: 0.3rem 0.6rem;
+      border-radius: 0.5rem;
+      cursor: pointer;
+    }
+
+    .plan-step__detail-save {
+      border-color: var(--accent);
+      background: var(--accent-soft);
+      color: var(--accent);
+    }
+
     .planner-task {
       display: flex;
       justify-content: space-between;
@@ -3503,8 +3602,8 @@
         credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          message: "__plan_from_text__",
-          ui_action: "plan_from_text",
+          message: "__plan_from_text_append__",
+          ui_action: "plan_from_text_append",
           plan_text: planText,
           goal_id: goalId,
           active_goal_id: goalId,
@@ -3554,6 +3653,63 @@
       }
       if (!res.ok) {
         let errMsg = "Unable to build plan from intent.";
+        const contentType = res.headers.get("content-type") || "";
+        if (contentType.includes("application/json")) {
+          const data = await res.json();
+          errMsg = (data && (data.message || data.error)) || errMsg;
+        } else {
+          const text = await res.text();
+          if (text) errMsg = text.slice(0, 200);
+        }
+        throw new Error(errMsg);
+      }
+      return res.json();
+    }
+
+    function formatStepStatus(status) {
+      const raw = (status || "pending").toString().replace(/_/g, " ");
+      return raw ? raw.charAt(0).toUpperCase() + raw.slice(1) : "Pending";
+    }
+
+    async function postPlanStepStatus(goalId, stepId, status) {
+      const res = await fetch(`/api/goals/${goalId}/steps/${stepId}/status`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status }),
+      });
+      if (res.status === 401 || res.status === 403) {
+        await handleUnauthorized("plan-step-status");
+        throw new Error("Authentication required.");
+      }
+      if (!res.ok) {
+        let errMsg = "Unable to update step status.";
+        const contentType = res.headers.get("content-type") || "";
+        if (contentType.includes("application/json")) {
+          const data = await res.json();
+          errMsg = (data && (data.message || data.error)) || errMsg;
+        } else {
+          const text = await res.text();
+          if (text) errMsg = text.slice(0, 200);
+        }
+        throw new Error(errMsg);
+      }
+      return res.json();
+    }
+
+    async function postPlanStepDetail(goalId, stepId, detail) {
+      const res = await fetch(`/api/goals/${goalId}/steps/${stepId}/detail`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ detail }),
+      });
+      if (res.status === 401 || res.status === 403) {
+        await handleUnauthorized("plan-step-detail");
+        throw new Error("Authentication required.");
+      }
+      if (!res.ok) {
+        let errMsg = "Unable to update step detail.";
         const contentType = res.headers.get("content-type") || "";
         if (contentType.includes("application/json")) {
           const data = await res.json();
@@ -3919,14 +4075,48 @@
           const safeTitle = escapeHtml(sectionTitle);
           const count = steps.length;
           const stepsHtml = steps.map(step => {
+            const stepId = typeof step.id === "number" ? step.id : null;
+            const goalId = typeof goal.id === "number" ? goal.id : null;
             const label = escapeHtml(step.description || step.label || "Step");
-            const status = escapeHtml(step.status || "pending");
+            const statusValue = (step.status || "pending").toString().toLowerCase();
+            const statusLabel = escapeHtml(formatStepStatus(statusValue));
             const due = step.due_date ? ` | ${escapeHtml(`due ${step.due_date}`)}` : "";
+            const detail = typeof step.detail === "string" ? step.detail.trim() : "";
+            const hasDetail = detail.length > 0;
+            const isDone = statusValue === "done";
+            const labelClass = isDone ? "plan-step__label--done" : "";
+            const checkboxAttrs = stepId && goalId ? "" : "disabled";
+            const checkedAttr = isDone ? "checked" : "";
+            const detailPreview = hasDetail
+              ? `<div class="plan-step__detail-preview">${escapeHtml(detail)}</div>`
+              : "";
+            const detailBtnLabel = hasDetail ? "Edit details" : "Add details";
+            const detailEditor = stepId && goalId
+              ? `
+                <div class="plan-step__detail-editor" data-step-id="${stepId}" data-goal-id="${goalId}">
+                  <textarea class="plan-step__detail-input" rows="3" placeholder="Add details...">${escapeHtml(detail)}</textarea>
+                  <div class="plan-step__detail-actions">
+                    <button class="plan-step__detail-save" data-step-id="${stepId}" data-goal-id="${goalId}">Save</button>
+                    <button class="plan-step__detail-cancel" data-step-id="${stepId}" data-goal-id="${goalId}">Cancel</button>
+                  </div>
+                </div>
+              `
+              : "";
             return `
-              <div class="planner-step">
-                <div class="planner-step__label">${label}</div>
-                <div class="planner-step__meta">${status}${due}</div>
+              <div class="planner-step plan-step" data-step-id="${stepId || ""}" data-goal-id="${goalId || ""}">
+                <label class="plan-step__toggle">
+                  <input type="checkbox" class="plan-step__checkbox" data-step-id="${stepId || ""}" data-goal-id="${goalId || ""}" ${checkedAttr} ${checkboxAttrs}>
+                </label>
+                <div class="plan-step__body">
+                  <div class="planner-step__label ${labelClass}">${label}</div>
+                  <div class="planner-step__meta">${statusLabel}${due}</div>
+                  ${detailPreview}
+                </div>
+                <button class="plan-step__detail-btn" data-step-id="${stepId || ""}" data-goal-id="${goalId || ""}" ${checkboxAttrs}>
+                  ${detailBtnLabel}
+                </button>
               </div>
+              ${detailEditor}
             `;
           }).join("");
 
@@ -4084,6 +4274,61 @@
     const detailContentEl = document.getElementById("detail-content");
     if (detailContentEl) {
       detailContentEl.addEventListener("click", async (e) => {
+        const detailToggleBtn = e.target.closest(".plan-step__detail-btn");
+        const detailSaveBtn = e.target.closest(".plan-step__detail-save");
+        const detailCancelBtn = e.target.closest(".plan-step__detail-cancel");
+        if (detailToggleBtn) {
+          const stepId = parseInt(detailToggleBtn.getAttribute("data-step-id") || "0", 10);
+          if (!stepId) return;
+          const editor = detailContentEl.querySelector(`.plan-step__detail-editor[data-step-id="${stepId}"]`);
+          if (!editor) return;
+          const isOpen = editor.style.display === "block";
+          editor.style.display = isOpen ? "none" : "block";
+          if (!isOpen) {
+            const input = editor.querySelector(".plan-step__detail-input");
+            if (input) input.focus();
+          }
+          return;
+        }
+        if (detailSaveBtn) {
+          const stepId = parseInt(detailSaveBtn.getAttribute("data-step-id") || "0", 10);
+          const goalId = parseInt(detailSaveBtn.getAttribute("data-goal-id") || "0", 10);
+          if (!stepId || !goalId) return;
+          const editor = detailSaveBtn.closest(".plan-step__detail-editor");
+          const input = editor ? editor.querySelector(".plan-step__detail-input") : null;
+          const detailText = input ? input.value : "";
+          const originalLabel = detailSaveBtn.textContent;
+          detailSaveBtn.textContent = "Saving...";
+          detailSaveBtn.disabled = true;
+          try {
+            await postPlanStepDetail(goalId, stepId, detailText);
+            if (othelloState.currentDetailGoalId === goalId) {
+              await refreshGoalDetail();
+            }
+            refreshGoals();
+          } catch (err) {
+            console.error("[Othello UI] plan step detail update failed:", err);
+            detailSaveBtn.textContent = err && err.message ? err.message : "Failed";
+            setTimeout(() => {
+              detailSaveBtn.textContent = originalLabel;
+            }, 1200);
+          } finally {
+            detailSaveBtn.disabled = false;
+            if (detailSaveBtn.textContent === "Saving...") {
+              detailSaveBtn.textContent = originalLabel;
+            }
+          }
+          return;
+        }
+        if (detailCancelBtn) {
+          const stepId = parseInt(detailCancelBtn.getAttribute("data-step-id") || "0", 10);
+          if (!stepId) return;
+          const editor = detailContentEl.querySelector(`.plan-step__detail-editor[data-step-id="${stepId}"]`);
+          if (editor) {
+            editor.style.display = "none";
+          }
+          return;
+        }
         const btn = e.target.closest(".plan-from-activity-btn");
         const intentBtn = e.target.closest(".intent-plan-btn");
         if (btn) {
@@ -4151,6 +4396,28 @@
               intentBtn.disabled = false;
             }, 1500);
           }
+        }
+      });
+
+      detailContentEl.addEventListener("change", async (e) => {
+        const checkbox = e.target.closest(".plan-step__checkbox");
+        if (!checkbox) return;
+        const stepId = parseInt(checkbox.getAttribute("data-step-id") || "0", 10);
+        const goalId = parseInt(checkbox.getAttribute("data-goal-id") || "0", 10);
+        if (!stepId || !goalId) return;
+        const newStatus = checkbox.checked ? "done" : "pending";
+        checkbox.disabled = true;
+        try {
+          await postPlanStepStatus(goalId, stepId, newStatus);
+          if (othelloState.currentDetailGoalId === goalId) {
+            await refreshGoalDetail();
+          }
+          refreshGoals();
+        } catch (err) {
+          console.error("[Othello UI] plan step status update failed:", err);
+          checkbox.checked = !checkbox.checked;
+        } finally {
+          checkbox.disabled = false;
         }
       });
     }

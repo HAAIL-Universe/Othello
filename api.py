@@ -1336,6 +1336,86 @@ def handle_message():
             active_goal.get("id") if isinstance(active_goal, dict) else None,
         )
 
+        if ui_action == "plan_from_text_append":
+            if user_id is None:
+                return user_error
+            plan_text = data.get("plan_text")
+            if not isinstance(plan_text, str) or not plan_text.strip():
+                return api_error("VALIDATION_ERROR", "plan_text is required", 400)
+            if not isinstance(active_goal, dict) or active_goal.get("id") is None:
+                return api_error("VALIDATION_ERROR", "Please focus a goal first.", 400)
+            status = (active_goal.get("status") or "").strip().lower()
+            if status == "archived":
+                return api_error(
+                    "GOAL_ARCHIVED",
+                    "Goal is archived",
+                    409,
+                    details={"goal_id": active_goal.get("id")},
+                )
+            steps = _parse_plan_text_to_steps(plan_text)
+            if not steps:
+                return api_error("VALIDATION_ERROR", "No steps found in plan text.", 400)
+            section_label = data.get("section_label")
+            if not isinstance(section_label, str) or not section_label.strip():
+                section_label = f"Chat Plan: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}"
+            try:
+                if hasattr(architect_agent.goal_mgr, "append_goal_plan"):
+                    architect_agent.goal_mgr.append_goal_plan(
+                        user_id,
+                        active_goal["id"],
+                        steps,
+                        default_section=section_label,
+                    )
+                elif hasattr(architect_agent.goal_mgr, "save_goal_plan_section"):
+                    architect_agent.goal_mgr.save_goal_plan_section(
+                        user_id,
+                        active_goal["id"],
+                        steps,
+                        section_label,
+                        section_prefix=section_label,
+                    )
+                else:
+                    architect_agent.goal_mgr.save_goal_plan(
+                        user_id,
+                        active_goal["id"],
+                        steps,
+                    )
+            except Exception:
+                logger.error(
+                    "API: plan_from_text_append save failed request_id=%s goal_id=%s",
+                    request_id,
+                    active_goal.get("id"),
+                    exc_info=True,
+                )
+                return api_error("PLAN_SAVE_FAILED", "Failed to save plan steps", 500)
+            try:
+                architect_agent.goal_mgr.update_goal_plan(
+                    user_id,
+                    active_goal["id"],
+                    plan=plan_text,
+                )
+            except Exception:
+                pass
+            try:
+                note_label = f"[Plan Updated] Appended {len(steps)} steps from chat"
+                architect_agent.goal_mgr.add_note_to_goal(
+                    user_id,
+                    active_goal["id"],
+                    "system",
+                    note_label,
+                    request_id=request_id,
+                )
+            except Exception:
+                pass
+            return jsonify(
+                {
+                    "reply": f"Added {len(steps)} steps to the current plan.",
+                    "meta": {"intent": "plan_steps_added"},
+                    "goal_id": active_goal["id"],
+                    "section_label": section_label,
+                }
+            )
+
         if ui_action == "plan_from_text":
             if user_id is None:
                 return user_error
@@ -2730,6 +2810,69 @@ def update_step_status(goal_id, step_id):
         return api_error(
             "STEP_UPDATE_FAILED",
             "Failed to update step status",
+            500,
+            details=type(e).__name__,
+            extra={"goal_id": goal_id, "step_id": step_id},
+        )
+
+
+@app.route("/api/goals/<int:goal_id>/steps/<int:step_id>/detail", methods=["POST"])
+@require_auth
+def update_step_detail(goal_id, step_id):
+    """
+    Update the detail field for a specific plan step.
+
+    Request body:
+        {
+            "detail": "Optional elaboration"
+        }
+
+    Returns:
+        {
+            "step": {
+                "goal_id": 1,
+                "step_id": 2,
+                "detail": "Optional elaboration"
+            }
+        }
+    """
+    logger = logging.getLogger("API")
+    comps = get_agent_components()
+    architect_agent = comps["architect_agent"]
+    request_id = _get_request_id()
+    user_id, error = _get_user_id_or_error()
+    if error:
+        return error
+    data = request.get_json() or {}
+    detail = data.get("detail")
+
+    if detail is None or not isinstance(detail, str):
+        return api_error("VALIDATION_ERROR", "detail is required", 400)
+
+    try:
+        updated = architect_agent.goal_mgr.update_plan_step_detail(
+            user_id,
+            goal_id,
+            step_id,
+            detail,
+            request_id=request_id,
+        )
+        if updated is None:
+            logger.warning(f"API: Failed to update step detail #{step_id} for goal #{goal_id}")
+            return api_error(
+                "STEP_NOT_FOUND",
+                "Step not found or does not belong to this goal",
+                404,
+                extra={"goal_id": goal_id, "step_id": step_id},
+            )
+
+        logger.info(f"API: Updated step detail #{step_id} for goal #{goal_id}")
+        return jsonify({"step": updated})
+    except Exception as e:
+        logger.error(f"API: Failed to update step detail: {e}", exc_info=True)
+        return api_error(
+            "STEP_DETAIL_UPDATE_FAILED",
+            "Failed to update step detail",
             500,
             details=type(e).__name__,
             extra={"goal_id": goal_id, "step_id": step_id},
