@@ -1341,6 +1341,21 @@ def handle_message():
                         "meta": {"intent": "focused_goal_edit_failed"},
                     }
                 )
+            try:
+                note_label = (
+                    "[Goal Append] Appended text (len=%s)" % len(payload)
+                    if focused_goal_edit["mode"] == "append"
+                    else "[Goal Update] Replaced description (len=%s)" % len(payload)
+                )
+                architect_agent.goal_mgr.add_note_to_goal(
+                    user_id,
+                    active_goal["id"],
+                    "system",
+                    note_label,
+                    request_id=request_id,
+                )
+            except Exception:
+                pass
             fresh_goal = architect_agent.goal_mgr.get_goal(user_id, active_goal["id"])
             if fresh_goal is None:
                 reply_text = "I updated the goal, but couldn't reload it."
@@ -1432,6 +1447,22 @@ def handle_message():
                 user_id,
                 len(user_input),
             )
+            if ok and pending_goal_id is not None:
+                try:
+                    note_label = (
+                        "[Goal Append] Appended text (len=%s)" % len(user_input)
+                        if pending_mode == "append"
+                        else "[Goal Update] Replaced description (len=%s)" % len(user_input)
+                    )
+                    architect_agent.goal_mgr.add_note_to_goal(
+                        user_id,
+                        pending_goal_id,
+                        "system",
+                        note_label,
+                        request_id=request_id,
+                    )
+                except Exception:
+                    pass
             fresh_goal = architect_agent.goal_mgr.get_goal(user_id, pending_goal_id)
             reply_text = (
                 "Updated the focused goal."

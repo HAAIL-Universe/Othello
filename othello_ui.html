@@ -1068,6 +1068,22 @@
       margin-bottom: 0.75rem;
     }
 
+    .goal-detail__refresh {
+      margin-left: auto;
+      border: 1px solid var(--border);
+      background: var(--card-bg);
+      color: var(--text-main);
+      font-size: 0.75rem;
+      padding: 0.35rem 0.7rem;
+      border-radius: 999px;
+      cursor: pointer;
+    }
+
+    .goal-detail__refresh:hover {
+      border-color: rgba(122, 160, 255, 0.45);
+      color: var(--accent);
+    }
+
     .back-btn {
       background: none;
       border: none;
@@ -1452,6 +1468,8 @@
         <div class="focus-ribbon__title" id="focus-ribbon-title">No goal selected</div>
       </div>
       <button class="focus-ribbon__btn" id="view-focus-btn">View Goal</button>
+      <button class="focus-ribbon__btn" id="update-focus-btn">Update Focus</button>
+      <button class="focus-ribbon__btn" id="append-focus-btn">Append to Focus</button>
       <button class="focus-ribbon__btn" id="unfocus-btn">Unfocus</button>
     </div>
 
@@ -1531,6 +1549,7 @@
         <div class="goal-detail__header-top">
           <button class="back-btn" id="back-from-detail">←</button>
           <div class="goal-detail__id" id="detail-goal-id">Goal #1</div>
+          <button class="goal-detail__refresh" id="goal-detail-refresh">Refresh</button>
         </div>
         <h1 class="goal-detail__title" id="detail-goal-title">Goal Title</h1>
       </div>
@@ -2089,6 +2108,8 @@
     const insightsTabBadge = document.getElementById('insights-tab-badge');
     const focusRibbonTitle = document.getElementById('focus-ribbon-title');
     const viewFocusBtn = document.getElementById('view-focus-btn');
+    const updateFocusBtn = document.getElementById('update-focus-btn');
+    const appendFocusBtn = document.getElementById('append-focus-btn');
     const unfocusBtn = document.getElementById('unfocus-btn');
     const goalsList = document.getElementById('goals-list');
     const goalDetail = document.getElementById('goal-detail');
@@ -2096,6 +2117,7 @@
     const detailGoalTitle = document.getElementById('detail-goal-title');
     const detailContent = document.getElementById('detail-content');
     const backFromDetailBtn = document.getElementById('back-from-detail');
+    const goalDetailRefreshBtn = document.getElementById('goal-detail-refresh');
     const continueWorkingBtn = document.getElementById('continue-working-btn');
     const archiveGoalBtn = document.getElementById('archive-goal-btn');
     const plannerHeadline = document.getElementById('planner-headline');
@@ -2116,6 +2138,7 @@
       goals: [],
       activeGoalId: null,
       currentDetailGoalId: null,
+      pendingGoalEdit: null,
       goalUpdateCounts: {},
       currentAgentStatus: null
     };
@@ -2979,6 +3002,73 @@
       }
     });
 
+    async function triggerGoalEdit(mode) {
+      const goalId = othelloState.activeGoalId;
+      if (goalId == null) return;
+      statusEl.textContent = "Preparing update.";
+      try {
+        const res = await fetch(API, {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({
+            message: "__goal_action__",
+            goal_action: mode,
+            goal_id: goalId,
+            active_goal_id: goalId,
+            current_mode: othelloState.currentMode,
+            current_view: othelloState.currentView,
+          })
+        });
+
+        if (res.status === 401 || res.status === 403) {
+          await handleUnauthorized("goal-edit");
+          return;
+        }
+
+        if (!res.ok) {
+          let errText = "Unable to start goal update.";
+          const contentType = res.headers.get("content-type") || "";
+          if (contentType.includes("application/json")) {
+            const data = await res.json();
+            errText = (data && (data.message || data.error)) || errText;
+          }
+          addMessage("bot", errText);
+          statusEl.textContent = "Error";
+          return;
+        }
+
+        const data = await res.json();
+        addMessage("bot", data.reply || "[no reply]");
+        statusEl.textContent = "Online";
+
+        const metaIntent = data.meta && data.meta.intent ? data.meta.intent : null;
+        if (metaIntent === "pending_goal_edit_set") {
+          const pendingMode = data.meta && data.meta.mode ? data.meta.mode : mode;
+          othelloState.pendingGoalEdit = { mode: pendingMode, goal_id: goalId };
+        } else if (metaIntent === "pending_goal_edit_applied") {
+          othelloState.pendingGoalEdit = null;
+        }
+
+        await refreshGoals();
+      } catch (err) {
+        console.error("[Othello UI] goal edit error:", err);
+        addMessage("bot", "[Connection error: backend unreachable]");
+        statusEl.textContent = "Offline";
+      }
+    }
+
+    if (updateFocusBtn) {
+      updateFocusBtn.addEventListener("click", () => {
+        triggerGoalEdit("update");
+      });
+    }
+
+    if (appendFocusBtn) {
+      appendFocusBtn.addEventListener("click", () => {
+        triggerGoalEdit("append");
+      });
+    }
+
     async function unfocusGoal() {
       const hadFocus = othelloState.activeGoalId !== null;
       if (!hadFocus) return;
@@ -3023,7 +3113,7 @@
     }
 
     // ===== CHAT FUNCTIONS =====
-    function addMessage(role, text) {
+    function addMessage(role, text, options = {}) {
       // Hide chat placeholder when first message appears
       const chatPlaceholder = document.getElementById("chat-placeholder");
       if (chatPlaceholder && !chatPlaceholder.classList.contains("hidden")) {
@@ -3039,8 +3129,10 @@
 
       const meta = document.createElement("div");
       meta.className = "meta";
+      const metaNote = options && typeof options.metaNote === "string" ? options.metaNote.trim() : "";
+      const metaSuffix = metaNote ? ` | ${metaNote}` : "";
       meta.textContent = role === "user"
-        ? "You · " + new Date().toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"})
+        ? "You · " + new Date().toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"}) + metaSuffix
         : "Othello · " + new Date().toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"});
 
       bubble.appendChild(meta);
@@ -3086,7 +3178,9 @@
       const text = input.value.trim();
       if (!text) return;
 
-      addMessage("user", text);
+      const pendingEdit = othelloState.pendingGoalEdit;
+      const metaNote = pendingEdit ? `Editing goal #${pendingEdit.goal_id}` : "";
+      addMessage("user", text, metaNote ? { metaNote } : undefined);
       input.value = "";
       input.focus();
       statusEl.textContent = "Thinking…";
@@ -3154,9 +3248,10 @@
         }
 
         // Handle meta from backend for goal list / selection UX
-        if (data.meta && data.meta.intent === "select_goal_success" && typeof data.active_goal_id === "number") {
+        const metaIntent = data.meta && data.meta.intent ? data.meta.intent : null;
+        if (metaIntent === "select_goal_success" && typeof data.active_goal_id === "number") {
           setActiveGoal(data.active_goal_id);
-        } else if (data.meta && data.meta.intent === "list_goals" && Array.isArray(data.goals)) {
+        } else if (metaIntent === "list_goals" && Array.isArray(data.goals)) {
           othelloState.goals = data.goals;
           othelloState.goals.forEach((g) => {
             if (g && typeof g.id === "number" && !(g.id in othelloState.goalUpdateCounts)) {
@@ -3165,6 +3260,29 @@
           });
         } else {
           bumpActiveGoalUpdates();
+        }
+
+        if (metaIntent === "pending_goal_edit_set") {
+          const pendingMode = data.meta && data.meta.mode ? data.meta.mode : "update";
+          if (othelloState.activeGoalId !== null) {
+            othelloState.pendingGoalEdit = {
+              mode: pendingMode,
+              goal_id: othelloState.activeGoalId
+            };
+          }
+        } else if (metaIntent === "pending_goal_edit_applied") {
+          othelloState.pendingGoalEdit = null;
+          if (statusEl) {
+            const prevStatus = statusEl.textContent;
+            const ok = !!(data.meta && data.meta.ok);
+            const nextStatus = ok ? "Goal updated." : "Goal update failed.";
+            statusEl.textContent = nextStatus;
+            setTimeout(() => {
+              if (statusEl.textContent === nextStatus) {
+                statusEl.textContent = prevStatus;
+              }
+            }, 1500);
+          }
         }
 
         if (data.insights_meta) {
@@ -3435,12 +3553,8 @@
       });
     }
 
-    function showGoalDetail(goalId) {
-      const goal = othelloState.goals.find(g => g.id === goalId);
+    function renderGoalDetail(goal) {
       if (!goal) return;
-
-      othelloState.currentDetailGoalId = goalId;
-
       detailGoalId.textContent = `Goal #${goal.id}`;
       detailGoalTitle.textContent = goal.text || "Untitled Goal";
 
@@ -3496,16 +3610,95 @@
         `;
       }
 
-      // Plan placeholder
-      contentHtml += `
-        <div class="detail-section">
-          <div class="detail-section__title">Current Plan</div>
-          <div class="detail-section__body">Plan tracking coming soon. Othello will help you break down this goal into actionable steps.</div>
-        </div>
-      `;
+      const planSteps = Array.isArray(goal.plan_steps) ? goal.plan_steps : [];
+      const planText = typeof goal.plan === "string" ? goal.plan.trim() : "";
+      if (planSteps.length > 0) {
+        const stepsHtml = planSteps.map(step => {
+          const label = step.description || step.label || "Step";
+          const status = step.status || "pending";
+          const due = step.due_date ? ` | due ${step.due_date}` : "";
+          return `
+            <div class="planner-step">
+              <div class="planner-step__label">${label}</div>
+              <div class="planner-step__meta">${status}${due}</div>
+            </div>
+          `;
+        }).join("");
+
+        contentHtml += `
+          <div class="detail-section">
+            <div class="detail-section__title">Current Plan</div>
+            <div class="planner-steps">
+              ${stepsHtml}
+            </div>
+          </div>
+        `;
+      } else if (planText) {
+        contentHtml += `
+          <div class="detail-section">
+            <div class="detail-section__title">Current Plan</div>
+            <div class="detail-section__body">${planText}</div>
+          </div>
+        `;
+      } else {
+        contentHtml += `
+          <div class="detail-section">
+            <div class="detail-section__title">Current Plan</div>
+            <div class="detail-section__body">Plan tracking coming soon. Othello will help you break down this goal into actionable steps.</div>
+          </div>
+        `;
+      }
 
       detailContent.innerHTML = contentHtml;
+    }
+
+    async function fetchGoalDetail(goalId) {
+      if (!goalId) return;
+      try {
+        const resp = await fetch(`/api/goals/${goalId}`, { credentials: "include" });
+        if (resp.status === 401 || resp.status === 403) {
+          await handleUnauthorized("goal-detail");
+          return;
+        }
+        if (!resp.ok) throw new Error("Failed to fetch goal detail");
+        const data = await resp.json();
+        const goal = data && data.goal ? data.goal : null;
+        if (!goal) return;
+        const idx = othelloState.goals.findIndex(g => g.id === goal.id);
+        if (idx >= 0) {
+          othelloState.goals[idx] = goal;
+        } else {
+          othelloState.goals.push(goal);
+        }
+        renderGoalDetail(goal);
+      } catch (err) {
+        console.warn("[Othello UI] Failed to fetch goal detail:", err);
+      }
+    }
+
+    async function refreshGoalDetail() {
+      if (othelloState.currentDetailGoalId == null) return;
+      await fetchGoalDetail(othelloState.currentDetailGoalId);
+    }
+
+    function showGoalDetail(goalId) {
+      const goal = othelloState.goals.find(g => g.id === goalId);
+      othelloState.currentDetailGoalId = goalId;
+
+      if (goal) {
+        renderGoalDetail(goal);
+      } else {
+        detailGoalId.textContent = `Goal #${goalId}`;
+        detailGoalTitle.textContent = "Loading...";
+        detailContent.innerHTML = `
+          <div class="detail-section">
+            <div class="detail-section__body">Loading goal details...</div>
+          </div>
+        `;
+      }
+
       goalDetail.classList.add("visible");
+      fetchGoalDetail(goalId);
     }
 
     async function archiveGoal(goalId) {
@@ -3568,6 +3761,9 @@
     }
 
     backFromDetailBtn.addEventListener("click", hideGoalDetail);
+    if (goalDetailRefreshBtn) {
+      goalDetailRefreshBtn.addEventListener("click", refreshGoalDetail);
+    }
 
     continueWorkingBtn.addEventListener("click", () => {
       if (othelloState.currentDetailGoalId !== null) {
