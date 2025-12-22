@@ -641,6 +641,17 @@ class DbGoalManager:
         goal = self.get_goal(uid, goal_id)
         if goal is None:
             return None
+        raw_goal_id = goal.get("id")
+        try:
+            goal["id"] = int(raw_goal_id)
+        except (TypeError, ValueError):
+            self.logger.error(
+                "DbGoalManager: Invalid goal id for goal %s value=%s type=%s",
+                goal_id,
+                raw_goal_id,
+                type(raw_goal_id).__name__,
+            )
+            raise ValueError("INVALID_GOAL_ID")
 
         try:
             plan_steps = goals_repository.get_plan_steps_for_goal(goal_id)
@@ -656,6 +667,28 @@ class DbGoalManager:
                 step["section"] = decoded.get("section")
             if decoded.get("description") is not None:
                 step["description"] = decoded.get("description")
+            raw_step_id = step.get("id")
+            try:
+                step["id"] = int(raw_step_id)
+            except (TypeError, ValueError):
+                self.logger.error(
+                    "DbGoalManager: Invalid plan step id goal=%s value=%s type=%s",
+                    goal_id,
+                    raw_step_id,
+                    type(raw_step_id).__name__,
+                )
+                raise ValueError("INVALID_PLAN_STEP_ID")
+            raw_step_index = step.get("step_index")
+            try:
+                step["step_index"] = int(raw_step_index)
+            except (TypeError, ValueError):
+                self.logger.error(
+                    "DbGoalManager: Invalid plan step index goal=%s value=%s type=%s",
+                    goal_id,
+                    raw_step_index,
+                    type(raw_step_index).__name__,
+                )
+                raise ValueError("INVALID_PLAN_STEP_INDEX")
 
         step_ids = [step.get("id") for step in plan_steps if step.get("id") is not None]
         if step_ids:
@@ -750,17 +783,46 @@ class DbGoalManager:
 
         try:
             plan_steps = goals_repository.get_plan_steps_for_goal(goal_id)
-            step_ids = [step["id"] for step in plan_steps]
+            step_ids: List[int] = []
+            for step in plan_steps:
+                raw_id = step.get("id")
+                try:
+                    step_ids.append(int(raw_id))
+                except (TypeError, ValueError):
+                    self.logger.error(
+                        "DbGoalManager: Invalid plan step id for update goal=%s value=%s type=%s",
+                        goal_id,
+                        raw_id,
+                        type(raw_id).__name__,
+                    )
+                    raise ValueError("INVALID_PLAN_STEP_ID")
             resolved_step_id = step_id
             if resolved_step_id not in step_ids and step_index is not None:
                 for step in plan_steps:
                     if step.get("step_index") == step_index:
                         resolved_step_id = step.get("id")
+                        self.logger.info(
+                            "DbGoalManager: step detail resolved by step_index goal_id=%s step_index=%s resolved_step_id=%s",
+                            goal_id,
+                            step_index,
+                            resolved_step_id,
+                        )
                         break
 
             if resolved_step_id not in step_ids:
+                sample = [
+                    {"id": step.get("id"), "type": type(step.get("id")).__name__}
+                    for step in plan_steps[:5]
+                ]
+                self.logger.info(
+                    "DbGoalManager: step detail membership failed goal_id=%s step_id=%s step_id_type=%s sample_step_ids=%s",
+                    goal_id,
+                    step_id,
+                    type(step_id).__name__,
+                    sample,
+                )
                 self.logger.error(f"DbGoalManager: Step {step_id} does not belong to goal {goal_id}")
-                return None
+                raise ValueError("STEP_ID_STALE")
 
             payload = {
                 "detail": detail,

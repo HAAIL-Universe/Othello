@@ -2580,7 +2580,18 @@ def get_goal_with_plan(goal_id):
         
         logger.info(f"API: Retrieved goal #{goal_id} with {len(goal.get('plan_steps', []))} steps")
         return jsonify({"goal": goal})
-        
+
+    except ValueError as exc:
+        reason = str(exc)
+        logger.error("API: Goal detail id normalization failed goal_id=%s reason=%s", goal_id, reason)
+        if reason == "INVALID_GOAL_ID":
+            return api_error("GOAL_ID_INVALID", "Goal id must be an integer", 500)
+        if reason == "INVALID_PLAN_STEP_ID":
+            return api_error("PLAN_STEP_ID_INVALID", "Plan step id must be an integer", 500)
+        if reason == "INVALID_PLAN_STEP_INDEX":
+            return api_error("PLAN_STEP_INDEX_INVALID", "Plan step index must be an integer", 500)
+        return api_error("GOAL_ID_INVALID", "Goal id normalization failed", 500)
+
     except Exception as e:
         logger.error(f"API: Failed to fetch goal #{goal_id}: {e}", exc_info=True)
         return api_error(
@@ -2852,6 +2863,18 @@ def update_step_detail(goal_id, step_id):
     if raw_body_step_id is None:
         raw_body_step_id = data.get("stepId")
 
+    logger.info(
+        "API: step detail types goal_id=%s(%s) step_id=%s(%s) raw_step_index=%s(%s) raw_body_step_id=%s(%s)",
+        goal_id,
+        type(goal_id).__name__,
+        step_id,
+        type(step_id).__name__,
+        raw_step_index,
+        type(raw_step_index).__name__,
+        raw_body_step_id,
+        type(raw_body_step_id).__name__,
+    )
+
     if detail is None or not isinstance(detail, str):
         return api_error("VALIDATION_ERROR", "detail is required", 400)
 
@@ -2912,6 +2935,30 @@ def update_step_detail(goal_id, step_id):
 
         logger.info(f"API: Updated step detail #{step_id} for goal #{goal_id}")
         return jsonify({"step": updated})
+    except ValueError as exc:
+        reason = str(exc)
+        logger.error(
+            "API: Step detail id normalization failed goal_id=%s step_id=%s reason=%s",
+            goal_id,
+            step_id,
+            reason,
+        )
+        if reason == "INVALID_PLAN_STEP_ID":
+            return api_error("PLAN_STEP_ID_INVALID", "Plan step id must be an integer", 500)
+        if reason == "STEP_ID_STALE":
+            logger.info(
+                "API: step detail stale goal_id=%s step_id=%s step_index=%s",
+                goal_id,
+                step_id,
+                step_index,
+            )
+            return api_error(
+                "STEP_ID_STALE",
+                "Step id is stale; refresh and try again.",
+                409,
+                extra={"goal_id": goal_id, "step_id": step_id, "step_index": step_index},
+            )
+        return api_error("STEP_DETAIL_ID_INVALID", "Step detail id normalization failed", 500)
     except Exception as e:
         logger.error(f"API: Failed to update step detail: {e}", exc_info=True)
         return api_error(

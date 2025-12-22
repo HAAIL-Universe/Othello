@@ -3320,10 +3320,22 @@
       });
     }
 
+    function normalizeGoalId(goalId) {
+      if (typeof goalId === "number" && Number.isFinite(goalId)) {
+        return Math.trunc(goalId);
+      }
+      const raw = String(goalId || "").trim();
+      const match = raw.match(/\d+/);
+      if (!match) return null;
+      const parsed = parseInt(match[0], 10);
+      return Number.isFinite(parsed) ? parsed : null;
+    }
+
     function setActiveGoal(goalId) {
-      othelloState.activeGoalId = goalId;
-      if (!(goalId in othelloState.goalUpdateCounts)) {
-        othelloState.goalUpdateCounts[goalId] = 0;
+      const normalizedId = goalId == null ? null : normalizeGoalId(goalId);
+      othelloState.activeGoalId = normalizedId;
+      if (normalizedId != null && !(normalizedId in othelloState.goalUpdateCounts)) {
+        othelloState.goalUpdateCounts[normalizedId] = 0;
       }
       othelloState.pendingGoalEdit = null;
       updateFocusRibbon();
@@ -3965,19 +3977,31 @@
       const intentBody = (goal.description || goal.intent || goal.body || "").trim();
       const intentText = intentBody || goal.text || "No description provided.";
       const intentItems = parseIntentItems(intentBody || intentText);
-      const canBuildIntentPlan = othelloState.activeGoalId === goal.id;
+      const goalIdNum = normalizeGoalId(goal.id);
+      const activeIdNum = normalizeGoalId(othelloState.activeGoalId);
+      const isFocusedGoal = goalIdNum != null && activeIdNum != null && goalIdNum === activeIdNum;
+      if (BOOT_DEBUG) {
+        console.log("[Goal Detail] intent buttons", {
+          activeGoalId: othelloState.activeGoalId,
+          activeGoalIdType: typeof othelloState.activeGoalId,
+          goalId: goal.id,
+          goalIdType: typeof goal.id,
+          goalIdNum,
+          activeIdNum,
+          isFocusedGoal,
+          intentCount: intentItems.length,
+        });
+      }
       if (intentItems.length > 0) {
         const itemsHtml = intentItems.map((item, idx) => {
           const itemIndex = Number.isFinite(item.index) ? item.index : (idx + 1);
           const itemText = item.text || "";
           const safeText = escapeHtml(itemText);
-          const planBtn = canBuildIntentPlan
-            ? `
-              <button class="commitment-btn intent-plan-btn" data-intent-index="${itemIndex}" data-intent-text="${encodeURIComponent(itemText)}">
-                Build plan
-              </button>
-            `
-            : "";
+          const planBtn = `
+            <button class="commitment-btn intent-plan-btn" data-intent-index="${itemIndex}" data-intent-text="${encodeURIComponent(itemText)}" data-goal-id="${goalIdNum || ""}">
+              Build plan
+            </button>
+          `;
           return `
             <div class="intent-item">
               <div class="intent-item__text">${itemIndex}. ${safeText}</div>
@@ -4021,7 +4045,7 @@
             <div class="activity-log">
         `;
 
-        const canPlanFromActivity = othelloState.activeGoalId !== null && othelloState.activeGoalId === goal.id;
+        const canPlanFromActivity = goalIdNum != null && activeIdNum != null && goalIdNum === activeIdNum;
         activityEntries.forEach(entry => {
           const roleRaw = entry.role || "";
           const role = roleRaw === "user"
@@ -4080,7 +4104,7 @@
           const count = steps.length;
           const stepsHtml = steps.map(step => {
             const stepId = typeof step.id === "number" ? step.id : null;
-            const goalId = typeof goal.id === "number" ? goal.id : null;
+            const goalId = goalIdNum != null ? goalIdNum : null;
             const stepIndex = typeof step.step_index === "number" ? step.step_index : null;
             const label = escapeHtml(step.description || step.label || "Step");
             const statusValue = (step.status || "pending").toString().toLowerCase();
@@ -4379,6 +4403,7 @@
         }
         if (intentBtn) {
           const intentIndex = parseInt(intentBtn.getAttribute("data-intent-index") || "0", 10);
+          const rawGoalId = intentBtn.getAttribute("data-goal-id");
           const encodedText = intentBtn.getAttribute("data-intent-text") || "";
           let intentText = "";
           try {
@@ -4387,12 +4412,20 @@
             intentText = "";
           }
           if (!intentIndex || !intentText) return;
-          const goalId = othelloState.activeGoalId;
+          const resolvedGoalId = normalizeGoalId(rawGoalId || othelloState.currentDetailGoalId || othelloState.activeGoalId);
+          if (resolvedGoalId == null) return;
+          const activeIdNum = normalizeGoalId(othelloState.activeGoalId);
+          if (activeIdNum !== resolvedGoalId) {
+            setActiveGoal(resolvedGoalId);
+            if (othelloState.currentDetailGoalId === resolvedGoalId) {
+              await refreshGoalDetail();
+            }
+          }
           const originalLabel = intentBtn.textContent;
           intentBtn.textContent = "Building.";
           intentBtn.disabled = true;
           try {
-            const data = await postPlanFromIntent(goalId, intentIndex, intentText);
+            const data = await postPlanFromIntent(resolvedGoalId, intentIndex, intentText);
             intentBtn.textContent = "Built";
             if (data && data.reply) {
               addMessage("bot", data.reply);
