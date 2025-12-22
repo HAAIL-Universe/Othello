@@ -87,6 +87,9 @@
   - Step completion + step detail are persisted via API endpoints and goal_events.
 - Needs decision:
   - Legacy `ui_action=plan_from_text` still deletes all steps if called directly; UI now uses `plan_from_text_append`, but the overwrite endpoint remains available for other clients.
+- UX/contract gaps addressed here:
+  - Placeholder replies ("It isn't saved yet.") violate "No silent failure" and "Contract before cleverness" by returning non-actionable output instead of a useful response.
+  - Headings-as-steps violates "Plans are hypotheses; outcomes are facts" and UI clarity by inserting non-actionable rows into the read model.
 
 ## Proposed/implemented change set (minimal, contract-driven)
 1) Add plan append action (no overwrite):
@@ -110,6 +113,9 @@
    - Step detail endpoint logs id types and stale resolution (see `api.py:2867` and `api.py:2948`).
 6) Intent plan buttons:
    - "Build plan" always renders in goal detail; click auto-focuses the goal and proceeds to `plan_from_intent` (see `othello_ui.html:4001` and `othello_ui.html:4372`).
+7) Goal intent reply + plan parsing fixes (this update):
+   - `/api/message` always returns a useful `reply` while still attaching `meta.goal_intent_suggestion` for the decision panel.
+   - Structured plan parsing skips headings and only persists actionable steps; headings become section labels via existing section encoding.
 
 ## Change-to-Trinity mapping (explicit)
 - `plan_from_text_append` + `append_goal_plan`:
@@ -136,6 +142,12 @@
 - `POST /api/message` with `ui_action=plan_from_text_append`
   - Request body keys: `plan_text`, `goal_id`, `active_goal_id`, `current_mode`, `current_view`.
   - Response: `{ reply, meta: { intent: "plan_steps_added" }, goal_id, section_label }`.
+- `POST /api/message` goal intent suggestion metadata:
+  - Response includes `meta.goal_intent_suggestion`:
+    - `{ message_id, suggested_goal_text, confidence, actions[] }`
+  - Existing `meta.suggestions[]` continues to include `{ type, source_client_message_id, confidence, title_suggestion, body_suggestion }`.
+- Plan parse empty error:
+  - `PLAN_PARSE_EMPTY` with message `No actionable steps found; provide bullets or numbered tasks.` for `ui_action=plan_from_intent|plan_from_text_append|plan_from_text`.
 - `POST /api/goals/{goal_id}/steps/{step_id}/status`
   - Request: `{ "status": "pending" | "in_progress" | "done" }`
   - Response: `{ "step": { id, goal_id, step_index, description, status, ... } }`
@@ -151,11 +163,13 @@
 - UI attaches a high-visibility decision panel under the originating user bubble and highlights that bubble (`.ux-goal-intent`).
 - Suggestions do not imply saved state until an explicit commit endpoint returns success.
 - Dismissals are stored locally and optionally sent to `/api/suggestions/dismiss`.
+- Current flow: UI chat -> `POST /api/message` with `client_message_id` -> `meta.goal_intent_suggestion` + `meta.suggestions[]` -> explicit commit endpoints (`POST /api/goals` or `POST /api/goals/{goal_id}/notes`).
 
 ### Payload shapes
 - `POST /api/message` request body includes `client_message_id`.
 - `POST /api/message` response `meta.suggestions[]`:
   - `{ "type": "goal_intent", "source_client_message_id": "<id>", "confidence": 0.0, "title_suggestion": "...", "body_suggestion": "..." }`
+  - `meta.goal_intent_suggestion` also includes `{ "message_id": "<id>", "suggested_goal_text": "...", "confidence": 0.0, "actions": ["save_goal", "edit", "dismiss", "add_to_focused_goal"] }` when active goal exists.
 - `POST /api/goals` request body:
   - `{ "title": "...", "description": "...", "source_client_message_id": "<id>" }`
   - Response includes `{ "goal_id": <int>, "meta": { "intent": "goal_created" } }`.

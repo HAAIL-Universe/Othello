@@ -698,6 +698,48 @@ def _detect_goal_intent_suggestion(
     }
 
 
+def _get_goal_intent_suggestion(
+    user_input: str,
+    client_message_id: Optional[str],
+    user_id: Optional[str],
+) -> Optional[Dict[str, Any]]:
+    suggestion = _detect_goal_intent_suggestion(user_input, client_message_id)
+    if not suggestion:
+        return None
+    if _is_suggestion_dismissed(user_id, suggestion["type"], client_message_id or ""):
+        return None
+    return suggestion
+
+
+def _normalize_reply_text(text: str) -> str:
+    raw = (text or "").strip().lower()
+    normalized = re.sub(r"\s+", " ", raw)
+    return re.sub(r"[.!?]+$", "", normalized).strip()
+
+
+def _is_placeholder_reply(text: str) -> bool:
+    normalized = _normalize_reply_text(text)
+    return normalized in {
+        "it isn't saved yet",
+        "it isnt saved yet",
+        "it is not saved yet",
+        "not saved yet",
+    }
+
+
+def _goal_intent_prompt(active_goal_id: Optional[int]) -> str:
+    if active_goal_id is not None:
+        return "Want this saved as a goal, added to your focused goal, or broken into steps?"
+    return "Want this saved as a goal or broken into steps?"
+
+
+def _llm_unavailable_prompt(active_goal_id: Optional[int]) -> str:
+    return (
+        "I'm having trouble reaching the assistant right now. "
+        + _goal_intent_prompt(active_goal_id)
+    )
+
+
 def _attach_goal_intent_suggestion(
     response: Dict[str, Any],
     *,
@@ -706,21 +748,32 @@ def _attach_goal_intent_suggestion(
     user_id: Optional[str],
     request_id: str,
     logger: logging.Logger,
-) -> None:
-    suggestion = _detect_goal_intent_suggestion(user_input, client_message_id)
+    active_goal_id: Optional[int] = None,
+    suggestion: Optional[Dict[str, Any]] = None,
+) -> bool:
+    if suggestion is None:
+        suggestion = _get_goal_intent_suggestion(user_input, client_message_id, user_id)
     if not suggestion:
-        return
-    if _is_suggestion_dismissed(user_id, suggestion["type"], client_message_id or ""):
-        return
+        return False
     meta = response.setdefault("meta", {})
     suggestions = meta.setdefault("suggestions", [])
     suggestions.append(suggestion)
+    actions = ["save_goal", "edit", "dismiss"]
+    if active_goal_id is not None:
+        actions.append("add_to_focused_goal")
+    meta["goal_intent_suggestion"] = {
+        "message_id": client_message_id,
+        "suggested_goal_text": suggestion.get("body_suggestion") or (user_input or "").strip(),
+        "confidence": suggestion.get("confidence"),
+        "actions": actions,
+    }
     logger.info(
         "API: suggestion goal_intent request_id=%s client_message_id=%s confidence=%s",
         request_id,
         client_message_id,
         suggestion.get("confidence"),
     )
+    return True
 
 
 def _normalize_goal_title(title: str) -> str:
@@ -813,51 +866,186 @@ def _detect_goal_edit_arm(data: Dict[str, Any], text: str) -> Optional[str]:
     return None
 
 
-def _parse_plan_text_to_steps(plan_text: str) -> List[Dict[str, Any]]:
-    steps: List[Dict[str, Any]] = []
+_PLAN_ACTION_VERBS = (
+    "build",
+    "create",
+    "implement",
+    "design",
+    "draft",
+    "write",
+    "review",
+    "test",
+    "deploy",
+    "launch",
+    "set up",
+    "setup",
+    "configure",
+    "add",
+    "update",
+    "fix",
+    "refactor",
+    "research",
+    "analyze",
+    "document",
+    "plan",
+    "prepare",
+    "define",
+    "outline",
+    "ship",
+    "integrate",
+    "install",
+    "migrate",
+    "monitor",
+    "measure",
+    "improve",
+    "optimize",
+    "schedule",
+    "notify",
+    "clean",
+    "merge",
+    "decide",
+    "collect",
+    "run",
+)
+_PLAN_ACTION_RE = re.compile(
+    r"\b(" + "|".join(re.escape(verb) for verb in _PLAN_ACTION_VERBS) + r")\b",
+    re.IGNORECASE,
+)
+
+
+def _strip_outer_bold(text: str) -> Dict[str, Any]:
+    trimmed = (text or "").strip()
+    if len(trimmed) >= 4:
+        if trimmed.startswith("**") and trimmed.endswith("**"):
+            inner = trimmed[2:-2].strip()
+            if inner:
+                return {"text": inner, "bold": True}
+        if trimmed.startswith("__") and trimmed.endswith("__"):
+            inner = trimmed[2:-2].strip()
+            if inner:
+                return {"text": inner, "bold": True}
+    return {"text": trimmed, "bold": False}
+
+
+def _normalize_section_label(text: str) -> str:
+    trimmed = (text or "").strip()
+    if trimmed.endswith(":"):
+        trimmed = trimmed[:-1].strip()
+    return trimmed
+
+
+def _looks_actionable(text: str) -> bool:
+    if not text:
+        return False
+    lowered = text.lower().strip()
+    if lowered.startswith("to "):
+        return True
+    return bool(_PLAN_ACTION_RE.search(lowered))
+
+
+def parse_structured_plan(plan_text: str) -> List[Dict[str, Any]]:
+    """
+    Parse markdown-ish plan text into structured steps.
+    Returns a list of {"section": str|None, "text": str} in stable order.
+    """
+    items: List[Dict[str, Any]] = []
     if not isinstance(plan_text, str):
-        return steps
-    lines = plan_text.splitlines()
+        return items
     current_section: Optional[str] = None
 
-    def _is_section_header(line: str) -> Optional[str]:
+    def _extract_section_heading(line: str) -> Optional[str]:
         if not line:
             return None
-        if re.match(r"^#{3,6}\s+\S", line):
-            return line.lstrip("#").strip()
-        if re.match(
-            r"^(long[-\s]?term\s+goal\s+\d+|goal\s+\d+|phase\s+\d+|milestone\s+\d+)\s*[:\-]?\s*$",
-            line,
-            re.IGNORECASE,
-        ):
-            return line.rstrip(":").strip()
-        if line.endswith(":") and len(line) <= 80:
-            return line.rstrip(":").strip()
+        if re.match(r"^#{1,3}\s+\S", line):
+            heading = re.sub(r"^#{1,3}\s+", "", line).strip()
+            heading = _strip_outer_bold(heading)["text"]
+            heading = _normalize_section_label(heading)
+            return heading or None
+        bold_info = _strip_outer_bold(line)
+        if bold_info["bold"]:
+            heading = _normalize_section_label(bold_info["text"])
+            return heading or None
+        numbered = re.match(r"^\d+[.)]\s+(.+)$", line)
+        if numbered:
+            remainder = numbered.group(1).strip()
+            bold_remainder = _strip_outer_bold(remainder)
+            if bold_remainder["bold"]:
+                heading = _normalize_section_label(bold_remainder["text"])
+                return heading or None
+            if not _looks_actionable(remainder):
+                heading = _normalize_section_label(remainder)
+                return heading or None
+        if line.endswith(":") and len(line) <= 120:
+            heading = _normalize_section_label(line)
+            return heading or None
         return None
 
-    for raw in lines:
-        line = raw.strip()
+    def _extract_step_text(line: str) -> Optional[str]:
+        if not line:
+            return None
+        bullet = re.match(r"^(?:[-*]|\u2022)\s+(.+)$", line)
+        if bullet:
+            text = (bullet.group(1) or "").strip()
+            return text or None
+        numbered = re.match(r"^\d+[.)]\s+(.+)$", line)
+        if numbered:
+            remainder = (numbered.group(1) or "").strip()
+            if _strip_outer_bold(remainder)["bold"]:
+                return None
+            if _looks_actionable(remainder):
+                return remainder
+            return None
+        return None
+
+    for raw_line in plan_text.splitlines():
+        line = (raw_line or "").strip()
         if not line:
             continue
-        header = _is_section_header(line)
+        if re.match(r"^[-*_]{3,}$", line):
+            continue
+        header = _extract_section_heading(line)
         if header:
             current_section = header
             continue
-        match = re.match(r"^(?:\d+[.)]|[-*•])\s+(.*)$", line)
-        if not match:
+        step_text = _extract_step_text(line)
+        if not step_text:
             continue
-        description = (match.group(1) or "").strip()
-        if not description:
+        items.append({"section": current_section, "text": step_text})
+
+    return items
+
+
+def _structured_steps_to_plan_steps(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    steps: List[Dict[str, Any]] = []
+    for idx, item in enumerate(items):
+        text = (item.get("text") or "").strip()
+        if not text:
             continue
         step = {
-            "step_index": len(steps) + 1,
-            "description": description,
+            "step_index": idx + 1,
+            "description": text,
             "status": "pending",
         }
-        if current_section:
-            step["section"] = current_section
+        section = (item.get("section") or "").strip()
+        if section:
+            step["section"] = section
         steps.append(step)
+    return steps
 
+
+def _parse_plan_text_to_steps(plan_text: str) -> List[Dict[str, Any]]:
+    return _structured_steps_to_plan_steps(parse_structured_plan(plan_text))
+
+
+def _parse_plan_text_with_log(plan_text: str, logger: logging.Logger) -> List[Dict[str, Any]]:
+    structured = parse_structured_plan(plan_text)
+    steps = _structured_steps_to_plan_steps(structured)
+    section_count = len({item.get("section") for item in structured if item.get("section")})
+    logger.info(
+        "API: plan parse summary sections=%s steps=%s",
+        section_count,
+        len(steps),
+    )
     return steps
 
 
@@ -1397,6 +1585,22 @@ def handle_message():
 
         logger.info("API: Received message: %s request_id=%s", user_input[:100], request_id)
 
+        user_id, user_error = _get_user_id_or_error()
+        if user_error:
+            if session.get("authed"):
+                return user_error
+            user_id = None
+
+        def _log_goal_intent_status(goal_intent_detected: bool, reply_source: str) -> None:
+            logger.info(
+                "API: goal_intent status request_id=%s user_id=%s message_id=%s goal_intent_detected=%s reply_source=%s",
+                request_id,
+                user_id,
+                client_message_id,
+                goal_intent_detected,
+                reply_source,
+            )
+
         try:
             comps = get_agent_components()
             architect_agent = comps["architect_agent"]
@@ -1416,13 +1620,30 @@ def handle_message():
                     detail = "Missing or invalid OPENAI_API_KEY"
                 else:
                     detail = f"Agent init failed ({type(_agent_init_error).__name__})"
-            return api_error("LLM_INIT_FAILED", "LLM unavailable", 503, details=detail)
-
-        user_id, user_error = _get_user_id_or_error()
-        if user_error:
-            if session.get("authed"):
-                return user_error
-            user_id = None
+            fallback_reply = _llm_unavailable_prompt(None)
+            response = {
+                "reply": fallback_reply,
+                "agent_status": {"planner_active": False, "had_goal_update_xml": False},
+                "request_id": request_id,
+                "meta": {"intent": "llm_unavailable", "details": detail},
+            }
+            suggestion = _get_goal_intent_suggestion(
+                user_input,
+                client_message_id,
+                user_id,
+            )
+            goal_intent_detected = _attach_goal_intent_suggestion(
+                response,
+                user_input=user_input,
+                client_message_id=client_message_id,
+                user_id=user_id,
+                request_id=request_id,
+                logger=logger,
+                active_goal_id=None,
+                suggestion=suggestion,
+            )
+            _log_goal_intent_status(goal_intent_detected, "fallback")
+            return jsonify(response)
         requested_goal_id = _coerce_goal_id(raw_goal_id) if raw_goal_id is not None else None
         if raw_goal_id is not None and requested_goal_id is None:
             return api_error(
@@ -1503,9 +1724,13 @@ def handle_message():
                     409,
                     details={"goal_id": active_goal.get("id")},
                 )
-            steps = _parse_plan_text_to_steps(plan_text)
+            steps = _parse_plan_text_with_log(plan_text, logger)
             if not steps:
-                return api_error("VALIDATION_ERROR", "No steps found in plan text.", 400)
+                return api_error(
+                    "PLAN_PARSE_EMPTY",
+                    "No actionable steps found; provide bullets or numbered tasks.",
+                    400,
+                )
             section_label = data.get("section_label")
             if not isinstance(section_label, str) or not section_label.strip():
                 section_label = f"Chat Plan: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}"
@@ -1558,14 +1783,14 @@ def handle_message():
                 )
             except Exception:
                 pass
-            return jsonify(
-                {
-                    "reply": f"Added {len(steps)} steps to the current plan.",
-                    "meta": {"intent": "plan_steps_added"},
-                    "goal_id": active_goal["id"],
-                    "section_label": section_label,
-                }
-            )
+            response = {
+                "reply": f"Added {len(steps)} steps to the current plan.",
+                "meta": {"intent": "plan_steps_added"},
+                "goal_id": active_goal["id"],
+                "section_label": section_label,
+            }
+            _log_goal_intent_status(False, "fallback")
+            return jsonify(response)
 
         if ui_action == "plan_from_text":
             if user_id is None:
@@ -1583,9 +1808,13 @@ def handle_message():
                     409,
                     details={"goal_id": active_goal.get("id")},
                 )
-            steps = _parse_plan_text_to_steps(plan_text)
+            steps = _parse_plan_text_with_log(plan_text, logger)
             if not steps:
-                return api_error("VALIDATION_ERROR", "No steps found in plan text.", 400)
+                return api_error(
+                    "PLAN_PARSE_EMPTY",
+                    "No actionable steps found; provide bullets or numbered tasks.",
+                    400,
+                )
             try:
                 architect_agent.goal_mgr.save_goal_plan(
                     user_id,
@@ -1619,13 +1848,13 @@ def handle_message():
                 )
             except Exception:
                 pass
-            return jsonify(
-                {
-                    "reply": f"Added {len(steps)} steps to the current plan.",
-                    "meta": {"intent": "plan_steps_added"},
-                    "goal_id": active_goal["id"],
-                }
-            )
+            response = {
+                "reply": f"Added {len(steps)} steps to the current plan.",
+                "meta": {"intent": "plan_steps_added"},
+                "goal_id": active_goal["id"],
+            }
+            _log_goal_intent_status(False, "fallback")
+            return jsonify(response)
 
         if ui_action == "plan_from_intent":
             if user_id is None:
@@ -1697,9 +1926,13 @@ def handle_message():
                     except Exception:
                         logger.debug("API: event loop close failed but continuing")
             plan_text = plan_reply or ""
-            steps = _parse_plan_text_to_steps(plan_text)
+            steps = _parse_plan_text_with_log(plan_text, logger)
             if not steps:
-                return api_error("VALIDATION_ERROR", "No steps found in plan output.", 400)
+                return api_error(
+                    "PLAN_PARSE_EMPTY",
+                    "No actionable steps found; provide bullets or numbered tasks.",
+                    400,
+                )
             section_label = None
             for step in steps:
                 section_label = step.get("section")
@@ -1754,13 +1987,13 @@ def handle_message():
                 )
             except Exception:
                 pass
-            return jsonify(
-                {
-                    "reply": plan_text,
-                    "meta": {"intent": "plan_steps_added", "intent_index": intent_index},
-                    "goal_id": active_goal["id"],
-                }
-            )
+            response = {
+                "reply": plan_text,
+                "meta": {"intent": "plan_steps_added", "intent_index": intent_index},
+                "goal_id": active_goal["id"],
+            }
+            _log_goal_intent_status(False, "fallback")
+            return jsonify(response)
 
         focused_goal_edit = _parse_focused_goal_edit_command(user_input)
         if focused_goal_edit:
@@ -1768,21 +2001,21 @@ def handle_message():
                 return user_error
             if not isinstance(active_goal, dict) or active_goal.get("id") is None:
                 reply_text = "Please focus a goal first (for example, 'goal 1')."
-                return jsonify(
-                    {
-                        "reply": reply_text,
-                        "meta": {"intent": "focused_goal_edit_missing_focus"},
-                    }
-                )
+                response = {
+                    "reply": reply_text,
+                    "meta": {"intent": "focused_goal_edit_missing_focus"},
+                }
+                _log_goal_intent_status(False, "fallback")
+                return jsonify(response)
             payload = focused_goal_edit.get("payload", "")
             if not payload:
                 reply_text = "Please include text after 'append to goal:' or 'update goal:'."
-                return jsonify(
-                    {
-                        "reply": reply_text,
-                        "meta": {"intent": "focused_goal_edit_missing_text"},
-                    }
-                )
+                response = {
+                    "reply": reply_text,
+                    "meta": {"intent": "focused_goal_edit_missing_text"},
+                }
+                _log_goal_intent_status(False, "fallback")
+                return jsonify(response)
             try:
                 if focused_goal_edit["mode"] == "append":
                     updated_goal = architect_agent.goal_mgr.append_goal_description(
@@ -1812,12 +2045,12 @@ def handle_message():
                 intent = "focused_goal_edit_failed"
             if not updated_goal:
                 reply_text = "I couldn't update that goal right now."
-                return jsonify(
-                    {
-                        "reply": reply_text,
-                        "meta": {"intent": "focused_goal_edit_failed"},
-                    }
-                )
+                response = {
+                    "reply": reply_text,
+                    "meta": {"intent": "focused_goal_edit_failed"},
+                }
+                _log_goal_intent_status(False, "fallback")
+                return jsonify(response)
             try:
                 note_label = (
                     "[Goal Append] Appended text (len=%s)" % len(payload)
@@ -1836,23 +2069,23 @@ def handle_message():
             fresh_goal = architect_agent.goal_mgr.get_goal(user_id, active_goal["id"])
             if fresh_goal is None:
                 reply_text = "I updated the goal, but couldn't reload it."
-                return jsonify(
-                    {
-                        "reply": reply_text,
-                        "meta": {"intent": "focused_goal_edit_reload_failed"},
-                    }
-                )
+                response = {
+                    "reply": reply_text,
+                    "meta": {"intent": "focused_goal_edit_reload_failed"},
+                }
+                _log_goal_intent_status(False, "fallback")
+                return jsonify(response)
             reply_text = (
                 "Appended to the focused goal." if focused_goal_edit["mode"] == "append"
                 else "Updated the focused goal."
             )
-            return jsonify(
-                {
-                    "reply": reply_text,
-                    "meta": {"intent": intent},
-                    "goal": fresh_goal,
-                }
-            )
+            response = {
+                "reply": reply_text,
+                "meta": {"intent": intent},
+                "goal": fresh_goal,
+            }
+            _log_goal_intent_status(False, "fallback")
+            return jsonify(response)
 
         pending_edit = session.get("pending_goal_edit")
         if isinstance(pending_edit, dict):
@@ -1948,17 +2181,17 @@ def handle_message():
             )
             if not ok:
                 reply_text = "I couldn't update that goal right now."
-            return jsonify(
-                {
-                    "reply": reply_text,
-                    "meta": {
-                        "intent": "pending_goal_edit_applied",
-                        "mode": pending_mode,
-                        "ok": ok,
-                    },
-                    "goal": fresh_goal,
-                }
-            )
+            response = {
+                "reply": reply_text,
+                "meta": {
+                    "intent": "pending_goal_edit_applied",
+                    "mode": pending_mode,
+                    "ok": ok,
+                },
+                "goal": fresh_goal,
+            }
+            _log_goal_intent_status(False, "fallback")
+            return jsonify(response)
 
         pending_mode = _detect_goal_edit_arm(data, user_input)
         if pending_mode in ("update", "append"):
@@ -1966,12 +2199,12 @@ def handle_message():
                 return user_error
             if not isinstance(active_goal, dict) or active_goal.get("id") is None:
                 reply_text = "Please focus a goal first (for example, 'goal 1')."
-                return jsonify(
-                    {
-                        "reply": reply_text,
-                        "meta": {"intent": "pending_goal_edit_missing_focus"},
-                    }
-                )
+                response = {
+                    "reply": reply_text,
+                    "meta": {"intent": "pending_goal_edit_missing_focus"},
+                }
+                _log_goal_intent_status(False, "fallback")
+                return jsonify(response)
             status = (active_goal.get("status") or "").strip().lower()
             if status == "archived":
                 return api_error(
@@ -1997,12 +2230,12 @@ def handle_message():
                 if pending_mode == "update"
                 else "Got it. Paste the text you'd like to append to the goal."
             )
-            return jsonify(
-                {
-                    "reply": reply_text,
-                    "meta": {"intent": "pending_goal_edit_set", "mode": pending_mode},
-                }
-            )
+            response = {
+                "reply": reply_text,
+                "meta": {"intent": "pending_goal_edit_set", "mode": pending_mode},
+            }
+            _log_goal_intent_status(False, "fallback")
+            return jsonify(response)
 
         # --- Shortcut 1: user is asking for their goals; answer directly -----
         if is_goal_list_request(user_input):
@@ -2036,16 +2269,16 @@ def handle_message():
             goals = architect_agent.goal_mgr.list_goals(user_id) or []
             reply_text = format_goal_list(goals)
             logger.info(f"API: Returning goal list with {len(goals)} goals")
-            return jsonify(
-                {
-                    "reply": reply_text,
-                    "goals": goals,
-                    "meta": {
-                        "source": "goal_manager",
-                        "intent": "list_goals",
-                    },
-                }
-            )
+            response = {
+                "reply": reply_text,
+                "goals": goals,
+                "meta": {
+                    "source": "goal_manager",
+                    "intent": "list_goals",
+                },
+            }
+            _log_goal_intent_status(False, "fallback")
+            return jsonify(response)
 
         # --- Shortcut 2: user wants to focus on a specific goal -------------
         goal_id = parse_goal_selection_request(user_input)
@@ -2060,16 +2293,16 @@ def handle_message():
                     f"I couldn't find a goal #{goal_id}. "
                     "Ask me to list your goals first if you're not sure of the number."
                 )
-                return jsonify(
-                    {
-                        "reply": reply_text,
-                        "meta": {
-                            "source": "goal_manager",
-                            "intent": "select_goal_failed",
-                            "requested_goal_id": goal_id,
-                        },
-                    }
-                )
+                response = {
+                    "reply": reply_text,
+                    "meta": {
+                        "source": "goal_manager",
+                        "intent": "select_goal_failed",
+                        "requested_goal_id": goal_id,
+                    },
+                }
+                _log_goal_intent_status(False, "fallback")
+                return jsonify(response)
 
             architect_agent.goal_mgr.set_active_goal(user_id, goal_id)
             ctx = architect_agent.goal_mgr.build_goal_context(user_id, goal_id, max_notes=5)
@@ -2079,20 +2312,26 @@ def handle_message():
                 "I'll attach our next messages to this goal. "
                 "Tell me updates, questions, or ask me to help you plan steps."
             )
-
-            return jsonify(
-                {
-                    "reply": reply_text,
-                    "active_goal_id": goal_id,
-                    "goal_context": ctx,
-                    "meta": {
-                        "source": "goal_manager",
-                        "intent": "select_goal_success",
-                        "selected_goal_id": goal_id,
-                    },
-                }
-            )
+            response = {
+                "reply": reply_text,
+                "active_goal_id": goal_id,
+                "goal_context": ctx,
+                "meta": {
+                    "source": "goal_manager",
+                    "intent": "select_goal_success",
+                    "selected_goal_id": goal_id,
+                },
+            }
+            _log_goal_intent_status(False, "fallback")
+            return jsonify(response)
         # ---------------------------------------------------------------------
+
+        goal_intent_suggestion = _get_goal_intent_suggestion(
+            user_input,
+            client_message_id,
+            user_id,
+        )
+        goal_intent_detected = bool(goal_intent_suggestion)
 
         # === Post-processing (analysis only - no persistence here) ===========
         summary = postprocess_and_save(user_input)
@@ -2115,6 +2354,7 @@ def handle_message():
         # === Route to Architect planning if active goal exists ===============
         if active_goal is not None:
             # Active goal detected - check if this is an explicit plan generation request
+            reply_source = "fallback"
             try:
                 from core.input_router import InputRouter
                 router = InputRouter()
@@ -2163,6 +2403,7 @@ def handle_message():
                             "plan_generated": True,
                             "step_count": step_count
                         }
+                        reply_source = "llm"
                     
                         logger.info(f"API: Plan generation successful - {step_count} steps created")
                     
@@ -2178,6 +2419,7 @@ def handle_message():
                             "had_goal_update_xml": False,
                             "plan_generated": False
                         }
+                        reply_source = "fallback"
                     
                 except Exception as e:
                     logger.error(f"API: generate_goal_plan failed: {e}", exc_info=True)
@@ -2185,18 +2427,25 @@ def handle_message():
                     # Check if it's an LLM error - return structured error
                     llm_exc = _unwrap_llm_exception(e)
                     if llm_exc:
-                        return handle_llm_error(llm_exc, logger)
-                
-                    # Otherwise provide generic error message in response
-                    agentic_reply = (
-                        "I encountered an error while generating the plan. "
-                        "Please try again or rephrase your request."
-                    )
-                    agent_status = {
-                        "planner_active": False,
-                        "had_goal_update_xml": False,
-                        "plan_generated": False
-                    }
+                        agentic_reply = _llm_unavailable_prompt(active_goal.get("id"))
+                        agent_status = {
+                            "planner_active": False,
+                            "had_goal_update_xml": False,
+                            "plan_generated": False,
+                        }
+                        reply_source = "fallback"
+                    else:
+                        # Otherwise provide generic error message in response
+                        agentic_reply = (
+                            "I encountered an error while generating the plan. "
+                            "Please try again or rephrase your request."
+                        )
+                        agent_status = {
+                            "planner_active": False,
+                            "had_goal_update_xml": False,
+                            "plan_generated": False
+                        }
+                        reply_source = "fallback"
         
             else:
                 # Normal conversational planning mode
@@ -2221,6 +2470,7 @@ def handle_message():
                     logger.info(f"API: Architect planning completed successfully for goal_id={active_goal['id']}")
                     logger.debug(f"API: Agent status: {agent_status}")
                     logger.debug(f"API: Reply preview: {agentic_reply[:150]}...")
+                    reply_source = "llm"
                 
                     # Ensure planner_active is True since we routed through Architect
                     if agent_status.get("planner_active") is None:
@@ -2231,14 +2481,18 @@ def handle_message():
                     # Check if it's an LLM error - return structured error
                     llm_exc = _unwrap_llm_exception(e)
                     if llm_exc:
-                        return handle_llm_error(llm_exc, logger)
+                        agentic_reply = _llm_unavailable_prompt(active_goal.get("id"))
+                        agent_status = {"planner_active": False, "had_goal_update_xml": False}
+                        reply_source = "fallback"
+                    else:
+                        # Otherwise provide generic error message in response
+                        agentic_reply = (
+                            "I ran into an internal error while updating your goal plan. "
+                            "Please try again or rephrase your message."
+                        )
+                        agent_status = {"planner_active": False, "had_goal_update_xml": False}
+                        reply_source = "fallback"
                 
-                    # Otherwise provide generic error message in response
-                    agentic_reply = (
-                        "I ran into an internal error while updating your goal plan. "
-                        "Please try again or rephrase your message."
-                    )
-                    agent_status = {"planner_active": False, "had_goal_update_xml": False}
                 finally:
                     if loop is not None:
                         try:
@@ -2249,8 +2503,15 @@ def handle_message():
             if not isinstance(agent_status, dict):
                 agent_status = {}
 
+            if _is_placeholder_reply(agentic_reply) or (
+                goal_intent_detected and not (agentic_reply or "").strip()
+            ):
+                agentic_reply = _goal_intent_prompt(active_goal.get("id"))
+                reply_source = "fallback"
+
         if active_goal is None:
             logger.info("API: No active goal for this message; falling back to casual mode")
+            reply_source = "fallback"
             try:
                 loop = asyncio.new_event_loop()
                 try:
@@ -2267,6 +2528,7 @@ def handle_message():
 
                 logger.info("API: Casual chat completed successfully")
                 logger.debug("API: Reply preview: %s...", agentic_reply[:150])
+                reply_source = "llm"
 
             except Exception as e:
                 logger.error("API: Casual chat failed with exception: %s", e, exc_info=True)
@@ -2274,14 +2536,23 @@ def handle_message():
                 # Check if it's an LLM error - return structured error
                 llm_exc = _unwrap_llm_exception(e)
                 if llm_exc:
-                    return handle_llm_error(llm_exc, logger)
-
-                # Otherwise provide generic error message in response
-                agentic_reply = "I'm having trouble processing that right now. Could you try again?"
-                agent_status = {"planner_active": False, "had_goal_update_xml": False}
+                    agentic_reply = _llm_unavailable_prompt(None)
+                    agent_status = {"planner_active": False, "had_goal_update_xml": False}
+                    reply_source = "fallback"
+                else:
+                    # Otherwise provide generic error message in response
+                    agentic_reply = "I'm having trouble processing that right now. Could you try again?"
+                    agent_status = {"planner_active": False, "had_goal_update_xml": False}
+                    reply_source = "fallback"
 
             if not isinstance(agent_status, dict):
                 agent_status = {}
+
+            if _is_placeholder_reply(agentic_reply) or (
+                goal_intent_detected and not (agentic_reply or "").strip()
+            ):
+                agentic_reply = _goal_intent_prompt(None)
+                reply_source = "fallback"
 
             response = {
                 "reply": agentic_reply,
@@ -2304,14 +2575,17 @@ def handle_message():
                     )
             except Exception as exc:
                 logger.warning("API: insight extraction skipped due to error: %s", exc, exc_info=True)
-            _attach_goal_intent_suggestion(
+            goal_intent_attached = _attach_goal_intent_suggestion(
                 response,
                 user_input=user_input,
                 client_message_id=client_message_id,
                 user_id=user_id,
                 request_id=request_id,
                 logger=logger,
+                active_goal_id=None,
+                suggestion=goal_intent_suggestion,
             )
+            _log_goal_intent_status(goal_intent_attached, reply_source)
             return jsonify(response)
 
         # --- Log conversation into active goal -------------------------------
@@ -2397,14 +2671,17 @@ def handle_message():
                 )
         except Exception as exc:
             logger.warning("API: insight extraction skipped due to error: %s", exc, exc_info=True)
-        _attach_goal_intent_suggestion(
+        goal_intent_attached = _attach_goal_intent_suggestion(
             response,
             user_input=user_input,
             client_message_id=client_message_id,
             user_id=user_id,
             request_id=request_id,
             logger=logger,
+            active_goal_id=active_goal.get("id") if isinstance(active_goal, dict) else None,
+            suggestion=goal_intent_suggestion,
         )
+        _log_goal_intent_status(goal_intent_attached, reply_source)
         return jsonify(response)
 
     except Exception as exc:
