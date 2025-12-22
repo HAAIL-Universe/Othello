@@ -62,6 +62,15 @@ OPENAI_API_KEY=sk-proj-your-key-here
 
 # Neon Database URL (required for goal persistence)
 DATABASE_URL=postgresql://user:password@host/database?sslmode=require
+
+# Optional auth (single-user)
+# OTHELLO_USER_ID=1
+# OTHELLO_PIN_HASH=... (bcrypt hash)
+# OTHELLO_LOGIN_KEY=your-access-code
+# OTHELLO_PASSWORD=legacy-plain-password
+
+# Optional auth (multi-user access codes)
+# OTHELLO_LOGIN_KEYS=user1=code1;user2=code2
 ```
 
 Never commit `.env`; use Render environment variables for production secrets.
@@ -135,6 +144,26 @@ Expected response:
 Open your browser and go to: http://127.0.0.1:8000/
 
 You should see the Othello interface. Try chatting to set your first goal!
+
+### Multi-user smoke test (access codes)
+
+Prereq: set `OTHELLO_LOGIN_KEYS=user1=code1;user2=code2` in your environment.
+
+1. Log in as `user1` (code1).
+2. Create goal "A" via UI (Save as long-term goal) or `POST /api/goals`.
+3. Verify "A" appears in goals list.
+4. Log out, then log in as `user2` (code2).
+5. Verify "A" is not visible, create goal "B".
+6. Verify only "B" appears for `user2`.
+
+### Multi-user concurrency regression
+
+Manual check: two browser sessions (or two cookie jars) alternating calls must not leak goals/plans.
+
+1. Log in as `user1` (code1), create goal "Alpha".
+2. Log in as `user2` (code2), create goal "Beta".
+3. Alternate `GET /api/goals` between the two sessions; each should only see its own goals.
+4. Alternate `GET /api/today-plan` between the two sessions; plan content should not cross-contaminate.
 
 ## How to Run and Test Locally (Windows)
 
@@ -255,6 +284,11 @@ python run_tests.py
 
 - `OPENAI_API_KEY` - Your OpenAI API key (required)
 - `DATABASE_URL` - PostgreSQL connection string (required)
+- `OTHELLO_LOGIN_KEYS` - Multi-user access codes, format `user1=code1;user2=code2` (optional)
+- `OTHELLO_USER_ID` - Default user id when using single access code (optional, defaults to `1`)
+- `OTHELLO_PIN_HASH` - Bcrypt hash for access code (optional)
+- `OTHELLO_LOGIN_KEY` - Plain access code (optional)
+- `OTHELLO_PASSWORD` - Legacy plain password (optional)
 
 ## Troubleshooting
 

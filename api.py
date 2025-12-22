@@ -474,12 +474,9 @@ def get_agent_components():
             goal_manager=architect_agent.goal_mgr,
             memory_manager=architect_agent.memory_mgr,
         )
-        DEFAULT_USER_ID = DbGoalManager.DEFAULT_USER_ID
-
         _agent_components = {
             'architect_agent': architect_agent,
             'othello_engine': othello_engine,
-            'DEFAULT_USER_ID': DEFAULT_USER_ID,
             'insights_repository': insights_repository,
             'plan_repository': plan_repository,
             'goal_task_history_repository': goal_task_history_repository,
@@ -494,7 +491,6 @@ def get_agent_components():
         globals().update(
             architect_agent=architect_agent,
             othello_engine=othello_engine,
-            DEFAULT_USER_ID=DEFAULT_USER_ID,
             insights_repository=insights_repository,
             plan_repository=plan_repository,
             goal_task_history_repository=goal_task_history_repository,
@@ -518,7 +514,6 @@ log_library_versions()
 
 architect_agent = None
 othello_engine = None
-DEFAULT_USER_ID = "default"
 insights_repository = None
 plan_repository = None
 goal_task_history_repository = None
@@ -579,6 +574,12 @@ def format_goal_list(goals) -> str:
     return "\n".join(lines)
 
 
+def _normalize_goal_title(title: str) -> str:
+    if not isinstance(title, str):
+        title = str(title or "")
+    return " ".join(title.strip().split()).lower()
+
+
 def parse_goal_selection_request(text: str) -> Optional[int]:
     """
     Try to parse EXPLICIT goal selection commands like:
@@ -625,6 +626,44 @@ def require_auth(f):
             return api_error("AUTH_REQUIRED", "Authentication required", 401)
         return f(*args, **kwargs)
     return decorated
+
+
+def get_current_user_id() -> str:
+    if not session.get("authed"):
+        raise PermissionError("Authentication required")
+    user_id = getattr(g, "user_id", None) or session.get("user_id")
+    if not user_id:
+        raise RuntimeError("Authenticated session missing user_id")
+    return str(user_id)
+
+
+def ensure_user_exists(user_id: str) -> None:
+    user_id = str(user_id or "").strip()
+    if not user_id:
+        raise ValueError("user_id is required")
+    from db.database import execute_query
+    execute_query(
+        """
+        INSERT INTO users (user_id)
+        VALUES (%s)
+        ON CONFLICT (user_id) DO NOTHING
+        """,
+        (user_id,),
+    )
+
+
+def _get_user_id_or_error():
+    try:
+        return get_current_user_id(), None
+    except PermissionError:
+        return None, api_error("AUTH_REQUIRED", "Authentication required", 401)
+    except RuntimeError as exc:
+        return None, api_error(
+            "AUTH_USER_MISSING",
+            "Authenticated session missing user_id",
+            500,
+            details=str(exc),
+        )
 
 
 def _ready_state() -> dict:
@@ -715,10 +754,57 @@ def auth_login():
         stripped = str(val).strip()
         return stripped or None
 
+    login_keys_raw = _env_trim("OTHELLO_LOGIN_KEYS")
     pin_hash = _env_trim("OTHELLO_PIN_HASH")
     login_key = _env_trim("OTHELLO_LOGIN_KEY")
     plain_pwd = _env_trim("OTHELLO_PASSWORD")  # legacy fallback
+    default_user_id = _env_trim("OTHELLO_USER_ID") or "1"
     auth_mode = "pin_hash" if pin_hash else ("login_key" if login_key else ("plaintext_password" if plain_pwd else "none"))
+
+    def _login_success(user_id: str, mode: str):
+        session["authed"] = True
+        session["user_id"] = user_id
+        try:
+            ensure_user_exists(user_id)
+        except Exception as exc:
+            session.clear()
+            logger.error("ensure_user_exists failed: %s", exc, exc_info=True)
+            return api_error(
+                "USER_INIT_FAILED",
+                "Failed to initialize user",
+                500,
+                details=type(exc).__name__,
+            )
+        return jsonify({"ok": True, "auth_mode": mode, "user_id": user_id})
+
+    if login_keys_raw:
+        entries = []
+        for entry in login_keys_raw.split(";"):
+            entry = entry.strip()
+            if not entry or "=" not in entry:
+                continue
+            user_id_part, code_part = entry.split("=", 1)
+            user_id_part = user_id_part.strip()
+            code_part = code_part.strip()
+            if user_id_part and code_part:
+                entries.append((user_id_part, code_part))
+        if not entries:
+            return api_error(
+                "AUTH_MISCONFIGURED",
+                "Authentication misconfigured",
+                503,
+                details="invalid_login_keys",
+                extra={"auth_mode": "login_keys"},
+            )
+        import hmac
+        matched_user_id = None
+        for user_id_part, code_part in entries:
+            if hmac.compare_digest(password, code_part):
+                matched_user_id = user_id_part
+                break
+        if not matched_user_id:
+            return api_error("AUTH_INVALID", "Invalid access code", 401, extra={"auth_mode": "login_keys"})
+        return _login_success(matched_user_id, "login_keys")
 
     if not pin_hash and not login_key and not plain_pwd:
         return api_error(
@@ -751,8 +837,7 @@ def auth_login():
     if pin_hash:
         try:
             if bcrypt.verify(password, pin_hash):
-                session["authed"] = True
-                return jsonify({"ok": True, "auth_mode": auth_mode})
+                return _login_success(default_user_id, auth_mode)
             return api_error("AUTH_INVALID", "Invalid access code", 401, extra={"auth_mode": auth_mode})
         except Exception:
             logger.error("bcrypt verification error", exc_info=True)
@@ -767,20 +852,22 @@ def auth_login():
     if login_key:
         import hmac
         if hmac.compare_digest(password, login_key):
-            session["authed"] = True
-            return jsonify({"ok": True, "auth_mode": auth_mode})
+            return _login_success(default_user_id, auth_mode)
         return api_error("AUTH_INVALID", "Invalid access code", 401, extra={"auth_mode": auth_mode})
 
     # Legacy plaintext password
     logger.warning("plaintext password mode enabled; set OTHELLO_PIN_HASH or OTHELLO_LOGIN_KEY to harden")
     if password == plain_pwd:
-        session["authed"] = True
-        return jsonify({"ok": True, "auth_mode": auth_mode})
+        return _login_success(default_user_id, auth_mode)
     return api_error("AUTH_INVALID", "Invalid access code", 401, extra={"auth_mode": auth_mode})
 
 @app.route("/api/auth/me", methods=["GET"])
 def auth_me():
-    return jsonify({"authenticated": bool(session.get("authed"))})
+    return jsonify({
+        "ok": True,
+        "authed": bool(session.get("authed")),
+        "user_id": session.get("user_id"),
+    })
 
 @app.route("/api/auth/logout", methods=["POST"])
 def auth_logout():
@@ -891,12 +978,7 @@ def admin_reset():
 
 def log_pending_insights_on_startup():
     logger = logging.getLogger("API.Insights")
-    try:
-        comps = get_agent_components()
-        counts = comps["insights_repository"].count_pending_by_type(comps["DEFAULT_USER_ID"])
-        logger.info("API: startup pending insights summary: %s", counts)
-    except Exception as exc:
-        logger.warning("API: insights summary unavailable at startup: %s", exc)
+    logger.info("API: startup pending insights summary skipped (no user context)")
 
 
 def _normalize_insights_meta(meta: Any) -> Dict[str, Any]:
@@ -958,6 +1040,7 @@ def _process_insights_pipeline(*, user_text: str, assistant_text: str, user_id: 
 
 
 @app.route("/api/message", methods=["POST"])
+@require_auth
 def handle_message():
     """
     Main endpoint for user interaction:
@@ -1028,7 +1111,6 @@ def handle_message():
             comps = get_agent_components()
             architect_agent = comps["architect_agent"]
             othello_engine = comps["othello_engine"]
-            DEFAULT_USER_ID = comps["DEFAULT_USER_ID"]
             logger.debug(
                 "API: handle_message agent_initialized=True request_id=%s", request_id
             )
@@ -1046,6 +1128,11 @@ def handle_message():
                     detail = f"Agent init failed ({type(_agent_init_error).__name__})"
             return api_error("LLM_INIT_FAILED", "LLM unavailable", 503, details=detail)
 
+        user_id, user_error = _get_user_id_or_error()
+        if user_error:
+            if session.get("authed"):
+                return user_error
+            user_id = None
         requested_goal_id = _coerce_goal_id(raw_goal_id) if raw_goal_id is not None else None
         if raw_goal_id is not None and requested_goal_id is None:
             return api_error(
@@ -1057,8 +1144,10 @@ def handle_message():
 
         requested_goal = None
         if requested_goal_id is not None:
+            if user_id is None:
+                return user_error
             try:
-                requested_goal = architect_agent.goal_mgr.get_goal(requested_goal_id)
+                requested_goal = architect_agent.goal_mgr.get_goal(user_id, requested_goal_id)
             except Exception as exc:
                 logger.error("API: Goal lookup failed request_id=%s", request_id, exc_info=True)
                 return api_error(
@@ -1085,6 +1174,8 @@ def handle_message():
 
         # --- Shortcut 1: user is asking for their goals; answer directly -----
         if is_goal_list_request(user_input):
+            if user_id is None:
+                return user_error
             # Log which phrase triggered the goal list route
             t = user_input.lower()
             goal_list_phrases = [
@@ -1106,7 +1197,7 @@ def handle_message():
             matched_phrase = next((p for p in goal_list_phrases if p in t), None)
             logger.info(f"API: Routing to goal list (shortcut branch) due to phrase: {matched_phrase!r}")
         
-            goals = architect_agent.goal_mgr.list_goals() or []
+            goals = architect_agent.goal_mgr.list_goals(user_id) or []
             reply_text = format_goal_list(goals)
             logger.info(f"API: Returning goal list with {len(goals)} goals")
             return jsonify(
@@ -1123,8 +1214,10 @@ def handle_message():
         # --- Shortcut 2: user wants to focus on a specific goal -------------
         goal_id = parse_goal_selection_request(user_input)
         if goal_id is not None:
+            if user_id is None:
+                return user_error
             logger.info(f"API: User explicitly selecting goal #{goal_id} via goal-selection command")
-            goal = architect_agent.goal_mgr.get_goal(goal_id)
+            goal = architect_agent.goal_mgr.get_goal(user_id, goal_id)
             if goal is None:
                 logger.warning(f"API: Goal #{goal_id} not found")
                 reply_text = (
@@ -1142,8 +1235,8 @@ def handle_message():
                     }
                 )
 
-            architect_agent.goal_mgr.set_active_goal(goal_id)
-            ctx = architect_agent.goal_mgr.build_goal_context(goal_id, max_notes=5)
+            architect_agent.goal_mgr.set_active_goal(user_id, goal_id)
+            ctx = architect_agent.goal_mgr.build_goal_context(user_id, goal_id, max_notes=5)
             logger.info(f"API: Set active goal to #{goal_id}: {goal['text'][:50]}...")
             reply_text = (
                 f"Okay, we'll focus on Goal #{goal_id}: {goal['text']}.\n\n"
@@ -1176,7 +1269,7 @@ def handle_message():
         goal_context = None
         if isinstance(active_goal, dict) and active_goal.get("id") is not None:
             goal_context = architect_agent.goal_mgr.build_goal_context(
-                active_goal["id"], max_notes=8
+                user_id, active_goal["id"], max_notes=8
             ) or ""
             logger.info(f"API: Active goal #{active_goal['id']}: {active_goal.get('text', '')[:50]}...")
             logger.info(f"API: Built goal context ({len(goal_context) if goal_context else 0} chars)")
@@ -1204,14 +1297,17 @@ def handle_message():
             
                 try:
                     loop = asyncio.new_event_loop()
-                    asyncio.set_event_loop(loop)
-                    plan_result = loop.run_until_complete(
-                        architect_agent.generate_goal_plan(
-                            goal_id=active_goal['id'],
-                            instruction=user_input
+                    try:
+                        asyncio.set_event_loop(loop)
+                        plan_result = loop.run_until_complete(
+                            architect_agent.generate_goal_plan(
+                                user_id,
+                                goal_id=active_goal['id'],
+                                instruction=user_input
+                            )
                         )
-                    )
-                    loop.close()
+                    finally:
+                        loop.close()
                 
                     if plan_result:
                         # Successfully generated plan - build natural language summary
@@ -1285,6 +1381,7 @@ def handle_message():
                                 "goal_context": goal_context,
                                 "active_goal": active_goal,
                             } if goal_context else None,
+                            user_id=user_id,
                         )
                     )
                 
@@ -1323,14 +1420,17 @@ def handle_message():
             logger.info("API: No active goal for this message; falling back to casual mode")
             try:
                 loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                agentic_reply, agent_status = loop.run_until_complete(
-                    architect_agent.plan_and_execute(
-                        user_input,
-                        context=None,
+                try:
+                    asyncio.set_event_loop(loop)
+                    agentic_reply, agent_status = loop.run_until_complete(
+                        architect_agent.plan_and_execute(
+                            user_input,
+                            context=None,
+                            user_id=user_id,
+                        )
                     )
-                )
-                loop.close()
+                finally:
+                    loop.close()
 
                 logger.info("API: Casual chat completed successfully")
                 logger.debug("API: Reply preview: %s...", agentic_reply[:150])
@@ -1356,18 +1456,19 @@ def handle_message():
                 "request_id": request_id,
             }
             try:
-                logger.info("API: running insight extraction for message (casual mode)")
-                response["insights_meta"] = _normalize_insights_meta(
-                    _process_insights_pipeline(
-                        user_text=raw_user_input,
-                        assistant_text=agentic_reply,
-                        user_id=DEFAULT_USER_ID,
+                if user_id:
+                    logger.info("API: running insight extraction for message (casual mode)")
+                    response["insights_meta"] = _normalize_insights_meta(
+                        _process_insights_pipeline(
+                            user_text=raw_user_input,
+                            assistant_text=agentic_reply,
+                            user_id=user_id,
+                        )
                     )
-                )
-                logger.info(
-                    "API: insight extraction completed (created=%s)",
-                    response["insights_meta"].get("created", "?"),
-                )
+                    logger.info(
+                        "API: insight extraction completed (created=%s)",
+                        response["insights_meta"].get("created", "?"),
+                    )
             except Exception as exc:
                 logger.warning("API: insight extraction skipped due to error: %s", exc, exc_info=True)
             return jsonify(response)
@@ -1382,12 +1483,14 @@ def handle_message():
         event_emitted = True
         try:
             user_event = architect_agent.goal_mgr.add_note_to_goal(
+                user_id,
                 active_goal["id"],
                 "user",
                 user_input,
                 request_id=request_id,
             )
             assistant_event = architect_agent.goal_mgr.add_note_to_goal(
+                user_id,
                 active_goal["id"],
                 "othello",
                 agentic_reply,
@@ -1438,18 +1541,19 @@ def handle_message():
             "request_id": request_id,
         }
         try:
-            logger.info("API: running insight extraction for message (goal mode)")
-            response["insights_meta"] = _normalize_insights_meta(
-                _process_insights_pipeline(
-                    user_text=raw_user_input,
-                    assistant_text=agentic_reply,
-                    user_id=DEFAULT_USER_ID,
+            if user_id:
+                logger.info("API: running insight extraction for message (goal mode)")
+                response["insights_meta"] = _normalize_insights_meta(
+                    _process_insights_pipeline(
+                        user_text=raw_user_input,
+                        assistant_text=agentic_reply,
+                        user_id=user_id,
+                    )
                 )
-            )
-            logger.info(
-                "API: insight extraction completed (created=%s)",
-                response["insights_meta"].get("created", "?"),
-            )
+                logger.info(
+                    "API: insight extraction completed (created=%s)",
+                    response["insights_meta"].get("created", "?"),
+                )
         except Exception as exc:
             logger.warning("API: insight extraction skipped due to error: %s", exc, exc_info=True)
         return jsonify(response)
@@ -1479,6 +1583,9 @@ def get_today_plan():
     logger = logging.getLogger("API")
     comps = get_agent_components()
     othello_engine = comps["othello_engine"]
+    user_id, error = _get_user_id_or_error()
+    if error:
+        return error
     args = request.args or {}
     mood_context = {
         "mood": args.get("mood"),
@@ -1486,7 +1593,11 @@ def get_today_plan():
         "time_pressure": args.get("time_pressure") in ("1", "true", "True", "yes"),
     }
     try:
-        plan = othello_engine.generate_today_plan(mood_context=mood_context)
+        plan = othello_engine.day_planner.get_today_plan(
+            user_id,
+            mood_context=mood_context,
+            force_regen=False,
+        )
         sections = plan.get("sections", {}) if isinstance(plan, dict) else {}
         goal_tasks_count = len(sections.get("goal_tasks", []) or [])
         plan_source = plan.get("_plan_source") if isinstance(plan, dict) else None
@@ -1509,6 +1620,9 @@ def get_today_brief():
     logger = logging.getLogger("API")
     comps = get_agent_components()
     othello_engine = comps["othello_engine"]
+    user_id, error = _get_user_id_or_error()
+    if error:
+        return error
     args = request.args or {}
     mood_context = {
         "mood": args.get("mood"),
@@ -1516,7 +1630,12 @@ def get_today_brief():
         "time_pressure": args.get("time_pressure") in ("1", "true", "True", "yes"),
     }
     try:
-        brief = othello_engine.get_today_brief(mood_context=mood_context)
+        plan = othello_engine.day_planner.get_today_plan(
+            user_id,
+            mood_context=mood_context,
+            force_regen=False,
+        )
+        brief = othello_engine.summarise_today_plan(plan)
         logger.info("API: Served today brief")
         return jsonify({"brief": brief})
     except Exception as exc:
@@ -1536,6 +1655,9 @@ def update_plan_item():
     logger = logging.getLogger("API")
     comps = get_agent_components()
     othello_engine = comps["othello_engine"]
+    user_id, error = _get_user_id_or_error()
+    if error:
+        return error
     data = request.get_json() or {}
     item_id = data.get("item_id")
     status = data.get("status")
@@ -1547,7 +1669,8 @@ def update_plan_item():
         return api_error("VALIDATION_ERROR", "item_id and status are required", 400)
 
     try:
-        plan = othello_engine.update_plan_item(
+        plan = othello_engine.day_planner.update_plan_item_status(
+            user_id,
             item_id=item_id,
             status=status,
             plan_date=plan_date,
@@ -1573,10 +1696,13 @@ def rebuild_today_plan():
     logger = logging.getLogger("API")
     comps = get_agent_components()
     othello_engine = comps["othello_engine"]
+    user_id, error = _get_user_id_or_error()
+    if error:
+        return error
     data = request.get_json() or {}
     mood_context = data.get("mood_context") or data
     try:
-        plan = othello_engine.rebuild_today_plan(mood_context=mood_context)
+        plan = othello_engine.day_planner.rebuild_today_plan(user_id, mood_context=mood_context)
         logger.info("API: Rebuilt today plan on demand")
         return jsonify({"plan": plan})
     except Exception as exc:
@@ -1589,32 +1715,106 @@ def rebuild_today_plan():
         )
 
 
-@app.route("/api/goals", methods=["GET"])
+@app.route("/api/goals", methods=["GET", "POST"])
 @require_auth
-def get_goals():
+def goals():
     """
-    Simple read-only endpoint so the UI can see what goals
-    the Architect/GoalManager have captured so far.
+    GET: list goals for the current user.
+    POST: create a new goal.
+
+    POST body:
+        { "title": "My long-term goal" }
     """
     logger = logging.getLogger("API")
     comps = get_agent_components()
     architect_agent = comps["architect_agent"]
-    DEFAULT_USER_ID = comps["DEFAULT_USER_ID"]
-    logger.debug(
-        "API: get_goals session_user=%s authed=%s",
-        session.get("user_id"),
-        bool(session.get("authed")),
-    )
+
+    if request.method == "GET":
+        user_id, error = _get_user_id_or_error()
+        if error:
+            return error
+        logger.debug(
+            "API: get_goals session_user=%s authed=%s",
+            session.get("user_id"),
+            bool(session.get("authed")),
+        )
+        try:
+            goals = architect_agent.goal_mgr.list_goals(user_id)
+            return jsonify({"goals": goals})
+        except Exception as e:
+            logging.getLogger("ARCHITECT").error(f"Failed to fetch goals: {e}")
+            return api_error(
+                "GOALS_FETCH_FAILED",
+                "Failed to fetch goals",
+                500,
+                details=type(e).__name__,
+            )
+
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return api_error("VALIDATION_ERROR", "JSON object required", 400)
+
+    raw_title = data.get("title")
+    if raw_title is None:
+        return api_error("VALIDATION_ERROR", "title is required", 400)
+
+    title = str(raw_title).strip()
+    if len(title) < 3:
+        return api_error("VALIDATION_ERROR", "title is too short", 400)
+
+    normalized_title = _normalize_goal_title(title)
+    request_id = _get_request_id()
+    user_id, error = _get_user_id_or_error()
+    if error:
+        return error
+
     try:
-        goals = architect_agent.goal_mgr.list_goals()
-        return jsonify({"goals": goals})
-    except Exception as e:
-        logging.getLogger("ARCHITECT").error(f"Failed to fetch goals: {e}")
+        from db import goals_repository
+
+        existing = goals_repository.list_goals(user_id, include_archived=False) or []
+        for goal in existing:
+            existing_title = _normalize_goal_title(goal.get("title") or goal.get("text") or "")
+            if existing_title and existing_title == normalized_title:
+                goal_id = goal.get("id")
+                goal_payload = architect_agent.goal_mgr.get_goal(user_id, goal_id) if goal_id else None
+                if goal_payload is None:
+                    goal_payload = {"id": goal_id, "text": goal.get("title") or ""}
+                logger.debug(
+                    "API: create_goal request_id=%s user_id=%s normalized_title=%s created=%s",
+                    request_id,
+                    user_id,
+                    normalized_title,
+                    False,
+                )
+                return jsonify({"ok": True, "created": False, "goal": goal_payload})
+
+        created = goals_repository.create_goal(
+            {"title": title, "description": "", "status": "active"},
+            user_id,
+        )
+        goal_id = created.get("id") if isinstance(created, dict) else None
+        if not goal_id:
+            logger.error("API: create_goal failed to return a goal id")
+            return api_error("GOAL_CREATE_FAILED", "Failed to create goal", 500)
+
+        goal_payload = architect_agent.goal_mgr.get_goal(user_id, goal_id)
+        if goal_payload is None:
+            goal_payload = {"id": goal_id, "text": title}
+        logger.debug(
+            "API: create_goal request_id=%s user_id=%s normalized_title=%s created=%s",
+            request_id,
+            user_id,
+            normalized_title,
+            True,
+        )
+        return jsonify({"ok": True, "created": True, "goal": goal_payload})
+    except Exception as exc:
+        logger.error("API: create_goal failed: %s", exc, exc_info=True)
         return api_error(
-            "GOALS_FETCH_FAILED",
-            "Failed to fetch goals",
+            "GOAL_CREATE_FAILED",
+            "Failed to create goal",
             500,
-            details=type(e).__name__,
+            details=type(exc).__name__,
         )
 
 
@@ -1625,10 +1825,13 @@ def unfocus_goal():
     comps = get_agent_components()
     architect_agent = comps["architect_agent"]
     request_id = _get_request_id()
+    user_id, error = _get_user_id_or_error()
+    if error:
+        return error
     try:
-        if hasattr(architect_agent.goal_mgr, "active_goal_id"):
-            architect_agent.goal_mgr.active_goal_id = None
-            logger.info("API: Cleared active goal request_id=%s", request_id)
+        if hasattr(architect_agent.goal_mgr, "clear_active_goal"):
+            architect_agent.goal_mgr.clear_active_goal(user_id)
+            logger.info("API: Cleared active goal request_id=%s user_id=%s", request_id, user_id)
             return jsonify({"ok": True, "request_id": request_id})
         return api_error(
             "GOAL_FOCUS_UNAVAILABLE",
@@ -1678,8 +1881,11 @@ def get_goal_with_plan(goal_id):
     logger = logging.getLogger("API")
     comps = get_agent_components()
     architect_agent = comps["architect_agent"]
+    user_id, error = _get_user_id_or_error()
+    if error:
+        return error
     try:
-        goal = architect_agent.goal_mgr.get_goal_with_plan(goal_id)
+        goal = architect_agent.goal_mgr.get_goal_with_plan(user_id, goal_id)
         
         if goal is None:
             logger.warning(f"API: Goal #{goal_id} not found")
@@ -1711,11 +1917,13 @@ def archive_goal(goal_id):
     logger = logging.getLogger("API")
     comps = get_agent_components()
     architect_agent = comps["architect_agent"]
-    DEFAULT_USER_ID = comps["DEFAULT_USER_ID"]
     request_id = _get_request_id()
+    user_id, error = _get_user_id_or_error()
+    if error:
+        return error
 
     try:
-        goal = architect_agent.goal_mgr.get_goal(goal_id)
+        goal = architect_agent.goal_mgr.get_goal(user_id, goal_id)
     except Exception as exc:
         logger.error("API: Failed to load goal for archive: %s", exc, exc_info=True)
         return api_error(
@@ -1744,7 +1952,7 @@ def archive_goal(goal_id):
         )
 
     try:
-        archived_goal = architect_agent.goal_mgr.archive_goal(goal_id)
+        archived_goal = architect_agent.goal_mgr.archive_goal(user_id, goal_id)
     except Exception as exc:
         logger.error("API: Failed to archive goal %s: %s", goal_id, exc, exc_info=True)
         return api_error(
@@ -1768,7 +1976,7 @@ def archive_goal(goal_id):
         from db.goal_events_repository import safe_append_goal_event
         payload = {"previous_status": status, "new_status": "archived"}
         result = safe_append_goal_event(
-            DEFAULT_USER_ID,
+            user_id,
             goal_id,
             None,
             "goal_archived",
@@ -1818,8 +2026,11 @@ def get_active_goals_with_next_actions():
     logger = logging.getLogger("API")
     comps = get_agent_components()
     architect_agent = comps["architect_agent"]
+    user_id, error = _get_user_id_or_error()
+    if error:
+        return error
     try:
-        all_goals = architect_agent.goal_mgr.list_goals()
+        all_goals = architect_agent.goal_mgr.list_goals(user_id)
         
         # Filter for active goals
         active_goals = [g for g in all_goals if g.get("status") == "active"]
@@ -1831,7 +2042,7 @@ def get_active_goals_with_next_actions():
                 continue
             
             # Get next action for this goal
-            next_step = architect_agent.goal_mgr.get_next_action_for_goal(goal_id)
+            next_step = architect_agent.goal_mgr.get_next_action_for_goal(user_id, goal_id)
             
             results.append({
                 "goal_id": goal_id,
@@ -1879,6 +2090,9 @@ def update_step_status(goal_id, step_id):
     logger = logging.getLogger("API")
     comps = get_agent_components()
     architect_agent = comps["architect_agent"]
+    user_id, error = _get_user_id_or_error()
+    if error:
+        return error
     data = request.get_json() or {}
     new_status = data.get("status")
     
@@ -1894,7 +2108,7 @@ def update_step_status(goal_id, step_id):
     
     try:
         updated_step = architect_agent.goal_mgr.update_plan_step_status(
-            goal_id, step_id, new_status
+            user_id, goal_id, step_id, new_status
         )
         
         if updated_step is None:
@@ -1941,7 +2155,9 @@ def trigger_goal_planning(goal_id):
     comps = get_agent_components()
     architect_agent = comps["architect_agent"]
     othello_engine = comps["othello_engine"]
-    DEFAULT_USER_ID = comps["DEFAULT_USER_ID"]
+    user_id, error = _get_user_id_or_error()
+    if error:
+        return error
     data = request.get_json() or {}
     instruction = data.get("instruction", "").strip()
     
@@ -1950,7 +2166,7 @@ def trigger_goal_planning(goal_id):
     
     try:
         # Get the goal
-        goal = architect_agent.goal_mgr.get_goal(goal_id)
+        goal = architect_agent.goal_mgr.get_goal(user_id, goal_id)
         if goal is None:
             logger.warning(f"API: Goal #{goal_id} not found for planning")
             return api_error(
@@ -1961,32 +2177,35 @@ def trigger_goal_planning(goal_id):
             )
         
         # Set as active goal
-        architect_agent.goal_mgr.set_active_goal(goal_id)
+        architect_agent.goal_mgr.set_active_goal(user_id, goal_id)
         
         # Build goal context
-        goal_context = architect_agent.goal_mgr.build_goal_context(goal_id, max_notes=10)
+        goal_context = architect_agent.goal_mgr.build_goal_context(user_id, goal_id, max_notes=10)
         
         logger.info(f"API: Triggering planning for goal #{goal_id}: {goal.get('text', '')[:50]}...")
         
         # Call architect in planning mode
         loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+        try:
+            asyncio.set_event_loop(loop)
         
-        context = {
-            "goal_context": goal_context,
-            "active_goal": goal
-        }
+            context = {
+                "goal_context": goal_context,
+                "active_goal": goal
+            }
         
-        agentic_reply, agent_status = loop.run_until_complete(
-            architect_agent.plan_and_execute(
-                instruction,
-                context=context
+            agentic_reply, agent_status = loop.run_until_complete(
+                architect_agent.plan_and_execute(
+                    instruction,
+                    context=context,
+                    user_id=user_id,
+                )
             )
-        )
-        loop.close()
+        finally:
+            loop.close()
         
         # Get updated goal with plan
-        updated_goal = architect_agent.goal_mgr.get_goal_with_plan(goal_id)
+        updated_goal = architect_agent.goal_mgr.get_goal_with_plan(user_id, goal_id)
         
         logger.info(
             f"API: Planning completed for goal #{goal_id}. "
@@ -2011,22 +2230,21 @@ def trigger_goal_planning(goal_id):
         )
 
 
-def _ensure_today_plan_id() -> Optional[int]:
+def _ensure_today_plan_id(user_id: str) -> Optional[int]:
     logger = logging.getLogger("API.Insights")
     comps = get_agent_components()
     othello_engine = comps["othello_engine"]
     plan_repository = comps["plan_repository"]
-    planner_user = getattr(othello_engine.day_planner, "user_id", "default")
 
     def _fetch_plan_row() -> Optional[Dict[str, Any]]:
-        return plan_repository.get_plan_by_date(planner_user, date.today())
+        return plan_repository.get_plan_by_date(user_id, date.today())
 
     # Try existing row
     today_row = _fetch_plan_row()
     if not today_row:
         # Generate (or rebuild) and persist a plan row for today
         try:
-            othello_engine.rebuild_today_plan()
+            othello_engine.day_planner.rebuild_today_plan(user_id)
         except Exception as exc:
             logger.warning("API: failed to rebuild plan before applying insight: %s", exc)
         today_row = _fetch_plan_row()
@@ -2038,7 +2256,7 @@ def _ensure_today_plan_id() -> Optional[int]:
     if not plan_id:
         logger.warning("API: today plan row missing id while applying insight")
         return None
-    logger.debug("API: ensure today plan id resolved %s", {"plan_id": plan_id, "user": planner_user})
+    logger.debug("API: ensure today plan id resolved %s", {"plan_id": plan_id, "user": user_id})
     return plan_id
 
 
@@ -2089,14 +2307,17 @@ def _build_insight_plan_item(insight: dict, label: str, idx: int) -> dict:
     }
 
 
-def _append_goal_task_to_plan(plan_item: dict) -> bool:
+def _append_goal_task_to_plan(user_id: str, plan_item: dict) -> bool:
     """Append a goal_task into today's plan sections and persist.
 
     Returns True if appended, False if skipped (e.g., duplicate).
     """
     logger = logging.getLogger("API.Insights")
     try:
-        plan = othello_engine.day_planner.get_today_plan(force_regen=False)
+        plan = othello_engine.day_planner.get_today_plan(
+            user_id,
+            force_regen=False,
+        )
     except Exception as exc:
         logger.warning("API: failed to load plan before appending insight task: %s", exc, exc_info=True)
         return False
@@ -2115,17 +2336,16 @@ def _append_goal_task_to_plan(plan_item: dict) -> bool:
 
     goal_tasks.append(plan_item)
     try:
-        othello_engine.day_planner._persist_plan(date.today(), plan)  # type: ignore[attr-defined]
+        othello_engine.day_planner._persist_plan(user_id, date.today(), plan)  # type: ignore[attr-defined]
     except Exception as exc:
         logger.warning("API: failed to persist plan after appending insight task: %s", exc, exc_info=True)
         return False
 
     try:
-        planner_user = getattr(othello_engine.day_planner, "user_id", DEFAULT_USER_ID)
         meta = plan_item.get("metadata") or {}
         label = meta.get("label") or plan_item.get("label") or item_id
         goal_task_history_repository.upsert_goal_task(
-            user_id=str(planner_user),
+            user_id=str(user_id),
             plan_date=date.today(),
             item_id=item_id,
             label=label,
@@ -2153,7 +2373,7 @@ def _append_goal_task_to_plan(plan_item: dict) -> bool:
     return True
 
 
-def _apply_plan_insight(insight: dict) -> int:
+def _apply_plan_insight(user_id: str, insight: dict) -> int:
     logger = logging.getLogger("API.Insights")
     labels = _extract_insight_labels(insight)
     if not labels:
@@ -2168,12 +2388,12 @@ def _apply_plan_insight(insight: dict) -> int:
             "type": item.get("type"),
             "section": item.get("section"),
         })
-        if _append_goal_task_to_plan(item):
+        if _append_goal_task_to_plan(user_id, item):
             created += 1
     return created
 
 
-def _apply_simple_plan_item_from_insight(insight: dict) -> int:
+def _apply_simple_plan_item_from_insight(user_id: str, insight: dict) -> int:
     logger = logging.getLogger("API.Insights")
     labels = _extract_insight_labels(insight)
     if not labels:
@@ -2185,22 +2405,21 @@ def _apply_simple_plan_item_from_insight(insight: dict) -> int:
         "type": item.get("type"),
         "section": item.get("section"),
     })
-    if _append_goal_task_to_plan(item):
+    if _append_goal_task_to_plan(user_id, item):
         logger.info("API: appended simple plan item from insight id=%s label='%s'", insight.get("id"), labels[0])
         return 1
     return 0
 
 
-def _apply_goal_insight(insight: dict) -> None:
+def _apply_goal_insight(user_id: str, insight: dict) -> Dict[str, Any]:
     payload = insight.get("payload") or {}
     items = payload.get("items") or []
     title = payload.get("title") or (items[0] if items else insight.get("summary"))
     if not title:
-        return
-    try:
-        architect_agent.goal_mgr.add_goal(title)
-    except Exception as exc:
-        logging.getLogger("API").warning(f"API: failed to apply goal insight: {exc}")
+        raise ValueError("Goal insight missing title")
+    comps = get_agent_components()
+    architect_agent = comps["architect_agent"]
+    return architect_agent.goal_mgr.add_goal(user_id, title)
 
 
 def _apply_routine_insight(insight: dict) -> None:
@@ -2220,9 +2439,11 @@ def insights_summary():
     logger = logging.getLogger("API.Insights")
     comps = get_agent_components()
     insights_repository = comps["insights_repository"]
-    DEFAULT_USER_ID = comps["DEFAULT_USER_ID"]
+    user_id, error = _get_user_id_or_error()
+    if error:
+        return error
     try:
-        counts = insights_repository.count_pending_by_type(DEFAULT_USER_ID)
+        counts = insights_repository.count_pending_by_type(user_id)
         logger.info("API: insights summary pending_counts=%s", counts)
         return jsonify({"pending_counts": counts})
     except Exception as exc:
@@ -2241,14 +2462,16 @@ def insights_list():
     logger = logging.getLogger("API.Insights")
     comps = get_agent_components()
     insights_repository = comps["insights_repository"]
-    DEFAULT_USER_ID = comps["DEFAULT_USER_ID"]
+    user_id, error = _get_user_id_or_error()
+    if error:
+        return error
     status = (request.args.get("status") or "pending").strip().lower()
 
     logger.info("API: /api/insights/list status=%s", status or "any")
 
     try:
         insights = insights_repository.list_insights(
-            user_id=DEFAULT_USER_ID,
+            user_id=user_id,
             status=status,
         )
         items = [serialize_insight(i) for i in insights]
@@ -2269,39 +2492,62 @@ def insights_list():
 def insights_apply():
     comps = get_agent_components()
     insights_repository = comps["insights_repository"]
-    DEFAULT_USER_ID = comps["DEFAULT_USER_ID"]
+    othello_engine = comps.get("othello_engine")
+    user_id, error = _get_user_id_or_error()
+    if error:
+        return error
     data = request.get_json() or {}
     insight_id = data.get("id")
     if not insight_id:
         return api_error("VALIDATION_ERROR", "id is required", 400)
-    insight = insights_repository.get_insight_by_id(DEFAULT_USER_ID, insight_id)
+    insight = insights_repository.get_insight_by_id(user_id, insight_id)
     if not insight:
         return api_error("INSIGHT_NOT_FOUND", "Insight not found", 404)
 
     try:
         created_count = 0
         if insight.get("type") == "plan":
-            created_count += _apply_plan_insight(insight)
+            created_count += _apply_plan_insight(user_id, insight)
         elif insight.get("type") == "goal":
-            _apply_goal_insight(insight)
-            created_count += _apply_simple_plan_item_from_insight(insight)
+            created_goal = _apply_goal_insight(user_id, insight)
+            if not created_goal:
+                return api_error(
+                    "GOAL_CREATE_FAILED",
+                    "Failed to create goal",
+                    500,
+                )
+            created_count += _apply_simple_plan_item_from_insight(user_id, insight)
         elif insight.get("type") == "routine":
             _apply_routine_insight(insight)
-            created_count += _apply_simple_plan_item_from_insight(insight)
+            created_count += _apply_simple_plan_item_from_insight(user_id, insight)
         else:
             _apply_idea_insight(insight)
-            created_count += _apply_simple_plan_item_from_insight(insight)
+            created_count += _apply_simple_plan_item_from_insight(user_id, insight)
 
         try:
-            insights_repository.update_insight_status(insight_id, "applied", user_id=DEFAULT_USER_ID)
+            updated = insights_repository.update_insight_status(
+                insight_id, "applied", user_id=user_id
+            )
+            if not updated:
+                return api_error(
+                    "INSIGHT_STATUS_UPDATE_FAILED",
+                    "Failed to update insight status",
+                    500,
+                )
         except Exception as exc:
             logging.getLogger("API.Insights").warning(
                 "API: failed to update insight status for id=%s: %s", insight_id, exc
             )
+            return api_error(
+                "INSIGHT_STATUS_UPDATE_FAILED",
+                "Failed to update insight status",
+                500,
+                details=type(exc).__name__,
+            )
 
         counts = {}
         try:
-            counts = insights_repository.count_pending_by_type(DEFAULT_USER_ID)
+            counts = insights_repository.count_pending_by_type(user_id)
         except Exception as exc:
             logging.getLogger("API.Insights").warning("API: failed to refresh pending counts after apply: %s", exc)
 
@@ -2310,6 +2556,16 @@ def insights_apply():
             "applied_count": created_count,
             "insights_meta": {"pending_counts": counts},
         })
+    except ValueError as exc:
+        logging.getLogger("API").warning(
+            "API: invalid goal insight id=%s error=%s", insight_id, exc
+        )
+        return api_error(
+            "INSIGHT_INVALID",
+            "Goal insight missing title",
+            400,
+            details=str(exc),
+        )
     except Exception as exc:
         logging.getLogger("API").error(f"API: failed to apply insight {insight_id}: {exc}", exc_info=True)
         return api_error(
@@ -2326,7 +2582,9 @@ def goal_task_history():
     logger = logging.getLogger("API.GoalTasks")
     comps = get_agent_components()
     goal_task_history_repository = comps["goal_task_history_repository"]
-    DEFAULT_USER_ID = comps["DEFAULT_USER_ID"]
+    user_id, error = _get_user_id_or_error()
+    if error:
+        return error
     args = request.args or {}
     status = (args.get("status") or "").strip() or None
     start_date_param = args.get("start_date")
@@ -2353,7 +2611,7 @@ def goal_task_history():
             end_date = today if not start_date_param else start_date
 
         rows = goal_task_history_repository.list_goal_tasks(
-            DEFAULT_USER_ID,
+            user_id,
             start_date=start_date,
             end_date=end_date,
             status=status,
@@ -2380,18 +2638,20 @@ def goal_task_history():
 def insights_dismiss():
     comps = get_agent_components()
     insights_repository = comps["insights_repository"]
-    DEFAULT_USER_ID = comps["DEFAULT_USER_ID"]
+    user_id, error = _get_user_id_or_error()
+    if error:
+        return error
     data = request.get_json() or {}
     insight_id = data.get("id")
     if not insight_id:
         return api_error("VALIDATION_ERROR", "id is required", 400)
-    insight = insights_repository.get_insight_by_id(DEFAULT_USER_ID, insight_id)
+    insight = insights_repository.get_insight_by_id(user_id, insight_id)
     if not insight:
         return api_error("INSIGHT_NOT_FOUND", "Insight not found", 404)
 
     try:
-        insights_repository.update_insight_status(insight_id, "dismissed", user_id=DEFAULT_USER_ID)
-        counts = insights_repository.count_pending_by_type(DEFAULT_USER_ID)
+        insights_repository.update_insight_status(insight_id, "dismissed", user_id=user_id)
+        counts = insights_repository.count_pending_by_type(user_id)
         return jsonify({"ok": True, "insights_meta": {"pending_counts": counts}})
     except Exception as exc:
         return api_error(

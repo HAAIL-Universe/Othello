@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, date
 from pathlib import Path
@@ -295,9 +296,9 @@ class DayPlanner:
     - optional: reschedule_to, reason (for skips), approx_duration_min
 
     Public entrypoints:
-    - get_today_plan(mood_context: Optional[Dict], force_regen: bool = False)
-    - update_plan_item_status(item_id: str, status: str, ...)
-    - rebuild_today_plan(mood_context: Optional[Dict])
+    - get_today_plan(user_id: str, mood_context: Optional[Dict], force_regen: bool = False)
+    - update_plan_item_status(user_id: str, item_id: str, status: str, ...)
+    - rebuild_today_plan(user_id: str, mood_context: Optional[Dict])
     """
 
     def __init__(
@@ -306,7 +307,6 @@ class DayPlanner:
         memory_manager: Optional[MemoryManager] = None,
         routine_store: Optional[RoutineStore] = None,
         behavior_profile: Optional[BehaviorProfile] = None,
-        user_id: str = "default",
     ) -> None:
         self.goal_manager = goal_manager or DbGoalManager()
         self.memory_manager = memory_manager or MemoryManager()
@@ -316,21 +316,33 @@ class DayPlanner:
         self.plan_dir.mkdir(parents=True, exist_ok=True)
         self.behavior_profile = behavior_profile or BehaviorProfile(self.plan_dir, self.memory_manager)
         self.logger = logging.getLogger("DayPlanner")
-        self.user_id = user_id
+
+    def _normalize_user_id(self, user_id: str) -> str:
+        uid = str(user_id or "").strip()
+        if not uid:
+            raise ValueError("user_id is required")
+        return uid
+
+    def _plan_cache_path(self, user_id: str, target_date: date) -> Path:
+        # TODO: keep per-user cache partitioned by (user_id, date) to avoid cross-user bleed.
+        safe_uid = re.sub(r"[^A-Za-z0-9_.-]+", "_", user_id)
+        return self.plan_dir / f"plan_{safe_uid}_{target_date.isoformat()}.json"
 
     # ------------------------------------------------------------------
     def get_today_plan(
         self,
+        user_id: str,
         mood_context: Optional[Dict[str, Any]] = None,
         force_regen: bool = False,
     ) -> Dict[str, Any]:
+        uid = self._normalize_user_id(user_id)
         today = date.today()
         if not force_regen:
-            existing = self._load_plan(today)
+            existing = self._load_plan(uid, today)
             if existing:
-                appended_goal_tasks = self._append_persisted_goal_tasks(today, existing)
+                appended_goal_tasks = self._append_persisted_goal_tasks(uid, today, existing)
                 existing["_plan_source"] = existing.get("_plan_source") or "cache"
-                persisted_existing = self._persist_plan(today, existing)
+                persisted_existing = self._persist_plan(uid, today, existing)
                 self._log_plan_structure(
                     today,
                     persisted_existing,
@@ -339,20 +351,21 @@ class DayPlanner:
                 )
                 return persisted_existing
         behavior_snapshot = self.behavior_profile.build_profile()
-        plan = self._generate_plan(today, mood_context or {}, behavior_snapshot)
-        appended_goal_tasks = self._append_persisted_goal_tasks(today, plan)
-        persisted = self._persist_plan(today, plan)
+        plan = self._generate_plan(uid, today, mood_context or {}, behavior_snapshot)
+        appended_goal_tasks = self._append_persisted_goal_tasks(uid, today, plan)
+        persisted = self._persist_plan(uid, today, plan)
         persisted["_plan_source"] = "generated"
         self._log_plan_structure(today, persisted, appended_goal_tasks=appended_goal_tasks, source="generated")
         return persisted
 
-    def rebuild_today_plan(self, mood_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        return self.get_today_plan(mood_context=mood_context, force_regen=True)
+    def rebuild_today_plan(self, user_id: str, mood_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        return self.get_today_plan(user_id, mood_context=mood_context, force_regen=True)
 
     # ------------------------------------------------------------------
-    def _load_plan(self, target_date: date) -> Optional[Dict[str, Any]]:
+    def _load_plan(self, user_id: str, target_date: date) -> Optional[Dict[str, Any]]:
+        uid = self._normalize_user_id(user_id)
         try:
-            plan_row = plan_repository.get_plan_with_items(self.user_id, target_date)
+            plan_row = plan_repository.get_plan_with_items(uid, target_date)
             if plan_row:
                 plan = self._hydrate_plan_from_db(plan_row)
                 plan["_plan_source"] = "db"
@@ -360,7 +373,7 @@ class DayPlanner:
         except Exception as exc:
             self.logger.warning(f"DayPlanner: failed to load DB plan for {target_date}: {exc}")
 
-        path = self.plan_dir / f"plan_{target_date.isoformat()}.json"
+        path = self._plan_cache_path(uid, target_date)
         if not path.exists():
             return None
         try:
@@ -372,12 +385,13 @@ class DayPlanner:
             self.logger.warning(f"DayPlanner: failed to load plan snapshot for {target_date}: {exc}")
             return None
 
-    def _persist_plan(self, target_date: date, plan: Dict[str, Any]) -> Dict[str, Any]:
+    def _persist_plan(self, user_id: str, target_date: date, plan: Dict[str, Any]) -> Dict[str, Any]:
         generation_context = {**(plan.get("mood_context") or {}), "capacity_model": plan.get("capacity_model")}
         behavior_snapshot = plan.get("behavior_profile") or {}
+        uid = self._normalize_user_id(user_id)
         try:
             plan_row = plan_repository.upsert_plan(
-                user_id=self.user_id,
+                user_id=uid,
                 plan_date=target_date,
                 generation_context=generation_context,
                 behavior_snapshot=behavior_snapshot,
@@ -388,7 +402,7 @@ class DayPlanner:
         except Exception as exc:
             self.logger.error(f"DayPlanner: failed to persist plan to DB for {target_date}: {exc}")
 
-        path = self.plan_dir / f"plan_{target_date.isoformat()}.json"
+        path = self._plan_cache_path(uid, target_date)
         try:
             with path.open("w", encoding="utf-8") as f:
                 json.dump(plan, f, indent=2, ensure_ascii=False)
@@ -519,11 +533,17 @@ class DayPlanner:
         return plan
 
     # ------------------------------------------------------------------
-    def _generate_plan(self, target_date: date, mood: Dict[str, Any], behavior_snapshot: Dict[str, Any]) -> Dict[str, Any]:
+    def _generate_plan(
+        self,
+        user_id: str,
+        target_date: date,
+        mood: Dict[str, Any],
+        behavior_snapshot: Dict[str, Any],
+    ) -> Dict[str, Any]:
         mood_payload = self._normalise_mood(mood)
         routines = self._select_routines(target_date, mood_payload, behavior_snapshot)
         capacity = self._derive_capacity(mood_payload, behavior_snapshot)
-        goal_tasks, optional = self._select_goal_tasks(capacity)
+        goal_tasks, optional = self._select_goal_tasks(user_id, capacity)
 
         plan = {
             "date": target_date.isoformat(),
@@ -548,13 +568,14 @@ class DayPlanner:
             pass
         return plan
 
-    def _append_persisted_goal_tasks(self, target_date: date, plan: Dict[str, Any]) -> int:
+    def _append_persisted_goal_tasks(self, user_id: str, target_date: date, plan: Dict[str, Any]) -> int:
         """Append planned goal_task rows (e.g., from insights) into today's plan.
 
         This bridges insight-applied plan items that live in plan_items and the
         freshly generated routine scaffold, so the UI always sees them.
         """
-        plan_row = plan_repository.get_plan_by_date(self.user_id, target_date)
+        uid = self._normalize_user_id(user_id)
+        plan_row = plan_repository.get_plan_by_date(uid, target_date)
         if not plan_row or not plan_row.get("id"):
             self.logger.debug("DayPlanner: no plan row found for %s when merging persisted goal tasks", target_date)
             return 0
@@ -740,8 +761,11 @@ class DayPlanner:
             })
         return selected
 
-    def _select_goal_tasks(self, capacity: Dict[str, int]) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
-        goals = self.goal_manager.list_goals()
+    def _select_goal_tasks(
+        self, user_id: str, capacity: Dict[str, int]
+    ) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
+        uid = self._normalize_user_id(user_id)
+        goals = self.goal_manager.list_goals(uid)
         candidates: List[Dict[str, Any]] = []
         for goal in goals:
             if goal.get("status") not in (None, "active", "in_progress"):
@@ -749,7 +773,7 @@ class DayPlanner:
             goal_id = goal.get("id")
             if goal_id is None:
                 continue
-            steps = self.goal_manager.get_all_plan_steps(goal_id)
+            steps = self.goal_manager.get_all_plan_steps(uid, goal_id)
             for step in steps:
                 if step.get("status") == "done":
                     continue
@@ -826,6 +850,7 @@ class DayPlanner:
     # ------------------------------------------------------------------
     def update_plan_item_status(
         self,
+        user_id: str,
         item_id: str,
         status: str,
         *,
@@ -840,7 +865,8 @@ class DayPlanner:
         if status == "rescheduled" and not reschedule_to:
             raise ValueError("reschedule_to is required when status is rescheduled")
 
-        plan_row = plan_repository.get_plan_by_date(self.user_id, target_date)
+        uid = self._normalize_user_id(user_id)
+        plan_row = plan_repository.get_plan_by_date(uid, target_date)
         if not plan_row:
             raise ValueError(f"No plan stored for {target_date} to update")
 
@@ -864,9 +890,9 @@ class DayPlanner:
 
         if status == "complete" and updated_row.get("type") == "goal_task":
             metadata = updated_row.get("metadata") or {}
-            self._mark_goal_step_complete(metadata)
+            self._mark_goal_step_complete(uid, metadata)
 
-        plan = self._load_plan(target_date) or {}
+        plan = self._load_plan(uid, target_date) or {}
         entry, section_name, _ = self._find_item(plan, item_id)
 
         self._log_lifecycle(
@@ -890,13 +916,14 @@ class DayPlanner:
                         return step, section_name, entry
         return None, None, None
 
-    def _mark_goal_step_complete(self, entry: Dict[str, Any]) -> None:
+    def _mark_goal_step_complete(self, user_id: str, entry: Dict[str, Any]) -> None:
         goal_id = entry.get("goal_id")
         step_id = entry.get("step_id")
         if goal_id is None or step_id is None:
             return
         try:
-            self.goal_manager.update_plan_step_status(goal_id, step_id, "done")
+            uid = self._normalize_user_id(user_id)
+            self.goal_manager.update_plan_step_status(uid, goal_id, step_id, "done")
         except Exception as exc:
             self.logger.warning(f"DayPlanner: failed to mark goal step done (goal={goal_id}, step={step_id}): {exc}")
 

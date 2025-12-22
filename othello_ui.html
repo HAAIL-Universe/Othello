@@ -3273,11 +3273,34 @@
 
     async function postCommitment(action, items, rawText) {
       const safeItems = items && items.length ? items : [rawText];
-      const title = (safeItems[0] || "New commitment").slice(0, 120);
+      const title = (safeItems[0] || "New commitment").trim();
       let message;
 
       if (action === "goal") {
-        message = `Create a long-term goal titled "${title}" from these items:\n- ${safeItems.join("\n- ")}`;
+        const res = await fetch(GOALS_API, {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ title })
+        });
+        if (res.status === 401 || res.status === 403) {
+          await handleUnauthorized("goals-create");
+          throw new Error("Authentication required.");
+        }
+        if (!res.ok) {
+          let errMsg = "Unable to save goal.";
+          try {
+            const errJson = await res.json();
+            errMsg = errJson.message || errMsg;
+          } catch (err) {
+            try {
+              const errText = await res.text();
+              if (errText) errMsg = errText;
+            } catch (e) {}
+          }
+          throw new Error(errMsg);
+        }
+        return res.json();
       } else if (action === "plan") {
         message = `Add these tasks to today's plan:\n- ${safeItems.join("\n- ")}`;
       } else if (action === "idea") {
@@ -3317,9 +3340,11 @@
             status.textContent = "Saved";
             if (action === "plan") {
               loadTodayPlanner();
+            } else if (action === "goal") {
+              refreshGoals();
             }
           } catch (err) {
-            status.textContent = "Failed";
+            status.textContent = err && err.message ? err.message : "Failed";
           } finally {
             setTimeout(() => { status.textContent = ""; }, 1500);
             btn.disabled = false;

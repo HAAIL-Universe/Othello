@@ -40,8 +40,8 @@ class Architect:
         self.memory_mgr = MemoryManager()  # Memory manager for agentic_memory.json
         # self.behaviouralist = BehaviouralistModule()  # (Future stub)
 
-        # Simple rolling buffer of recent turns: [{"role": "...", "content": "..."}]
-        self.short_term_memory: List[Dict[str, str]] = []
+        # Simple rolling buffer of recent turns per user: {"user_id": [{"role": "...", "content": "..."}]}
+        self.short_term_memory: Dict[str, List[Dict[str, str]]] = {}
         
         # Startup confirmation
         self.logger.info("✓ ARCHITECT: XML planning prompt loaded (life_architect)")
@@ -122,10 +122,19 @@ class Architect:
     def design_agent(self) -> str:
         return f"Designing agent based on {self.framework}"
 
+    def _memory_key(self, user_id: Optional[str]) -> str:
+        uid = str(user_id or "").strip()
+        return uid or "anonymous"
+
+    def _get_short_term_memory(self, user_id: Optional[str]) -> List[Dict[str, str]]:
+        key = self._memory_key(user_id)
+        return self.short_term_memory.setdefault(key, [])
+
     async def plan_and_execute(
         self,
         answers: Union[Dict[str, str], str],
         context: Optional[Dict[str, str]] = None,
+        user_id: Optional[str] = None,
     ) -> tuple[str, Dict[str, Any]]:
         """
         Main planning entrypoint.
@@ -176,6 +185,10 @@ class Architect:
                     "routine": "",
                     "freeform": raw_text,
                 }
+            memory_user_id = user_id
+            if memory_user_id is None and isinstance(context, dict):
+                memory_user_id = context.get("user_id")
+            short_term_memory = self._get_short_term_memory(memory_user_id)
 
             self.logger.info(f"🧭 Planning response to user input: {raw_text}")
 
@@ -212,13 +225,11 @@ class Architect:
             else:
                 full_user_msg = raw_text
 
-            self.short_term_memory.append(
+            short_term_memory.append(
                 {"role": "user", "content": full_user_msg}
             )
-            if len(self.short_term_memory) > self.context_window * 2:
-                self.short_term_memory = self.short_term_memory[
-                    -self.context_window * 2 :
-                ]
+            if len(short_term_memory) > self.context_window * 2:
+                del short_term_memory[:-self.context_window * 2]
 
             # ---- Build system prompt + messages ---------------------------------
             system_prompt = load_prompt("life_architect")
@@ -293,12 +304,12 @@ class Architect:
                         )
 
             # Then append short-term dialogue history
-            messages += self.short_term_memory
+            messages += short_term_memory
             
             self.logger.info(
                 f"→ Sending to LLM: {len(messages)} messages "
                 f"(system={sum(1 for m in messages if m['role']=='system')}, "
-                f"history={len(self.short_term_memory)})"
+                f"history={len(short_term_memory)})"
             )
             
             # Log all system messages for debugging
@@ -350,7 +361,7 @@ class Architect:
             }
 
             # Append assistant turn to memory
-            self.short_term_memory.append(
+            short_term_memory.append(
                 {"role": "assistant", "content": user_facing_response}
             )
 
@@ -437,7 +448,7 @@ class Architect:
             self.logger.debug(f"Failed XML parsing traceback:", exc_info=True)
             return None
 
-    async def generate_goal_plan(self, goal_id: int, instruction: str = None) -> Optional[Dict[str, Any]]:
+    async def generate_goal_plan(self, user_id: str, goal_id: int, instruction: str = None) -> Optional[Dict[str, Any]]:
         """
         Generate or update a structured plan for the given goal using the canonical
         <goal_update> XML schema.
@@ -446,8 +457,9 @@ class Architect:
         It bypasses conversational mode and instructs the LLM to return XML-only.
         
         Args:
-            goal_id: The ID of the goal to plan for
-            instruction: Optional user instruction/context (e.g. "focus on health")
+            user_id: The user ID (required).
+            goal_id: The ID of the goal to plan for.
+            instruction: Optional user instruction/context (e.g. "focus on health").
         
         Returns:
             Dict with parsed plan fields:
@@ -465,7 +477,7 @@ class Architect:
         """
         try:
             # Fetch goal from database
-            goal = self.goal_mgr.get_goal(goal_id)
+            goal = self.goal_mgr.get_goal(user_id, goal_id)
             if not goal:
                 self.logger.error(f"generate_goal_plan: Goal #{goal_id} not found")
                 return None
@@ -474,7 +486,7 @@ class Architect:
             self.logger.info(f"🎯 Generating plan for goal #{goal_id}: {goal_text[:60]}...")
             
             # Build goal context
-            goal_context = self.goal_mgr.build_goal_context(goal_id, max_notes=8)
+            goal_context = self.goal_mgr.build_goal_context(user_id, goal_id, max_notes=8)
             
             # Build XML-only planning prompt
             system_prompt = load_prompt("life_architect")
@@ -586,7 +598,7 @@ class Architect:
             # Save plan steps
             if plan_steps:
                 try:
-                    saved_steps = self.goal_mgr.save_goal_plan(goal_id, plan_steps)
+                    saved_steps = self.goal_mgr.save_goal_plan(user_id, goal_id, plan_steps)
                     self.logger.info(f"  → Saved {len(saved_steps)} plan steps to database")
                 except Exception as e:
                     self.logger.error(f"⚠️ Failed to save plan steps: {e}", exc_info=True)
@@ -643,5 +655,9 @@ class Architect:
     def set_memory_window(self, window_size: int) -> None:
         self.context_window = window_size
 
-    def clear_short_term_memory(self) -> None:
-        self.short_term_memory = []
+    def clear_short_term_memory(self, user_id: Optional[str] = None) -> None:
+        if user_id is None:
+            self.short_term_memory = {}
+            return
+        key = self._memory_key(user_id)
+        self.short_term_memory.pop(key, None)
