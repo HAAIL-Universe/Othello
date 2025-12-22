@@ -14,11 +14,12 @@ Key differences from file-based GoalManager:
 - All goal operations require an explicit user_id
 """
 
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Union
 from datetime import datetime
 import logging
 
 from db import goals_repository
+from db.database import execute_and_fetch_one
 
 
 class DbGoalManager:
@@ -58,7 +59,7 @@ class DbGoalManager:
         if role not in ("user", "othello", "system"):
             role = "system"
         
-        if self.get_goal(uid, goal_id) is None:
+        if self.get_goal(uid, goal_id, include_conversation=False) is None:
             return {"ok": False, "reason": "goal_not_found"}
         
         note = {
@@ -121,7 +122,7 @@ class DbGoalManager:
         Construct a text block summarising the goal + recent notes for LLM context.
         """
         uid = self._require_user_id(user_id)
-        goal = self.get_goal(uid, goal_id)
+        goal = self.get_goal(uid, goal_id, include_conversation=False)
         if goal is None:
             return ""
         
@@ -149,7 +150,14 @@ class DbGoalManager:
     # Database-backed goal operations (mapping to repository)
     # ------------------------------------------------------------------
     
-    def _db_to_legacy_format(self, user_id: str, db_goal: Dict[str, Any]) -> Dict[str, Any]:
+    def _db_to_legacy_format(
+        self,
+        user_id: str,
+        db_goal: Dict[str, Any],
+        *,
+        include_conversation: bool = False,
+        max_notes: int = 25,
+    ) -> Dict[str, Any]:
         """
         Convert database goal format to legacy GoalEntry format.
         
@@ -158,7 +166,9 @@ class DbGoalManager:
         """
         # Extract conversation from JSONL file
         uid = self._require_user_id(user_id)
-        conversation = self.get_recent_notes(uid, db_goal["id"], max_notes=100)
+        conversation = []
+        if include_conversation:
+            conversation = self.get_recent_notes(uid, db_goal["id"], max_notes=max_notes)
         
         return {
             "id": db_goal["id"],
@@ -184,7 +194,7 @@ class DbGoalManager:
         }
         uid = self._require_user_id(user_id)
         db_goal = goals_repository.create_goal(data, uid)
-        goal_dict = self._db_to_legacy_format(uid, db_goal)
+        goal_dict = self._db_to_legacy_format(uid, db_goal, include_conversation=False)
         
         # Automatically set newly created goal as active
         goal_id = goal_dict.get("id")
@@ -202,9 +212,19 @@ class DbGoalManager:
         """
         uid = self._require_user_id(user_id)
         db_goals = goals_repository.list_goals(uid, include_archived=False)
-        return [self._db_to_legacy_format(uid, g) for g in db_goals]
+        return [
+            self._db_to_legacy_format(uid, g, include_conversation=False)
+            for g in db_goals
+        ]
     
-    def get_goal(self, user_id: str, goal_id: int) -> Optional[Dict[str, Any]]:
+    def get_goal(
+        self,
+        user_id: str,
+        goal_id: int,
+        *,
+        include_conversation: bool = True,
+        max_notes: int = 25,
+    ) -> Optional[Dict[str, Any]]:
         """
         Return a single goal by ID in legacy format.
         """
@@ -212,7 +232,12 @@ class DbGoalManager:
         db_goal = goals_repository.get_goal(goal_id, uid)
         if db_goal is None:
             return None
-        return self._db_to_legacy_format(uid, db_goal)
+        return self._db_to_legacy_format(
+            uid,
+            db_goal,
+            include_conversation=include_conversation,
+            max_notes=max_notes,
+        )
     
     def update_goal(
         self,
@@ -233,12 +258,74 @@ class DbGoalManager:
         if not fields:
             return self.get_goal(uid, goal_id)
         
-        db_goal = goals_repository.update_goal_meta(goal_id, fields)
+        db_goal = goals_repository.update_goal_meta(goal_id, fields, user_id=uid)
         if db_goal is None:
             return None
-        
-        print(f"[DbGoalManager] Updated goal {goal_id}: {db_goal}")
-        return self._db_to_legacy_format(db_goal)
+
+        self.logger.info("DbGoalManager: Updated goal %s", goal_id)
+        return self._db_to_legacy_format(uid, db_goal, include_conversation=False)
+
+    def _update_goal_description(
+        self,
+        user_id: str,
+        goal_id: int,
+        new_description: str,
+    ) -> Optional[Dict[str, Any]]:
+        uid = self._require_user_id(user_id)
+        query = """
+            UPDATE goals
+            SET description = %s, updated_at = NOW()
+            WHERE id = %s AND user_id = %s
+            RETURNING id, user_id, title, description, status, priority, category,
+                      plan, checklist, last_conversation_summary, created_at, updated_at
+        """
+        db_goal = execute_and_fetch_one(query, (new_description, goal_id, uid))
+        if db_goal is None:
+            return None
+        return self._db_to_legacy_format(uid, db_goal)
+
+    def replace_goal_description(
+        self,
+        user_id: str,
+        goal_id: int,
+        new_description: str,
+        request_id: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Replace the goal description in full for this user/goal.
+        """
+        uid = self._require_user_id(user_id)
+        if self.get_goal(uid, goal_id) is None:
+            return None
+        updated_goal = self._update_goal_description(uid, goal_id, new_description)
+        if updated_goal is None:
+            self.logger.warning("DbGoalManager: goal description replace failed for goal %s", goal_id)
+        return updated_goal
+
+    def append_goal_description(
+        self,
+        user_id: str,
+        goal_id: int,
+        extra_text: str,
+        request_id: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Append extra text to the goal description.
+        """
+        uid = self._require_user_id(user_id)
+        goal = self.get_goal(uid, goal_id, include_conversation=True, max_notes=25)
+        if goal is None:
+            return None
+        base_description = (goal.get("description") or "").rstrip()
+        extra = (extra_text or "").strip()
+        if base_description:
+            new_description = f"{base_description}\n\n{extra}"
+        else:
+            new_description = extra
+        updated_goal = self._update_goal_description(uid, goal_id, new_description)
+        if updated_goal is None:
+            self.logger.warning("DbGoalManager: goal description append failed for goal %s", goal_id)
+        return updated_goal
     
     def update_goal_plan(
         self,
@@ -272,8 +359,8 @@ class DbGoalManager:
         if db_goal is None:
             return None
         
-        print(f"[DbGoalManager] Updated goal plan for #{goal_id}")
-        return self._db_to_legacy_format(uid, db_goal)
+        self.logger.info("DbGoalManager: Updated goal plan for #%s", goal_id)
+        return self._db_to_legacy_format(uid, db_goal, include_conversation=False)
     
     def delete_goal(self, user_id: str, goal_id: int) -> bool:
         """
@@ -305,7 +392,7 @@ class DbGoalManager:
         Mark a goal as active for the current session.
         """
         uid = self._require_user_id(user_id)
-        if self.get_goal(uid, goal_id) is None:
+        if self.get_goal(uid, goal_id, include_conversation=False) is None:
             return False
         self.active_goal_id[uid] = goal_id
         self.logger.info(f"GoalManager: Active goal set to #{goal_id} for user {uid}")
@@ -354,7 +441,7 @@ class DbGoalManager:
             return contains[-1]
         return None
     
-    def find_goal_by_id_or_name(self, user_id: str, identifier: str | int) -> Optional[Dict[str, Any]]:
+    def find_goal_by_id_or_name(self, user_id: str, identifier: Union[str, int]) -> Optional[Dict[str, Any]]:
         """
         Try interpreting the identifier as an ID first, then as a name query.
         """
@@ -398,7 +485,7 @@ class DbGoalManager:
         """
         # Validate that the goal exists
         uid = self._require_user_id(user_id)
-        if self.get_goal(uid, goal_id) is None:
+        if self.get_goal(uid, goal_id, include_conversation=False) is None:
             self.logger.error(f"DbGoalManager: Cannot save plan for non-existent goal {goal_id}")
             return []
         try:
@@ -455,7 +542,7 @@ class DbGoalManager:
             Updated step dictionary if successful, None otherwise
         """
         uid = self._require_user_id(user_id)
-        if self.get_goal(uid, goal_id) is None:
+        if self.get_goal(uid, goal_id, include_conversation=False) is None:
             self.logger.error(f"DbGoalManager: Cannot update step for non-existent goal {goal_id}")
             return None
 
@@ -489,7 +576,7 @@ class DbGoalManager:
             Next incomplete step dictionary, or None if all steps are done or goal doesn't exist
         """
         uid = self._require_user_id(user_id)
-        if self.get_goal(uid, goal_id) is None:
+        if self.get_goal(uid, goal_id, include_conversation=False) is None:
             return None
 
         try:
@@ -511,7 +598,7 @@ class DbGoalManager:
             List of step dictionaries
         """
         uid = self._require_user_id(user_id)
-        if self.get_goal(uid, goal_id) is None:
+        if self.get_goal(uid, goal_id, include_conversation=False) is None:
             return []
 
         try:

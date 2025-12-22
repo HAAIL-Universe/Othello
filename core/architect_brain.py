@@ -248,7 +248,14 @@ class Architect:
                 )
             
             messages: List[Dict[str, str]] = [
-                {"role": "system", "content": system_prompt}
+                {"role": "system", "content": system_prompt},
+                {
+                    "role": "system",
+                    "content": (
+                        "Only claim something is 'in the goal' if it appears in the injected "
+                        "goal_context. Otherwise say it isn't saved yet."
+                    ),
+                },
             ]
 
             # Inject active goal context (if provided by API)
@@ -590,7 +597,7 @@ class Architect:
             if meta_updates:
                 try:
                     from db import goals_repository
-                    goals_repository.update_goal_meta(goal_id, meta_updates)
+                    goals_repository.update_goal_meta(goal_id, meta_updates, user_id=user_id)
                     self.logger.info(f"  → Updated goal metadata: {meta_updates}")
                 except Exception as e:
                     self.logger.warning(f"⚠️ Failed to update goal metadata: {e}")

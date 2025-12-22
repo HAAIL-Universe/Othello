@@ -30,6 +30,7 @@ Usage:
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 import json
+import logging
 
 from db.database import execute_query, fetch_one, fetch_all, execute_and_fetch_one
 
@@ -180,33 +181,56 @@ def create_goal(data: Dict[str, Any], user_id: str) -> Dict[str, Any]:
     return result or {}
 
 
-def update_goal_meta(goal_id: int, fields_to_change: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def update_goal_meta(
+    goal_id: int,
+    fields_to_change: Dict[str, Any],
+    user_id: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
     """
     Update metadata fields of a goal (title, status, priority, etc.).
     
     Args:
         goal_id: The goal ID to update
+        user_id: The user ID (required for authorization)
         fields_to_change: Dictionary of field names and new values
     
     Returns:
         Updated goal dictionary if successful, None otherwise
     """
-    allowed_fields = ["title", "description", "status", "priority", "category"]
+    if not user_id:
+        raise ValueError("user_id is required")
+    allowed_fields = {
+        "title",
+        "description",
+        "status",
+        "priority",
+        "category",
+        "plan",
+        "checklist",
+        "last_conversation_summary",
+    }
+    logger = logging.getLogger("GoalsRepository")
     
     # Build dynamic SET clause
     set_clauses = []
     params = []
     
     for field, value in fields_to_change.items():
-        if field in allowed_fields:
-            # Normalize priority values before inserting
-            if field == "priority":
-                value = normalize_priority(value)
-            set_clauses.append(f"{field} = %s")
-            params.append(value)
+        if field not in allowed_fields:
+            continue
+        # Normalize priority values before inserting
+        if field == "priority":
+            value = normalize_priority(value)
+        if field == "checklist" and value is not None and not isinstance(value, str):
+            value = json.dumps(value)
+        set_clauses.append(f"{field} = %s")
+        params.append(value)
     
     if not set_clauses:
-        # No valid fields to update, return None
+        logger.warning(
+            "GoalsRepository.update_goal_meta: no valid fields to update goal_id=%s",
+            goal_id,
+        )
         return None
     
     # Always update updated_at
@@ -215,12 +239,13 @@ def update_goal_meta(goal_id: int, fields_to_change: Dict[str, Any]) -> Optional
     query = f"""
         UPDATE goals
         SET {', '.join(set_clauses)}
-        WHERE id = %s
+        WHERE id = %s AND user_id = %s
         RETURNING id, user_id, title, description, status, priority, category,
                   plan, checklist, last_conversation_summary, created_at, updated_at
     """
     
     params.append(goal_id)
+    params.append(user_id)
     
     return execute_and_fetch_one(query, tuple(params))
 

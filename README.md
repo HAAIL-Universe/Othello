@@ -165,6 +165,10 @@ Manual check: two browser sessions (or two cookie jars) alternating calls must n
 3. Alternate `GET /api/goals` between the two sessions; each should only see its own goals.
 4. Alternate `GET /api/today-plan` between the two sessions; plan content should not cross-contaminate.
 
+### Regression notes
+
+- focused goal updates must persist to goal text and appear in Goals tab
+
 ## How to Run and Test Locally (Windows)
 
 ### 1. Start the backend

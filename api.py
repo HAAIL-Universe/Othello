@@ -619,6 +619,19 @@ def parse_goal_selection_request(text: str) -> Optional[int]:
     return None
 
 
+def _parse_focused_goal_edit_command(text: str) -> Optional[Dict[str, str]]:
+    raw = (text or "").strip()
+    if not raw:
+        return None
+    match = re.match(r"^(append to goal|update goal):\s*(.*)$", raw, flags=re.IGNORECASE)
+    if not match:
+        return None
+    command = match.group(1).lower()
+    mode = "append" if command.startswith("append") else "update"
+    payload = (match.group(2) or "").strip()
+    return {"mode": mode, "payload": payload}
+
+
 
 def require_auth(f):
     @wraps(f)
@@ -1291,13 +1304,90 @@ def handle_message():
             )
         # ---------------------------------------------------------------------
 
-        # === Post-processing (analysis only – no persistence here) ===========
+        # === Determine active goal (explicit only) ===========================
+        active_goal = requested_goal
+
+        focused_goal_edit = _parse_focused_goal_edit_command(user_input)
+        if focused_goal_edit:
+            if user_id is None:
+                return user_error
+            if not isinstance(active_goal, dict) or active_goal.get("id") is None:
+                reply_text = "Please focus a goal first (for example, 'goal 1')."
+                return jsonify(
+                    {
+                        "reply": reply_text,
+                        "meta": {"intent": "focused_goal_edit_missing_focus"},
+                    }
+                )
+            payload = focused_goal_edit.get("payload", "")
+            if not payload:
+                reply_text = "Please include text after 'append to goal:' or 'update goal:'."
+                return jsonify(
+                    {
+                        "reply": reply_text,
+                        "meta": {"intent": "focused_goal_edit_missing_text"},
+                    }
+                )
+            try:
+                if focused_goal_edit["mode"] == "append":
+                    updated_goal = architect_agent.goal_mgr.append_goal_description(
+                        user_id,
+                        active_goal["id"],
+                        payload,
+                        request_id=request_id,
+                    )
+                    intent = "append_goal_description"
+                else:
+                    updated_goal = architect_agent.goal_mgr.replace_goal_description(
+                        user_id,
+                        active_goal["id"],
+                        payload,
+                        request_id=request_id,
+                    )
+                    intent = "update_goal_description"
+            except Exception:
+                logger.error(
+                    "API: focused goal edit failed request_id=%s goal_id=%s mode=%s",
+                    request_id,
+                    active_goal.get("id"),
+                    focused_goal_edit["mode"],
+                    exc_info=True,
+                )
+                updated_goal = None
+                intent = "focused_goal_edit_failed"
+            if not updated_goal:
+                reply_text = "I couldn't update that goal right now."
+                return jsonify(
+                    {
+                        "reply": reply_text,
+                        "meta": {"intent": "focused_goal_edit_failed"},
+                    }
+                )
+            fresh_goal = architect_agent.goal_mgr.get_goal(user_id, active_goal["id"])
+            if fresh_goal is None:
+                reply_text = "I updated the goal, but couldn't reload it."
+                return jsonify(
+                    {
+                        "reply": reply_text,
+                        "meta": {"intent": "focused_goal_edit_reload_failed"},
+                    }
+                )
+            reply_text = (
+                "Appended to the focused goal." if focused_goal_edit["mode"] == "append"
+                else "Updated the focused goal."
+            )
+            return jsonify(
+                {
+                    "reply": reply_text,
+                    "meta": {"intent": intent},
+                    "goal": fresh_goal,
+                }
+            )
+
+        # === Post-processing (analysis only - no persistence here) ===========
         summary = postprocess_and_save(user_input)
         print("[DEBUG] Postprocess summary:", summary)  # Comment/remove in prod
 
-        # === Determine active goal (explicit only) ===========================
-        active_goal = requested_goal
-    
         # === Build goal_context for Architect (if an active goal exists) =====
         goal_context = None
         if isinstance(active_goal, dict) and active_goal.get("id") is not None:
