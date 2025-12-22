@@ -538,6 +538,10 @@ def is_goal_list_request(text: str) -> bool:
         "list my goals",
         "list the goals",
         "list goals",
+        "goal list",
+        "goals list",
+        "show goal list",
+        "show goals list",
         "show goals",
         "view goals",
         "view my goals",
@@ -1212,6 +1216,10 @@ def handle_message():
                 "list my goals",
                 "list the goals",
                 "list goals",
+                "goal list",
+                "goals list",
+                "show goal list",
+                "show goals list",
                 "show goals",
                 "view goals",
                 "view my goals",
@@ -1249,10 +1257,10 @@ def handle_message():
                     f"I couldn't find a goal #{goal_id}. "
                     "Ask me to list your goals first if you're not sure of the number."
                 )
-            return jsonify(
-                {
-                    "reply": reply_text,
-                    "meta": {
+                return jsonify(
+                    {
+                        "reply": reply_text,
+                        "meta": {
                             "source": "goal_manager",
                             "intent": "select_goal_failed",
                             "requested_goal_id": goal_id,
