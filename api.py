@@ -624,6 +624,14 @@ def require_auth(f):
             return f(*args, **kwargs)
         if not session.get("authed"):
             return api_error("AUTH_REQUIRED", "Authentication required", 401)
+        if not session.get("user_id"):
+            session.clear()
+            return api_error(
+                "AUTH_USER_MISSING",
+                "Authenticated session missing user_id",
+                401,
+            )
+        g.user_id = session.get("user_id")
         return f(*args, **kwargs)
     return decorated
 
@@ -642,6 +650,17 @@ def ensure_user_exists(user_id: str) -> None:
     if not user_id:
         raise ValueError("user_id is required")
     from db.database import execute_query
+    execute_query(
+        """
+        CREATE TABLE IF NOT EXISTS users (
+            user_id TEXT PRIMARY KEY,
+            timezone TEXT NOT NULL DEFAULT 'Europe/London',
+            night_prompt_time TIME DEFAULT '20:00',
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+        """
+    )
     execute_query(
         """
         INSERT INTO users (user_id)
@@ -863,10 +882,16 @@ def auth_login():
 
 @app.route("/api/auth/me", methods=["GET"])
 def auth_me():
+    authed = bool(session.get("authed"))
+    user_id = session.get("user_id")
+    if authed and not user_id:
+        session.clear()
+        authed = False
+        user_id = None
     return jsonify({
         "ok": True,
-        "authed": bool(session.get("authed")),
-        "user_id": session.get("user_id"),
+        "authed": authed,
+        "user_id": user_id,
     })
 
 @app.route("/api/auth/logout", methods=["POST"])
