@@ -2,7 +2,7 @@ import logging
 import os
 import re
 import time
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime
 from flask import Flask, request, jsonify, send_file, session, send_from_directory, g
 from flask_cors import CORS
 import asyncio
@@ -623,13 +623,49 @@ def _parse_focused_goal_edit_command(text: str) -> Optional[Dict[str, str]]:
     raw = (text or "").strip()
     if not raw:
         return None
-    match = re.match(r"^(append to goal|update goal):\s*(.*)$", raw, flags=re.IGNORECASE)
+    match = re.match(
+        r"^(append(?:\s+to)?\s+goal|update\s+goal):\s*(.*)$",
+        raw,
+        flags=re.IGNORECASE,
+    )
     if not match:
         return None
     command = match.group(1).lower()
     mode = "append" if command.startswith("append") else "update"
     payload = (match.group(2) or "").strip()
     return {"mode": mode, "payload": payload}
+
+
+def _detect_goal_edit_arm(data: Dict[str, Any], text: str) -> Optional[str]:
+    key_candidates = (
+        "goal_action",
+        "goalAction",
+        "action",
+        "intent",
+        "ui_action",
+        "uiAction",
+    )
+    for key in key_candidates:
+        value = data.get(key)
+        if not isinstance(value, str):
+            continue
+        normalized = value.strip().lower()
+        if key in ("goal_action", "goalAction"):
+            if "append" in normalized:
+                return "append"
+            if "update" in normalized or "edit" in normalized:
+                return "update"
+        if "goal" in normalized:
+            if "append" in normalized:
+                return "append"
+            if "update" in normalized or "edit" in normalized:
+                return "update"
+    normalized_text = (text or "").strip().lower()
+    if normalized_text in ("update goal", "update goal with that info", "update goal with that info."):
+        return "update"
+    if normalized_text in ("append to goal", "append to goal.", "append goal", "append goal."):
+        return "append"
+    return None
 
 
 
@@ -1142,6 +1178,16 @@ def handle_message():
         current_mode = (data.get("current_mode") or "companion").strip().lower()
         current_view = data.get("current_view")
 
+        logger.info(
+            "API: message meta request_id=%s current_view=%s current_mode=%s keys=%s goal_id=%s active_goal_id=%s",
+            request_id,
+            current_view,
+            current_mode,
+            list(data.keys()),
+            data.get("goal_id"),
+            data.get("active_goal_id"),
+        )
+
         _log_request_start(raw_goal_id)
 
         if not user_input:
@@ -1213,6 +1259,242 @@ def handle_message():
                     409,
                     details={"goal_id": requested_goal_id},
                 )
+
+        active_goal = requested_goal
+        goal_resolution_path = "explicit_id" if requested_goal is not None else "none"
+        if raw_goal_id is None and user_id is not None and active_goal is None:
+            try:
+                server_active_goal = architect_agent.goal_mgr.get_active_goal(user_id)
+            except Exception as exc:
+                logger.warning(
+                    "API: server active goal lookup failed request_id=%s error=%s",
+                    request_id,
+                    type(exc).__name__,
+                )
+                server_active_goal = None
+            if isinstance(server_active_goal, dict):
+                status = (server_active_goal.get("status") or "").strip().lower()
+                if status != "archived":
+                    active_goal = server_active_goal
+                    goal_resolution_path = "server_active"
+
+        logger.info(
+            "API: resolved active_goal path=%s request_id=%s goal_id=%s",
+            goal_resolution_path,
+            request_id,
+            active_goal.get("id") if isinstance(active_goal, dict) else None,
+        )
+
+        focused_goal_edit = _parse_focused_goal_edit_command(user_input)
+        if focused_goal_edit:
+            if user_id is None:
+                return user_error
+            if not isinstance(active_goal, dict) or active_goal.get("id") is None:
+                reply_text = "Please focus a goal first (for example, 'goal 1')."
+                return jsonify(
+                    {
+                        "reply": reply_text,
+                        "meta": {"intent": "focused_goal_edit_missing_focus"},
+                    }
+                )
+            payload = focused_goal_edit.get("payload", "")
+            if not payload:
+                reply_text = "Please include text after 'append to goal:' or 'update goal:'."
+                return jsonify(
+                    {
+                        "reply": reply_text,
+                        "meta": {"intent": "focused_goal_edit_missing_text"},
+                    }
+                )
+            try:
+                if focused_goal_edit["mode"] == "append":
+                    updated_goal = architect_agent.goal_mgr.append_goal_description(
+                        user_id,
+                        active_goal["id"],
+                        payload,
+                        request_id=request_id,
+                    )
+                    intent = "append_goal_description"
+                else:
+                    updated_goal = architect_agent.goal_mgr.replace_goal_description(
+                        user_id,
+                        active_goal["id"],
+                        payload,
+                        request_id=request_id,
+                    )
+                    intent = "update_goal_description"
+            except Exception:
+                logger.error(
+                    "API: focused goal edit failed request_id=%s goal_id=%s mode=%s",
+                    request_id,
+                    active_goal.get("id"),
+                    focused_goal_edit["mode"],
+                    exc_info=True,
+                )
+                updated_goal = None
+                intent = "focused_goal_edit_failed"
+            if not updated_goal:
+                reply_text = "I couldn't update that goal right now."
+                return jsonify(
+                    {
+                        "reply": reply_text,
+                        "meta": {"intent": "focused_goal_edit_failed"},
+                    }
+                )
+            fresh_goal = architect_agent.goal_mgr.get_goal(user_id, active_goal["id"])
+            if fresh_goal is None:
+                reply_text = "I updated the goal, but couldn't reload it."
+                return jsonify(
+                    {
+                        "reply": reply_text,
+                        "meta": {"intent": "focused_goal_edit_reload_failed"},
+                    }
+                )
+            reply_text = (
+                "Appended to the focused goal." if focused_goal_edit["mode"] == "append"
+                else "Updated the focused goal."
+            )
+            return jsonify(
+                {
+                    "reply": reply_text,
+                    "meta": {"intent": intent},
+                    "goal": fresh_goal,
+                }
+            )
+
+        pending_edit = session.get("pending_goal_edit")
+        if isinstance(pending_edit, dict):
+            pending_mode = pending_edit.get("mode")
+            pending_goal_id = pending_edit.get("goal_id")
+            session.pop("pending_goal_edit", None)
+            logger.info(
+                "pending_goal_edit cleared goal_id=%s request_id=%s",
+                pending_goal_id,
+                request_id,
+            )
+            if pending_goal_id is None:
+                return api_error(
+                    "VALIDATION_ERROR",
+                    "Please focus a goal again before updating.",
+                    400,
+                )
+            if not isinstance(active_goal, dict) or active_goal.get("id") is None:
+                return api_error(
+                    "VALIDATION_ERROR",
+                    "Please focus a goal again before updating.",
+                    400,
+                )
+            if pending_goal_id is not None and active_goal.get("id") != pending_goal_id:
+                return api_error(
+                    "VALIDATION_ERROR",
+                    "The focused goal changed. Please focus the goal again before updating.",
+                    400,
+                )
+            status = (active_goal.get("status") or "").strip().lower()
+            if status == "archived":
+                return api_error(
+                    "GOAL_ARCHIVED",
+                    "Goal is archived",
+                    409,
+                    details={"goal_id": active_goal.get("id")},
+                )
+            updated_goal = None
+            try:
+                if pending_mode == "update":
+                    updated_goal = architect_agent.goal_mgr.replace_goal_description(
+                        user_id,
+                        pending_goal_id,
+                        user_input,
+                        request_id=request_id,
+                    )
+                elif pending_mode == "append":
+                    updated_goal = architect_agent.goal_mgr.append_goal_description(
+                        user_id,
+                        pending_goal_id,
+                        user_input,
+                        request_id=request_id,
+                    )
+            except Exception:
+                logger.error(
+                    "API: pending_goal_edit failed request_id=%s goal_id=%s mode=%s",
+                    request_id,
+                    active_goal.get("id"),
+                    pending_mode,
+                    exc_info=True,
+                )
+            ok = bool(updated_goal)
+            logger.info(
+                "pending_goal_edit apply mode=%s goal_id=%s ok=%s request_id=%s user_id=%s payload_len=%s",
+                pending_mode,
+                pending_goal_id,
+                ok,
+                request_id,
+                user_id,
+                len(user_input),
+            )
+            fresh_goal = architect_agent.goal_mgr.get_goal(user_id, pending_goal_id)
+            reply_text = (
+                "Updated the focused goal."
+                if pending_mode == "update"
+                else "Appended to the focused goal."
+            )
+            if not ok:
+                reply_text = "I couldn't update that goal right now."
+            return jsonify(
+                {
+                    "reply": reply_text,
+                    "meta": {
+                        "intent": "pending_goal_edit_applied",
+                        "mode": pending_mode,
+                        "ok": ok,
+                    },
+                    "goal": fresh_goal,
+                }
+            )
+
+        pending_mode = _detect_goal_edit_arm(data, user_input)
+        if pending_mode in ("update", "append"):
+            if user_id is None:
+                return user_error
+            if not isinstance(active_goal, dict) or active_goal.get("id") is None:
+                reply_text = "Please focus a goal first (for example, 'goal 1')."
+                return jsonify(
+                    {
+                        "reply": reply_text,
+                        "meta": {"intent": "pending_goal_edit_missing_focus"},
+                    }
+                )
+            status = (active_goal.get("status") or "").strip().lower()
+            if status == "archived":
+                return api_error(
+                    "GOAL_ARCHIVED",
+                    "Goal is archived",
+                    409,
+                    details={"goal_id": active_goal.get("id")},
+                )
+            session["pending_goal_edit"] = {
+                "mode": pending_mode,
+                "goal_id": active_goal["id"],
+                "set_at_utc": datetime.utcnow().isoformat() + "Z",
+            }
+            logger.info(
+                "pending_goal_edit set mode=%s goal_id=%s request_id=%s user_id=%s",
+                pending_mode,
+                active_goal.get("id"),
+                request_id,
+                user_id,
+            )
+            reply_text = (
+                "Got it. Paste the updated goal text you'd like saved."
+                if pending_mode == "update"
+                else "Got it. Paste the text you'd like to append to the goal."
+            )
+            return jsonify(
+                {
+                    "reply": reply_text,
+                    "meta": {"intent": "pending_goal_edit_set", "mode": pending_mode},
+                }
+            )
 
         # --- Shortcut 1: user is asking for their goals; answer directly -----
         if is_goal_list_request(user_input):
@@ -1303,86 +1585,6 @@ def handle_message():
                 }
             )
         # ---------------------------------------------------------------------
-
-        # === Determine active goal (explicit only) ===========================
-        active_goal = requested_goal
-
-        focused_goal_edit = _parse_focused_goal_edit_command(user_input)
-        if focused_goal_edit:
-            if user_id is None:
-                return user_error
-            if not isinstance(active_goal, dict) or active_goal.get("id") is None:
-                reply_text = "Please focus a goal first (for example, 'goal 1')."
-                return jsonify(
-                    {
-                        "reply": reply_text,
-                        "meta": {"intent": "focused_goal_edit_missing_focus"},
-                    }
-                )
-            payload = focused_goal_edit.get("payload", "")
-            if not payload:
-                reply_text = "Please include text after 'append to goal:' or 'update goal:'."
-                return jsonify(
-                    {
-                        "reply": reply_text,
-                        "meta": {"intent": "focused_goal_edit_missing_text"},
-                    }
-                )
-            try:
-                if focused_goal_edit["mode"] == "append":
-                    updated_goal = architect_agent.goal_mgr.append_goal_description(
-                        user_id,
-                        active_goal["id"],
-                        payload,
-                        request_id=request_id,
-                    )
-                    intent = "append_goal_description"
-                else:
-                    updated_goal = architect_agent.goal_mgr.replace_goal_description(
-                        user_id,
-                        active_goal["id"],
-                        payload,
-                        request_id=request_id,
-                    )
-                    intent = "update_goal_description"
-            except Exception:
-                logger.error(
-                    "API: focused goal edit failed request_id=%s goal_id=%s mode=%s",
-                    request_id,
-                    active_goal.get("id"),
-                    focused_goal_edit["mode"],
-                    exc_info=True,
-                )
-                updated_goal = None
-                intent = "focused_goal_edit_failed"
-            if not updated_goal:
-                reply_text = "I couldn't update that goal right now."
-                return jsonify(
-                    {
-                        "reply": reply_text,
-                        "meta": {"intent": "focused_goal_edit_failed"},
-                    }
-                )
-            fresh_goal = architect_agent.goal_mgr.get_goal(user_id, active_goal["id"])
-            if fresh_goal is None:
-                reply_text = "I updated the goal, but couldn't reload it."
-                return jsonify(
-                    {
-                        "reply": reply_text,
-                        "meta": {"intent": "focused_goal_edit_reload_failed"},
-                    }
-                )
-            reply_text = (
-                "Appended to the focused goal." if focused_goal_edit["mode"] == "append"
-                else "Updated the focused goal."
-            )
-            return jsonify(
-                {
-                    "reply": reply_text,
-                    "meta": {"intent": intent},
-                    "goal": fresh_goal,
-                }
-            )
 
         # === Post-processing (analysis only - no persistence here) ===========
         summary = postprocess_and_save(user_input)
