@@ -733,6 +733,7 @@ class DbGoalManager:
         goal_id: int,
         step_id: int,
         detail: str,
+        step_index: Optional[int] = None,
         request_id: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """
@@ -750,7 +751,14 @@ class DbGoalManager:
         try:
             plan_steps = goals_repository.get_plan_steps_for_goal(goal_id)
             step_ids = [step["id"] for step in plan_steps]
-            if step_id not in step_ids:
+            resolved_step_id = step_id
+            if resolved_step_id not in step_ids and step_index is not None:
+                for step in plan_steps:
+                    if step.get("step_index") == step_index:
+                        resolved_step_id = step.get("id")
+                        break
+
+            if resolved_step_id not in step_ids:
                 self.logger.error(f"DbGoalManager: Step {step_id} does not belong to goal {goal_id}")
                 return None
 
@@ -762,7 +770,7 @@ class DbGoalManager:
             result = safe_append_goal_event(
                 uid,
                 goal_id,
-                step_id,
+                resolved_step_id,
                 "step_detail",
                 payload,
                 request_id=request_id,
@@ -774,7 +782,7 @@ class DbGoalManager:
                     goal_id,
                 )
                 return None
-            return {"goal_id": goal_id, "step_id": step_id, "detail": detail}
+            return {"goal_id": goal_id, "step_id": resolved_step_id, "detail": detail}
         except Exception as exc:
             self.logger.warning(
                 f"DbGoalManager: step detail update failed for step {step_id} goal {goal_id}: {exc}"

@@ -2845,9 +2845,29 @@ def update_step_detail(goal_id, step_id):
         return error
     data = request.get_json() or {}
     detail = data.get("detail")
+    raw_step_index = data.get("step_index")
+    if raw_step_index is None:
+        raw_step_index = data.get("stepIndex")
+    raw_body_step_id = data.get("step_id")
+    if raw_body_step_id is None:
+        raw_body_step_id = data.get("stepId")
 
     if detail is None or not isinstance(detail, str):
         return api_error("VALIDATION_ERROR", "detail is required", 400)
+
+    step_index = None
+    if raw_step_index is not None:
+        try:
+            step_index = int(raw_step_index)
+        except (TypeError, ValueError):
+            step_index = None
+
+    body_step_id = None
+    if raw_body_step_id is not None:
+        try:
+            body_step_id = int(raw_body_step_id)
+        except (TypeError, ValueError):
+            body_step_id = None
 
     try:
         updated = architect_agent.goal_mgr.update_plan_step_detail(
@@ -2855,8 +2875,32 @@ def update_step_detail(goal_id, step_id):
             goal_id,
             step_id,
             detail,
+            step_index=step_index,
             request_id=request_id,
         )
+        resolved_step_id = updated.get("step_id") if isinstance(updated, dict) else None
+        matched = bool(updated)
+        logger.info(
+            "API: step detail update request_id=%s user_id=%s goal_id=%s step_id=%s body_step_id=%s step_index=%s matched=%s resolved_step_id=%s",
+            request_id,
+            user_id,
+            goal_id,
+            step_id,
+            body_step_id,
+            step_index,
+            matched,
+            resolved_step_id,
+        )
+        if matched and step_index is not None and resolved_step_id and resolved_step_id != step_id:
+            logger.warning(
+                "API: step detail update used step_index fallback request_id=%s user_id=%s goal_id=%s step_id=%s resolved_step_id=%s step_index=%s",
+                request_id,
+                user_id,
+                goal_id,
+                step_id,
+                resolved_step_id,
+                step_index,
+            )
         if updated is None:
             logger.warning(f"API: Failed to update step detail #{step_id} for goal #{goal_id}")
             return api_error(

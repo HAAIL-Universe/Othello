@@ -3697,12 +3697,16 @@
       return res.json();
     }
 
-    async function postPlanStepDetail(goalId, stepId, detail) {
+    async function postPlanStepDetail(goalId, stepId, detail, stepIndex = null) {
+      const payload = { detail };
+      if (Number.isFinite(stepIndex)) {
+        payload.step_index = stepIndex;
+      }
       const res = await fetch(`/api/goals/${goalId}/steps/${stepId}/detail`, {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ detail }),
+        body: JSON.stringify(payload),
       });
       if (res.status === 401 || res.status === 403) {
         await handleUnauthorized("plan-step-detail");
@@ -4077,6 +4081,7 @@
           const stepsHtml = steps.map(step => {
             const stepId = typeof step.id === "number" ? step.id : null;
             const goalId = typeof goal.id === "number" ? goal.id : null;
+            const stepIndex = typeof step.step_index === "number" ? step.step_index : null;
             const label = escapeHtml(step.description || step.label || "Step");
             const statusValue = (step.status || "pending").toString().toLowerCase();
             const statusLabel = escapeHtml(formatStepStatus(statusValue));
@@ -4093,26 +4098,26 @@
             const detailBtnLabel = hasDetail ? "Edit details" : "Add details";
             const detailEditor = stepId && goalId
               ? `
-                <div class="plan-step__detail-editor" data-step-id="${stepId}" data-goal-id="${goalId}">
+                <div class="plan-step__detail-editor" data-step-id="${stepId}" data-goal-id="${goalId}" data-step-index="${stepIndex || ""}">
                   <textarea class="plan-step__detail-input" rows="3" placeholder="Add details...">${escapeHtml(detail)}</textarea>
                   <div class="plan-step__detail-actions">
-                    <button class="plan-step__detail-save" data-step-id="${stepId}" data-goal-id="${goalId}">Save</button>
-                    <button class="plan-step__detail-cancel" data-step-id="${stepId}" data-goal-id="${goalId}">Cancel</button>
+                    <button class="plan-step__detail-save" data-step-id="${stepId}" data-goal-id="${goalId}" data-step-index="${stepIndex || ""}">Save</button>
+                    <button class="plan-step__detail-cancel" data-step-id="${stepId}" data-goal-id="${goalId}" data-step-index="${stepIndex || ""}">Cancel</button>
                   </div>
                 </div>
               `
               : "";
             return `
-              <div class="planner-step plan-step" data-step-id="${stepId || ""}" data-goal-id="${goalId || ""}">
+              <div class="planner-step plan-step" data-step-id="${stepId || ""}" data-goal-id="${goalId || ""}" data-step-index="${stepIndex || ""}">
                 <label class="plan-step__toggle">
-                  <input type="checkbox" class="plan-step__checkbox" data-step-id="${stepId || ""}" data-goal-id="${goalId || ""}" ${checkedAttr} ${checkboxAttrs}>
+                  <input type="checkbox" class="plan-step__checkbox" data-step-id="${stepId || ""}" data-goal-id="${goalId || ""}" data-step-index="${stepIndex || ""}" ${checkedAttr} ${checkboxAttrs}>
                 </label>
                 <div class="plan-step__body">
                   <div class="planner-step__label ${labelClass}">${label}</div>
                   <div class="planner-step__meta">${statusLabel}${due}</div>
                   ${detailPreview}
                 </div>
-                <button class="plan-step__detail-btn" data-step-id="${stepId || ""}" data-goal-id="${goalId || ""}" ${checkboxAttrs}>
+                <button class="plan-step__detail-btn" data-step-id="${stepId || ""}" data-goal-id="${goalId || ""}" data-step-index="${stepIndex || ""}" ${checkboxAttrs}>
                   ${detailBtnLabel}
                 </button>
               </div>
@@ -4293,6 +4298,8 @@
         if (detailSaveBtn) {
           const stepId = parseInt(detailSaveBtn.getAttribute("data-step-id") || "0", 10);
           const goalId = parseInt(detailSaveBtn.getAttribute("data-goal-id") || "0", 10);
+          const stepIndex = parseInt(detailSaveBtn.getAttribute("data-step-index") || "", 10);
+          const safeStepIndex = Number.isFinite(stepIndex) ? stepIndex : null;
           if (!stepId || !goalId) return;
           const editor = detailSaveBtn.closest(".plan-step__detail-editor");
           const input = editor ? editor.querySelector(".plan-step__detail-input") : null;
@@ -4301,7 +4308,15 @@
           detailSaveBtn.textContent = "Saving...";
           detailSaveBtn.disabled = true;
           try {
-            await postPlanStepDetail(goalId, stepId, detailText);
+            if (BOOT_DEBUG) {
+              console.log("[Plan Step Detail] save payload", {
+                goalId,
+                stepId,
+                stepIndex: safeStepIndex,
+                detailLength: detailText.length,
+              });
+            }
+            await postPlanStepDetail(goalId, stepId, detailText, safeStepIndex);
             if (othelloState.currentDetailGoalId === goalId) {
               await refreshGoalDetail();
             }
