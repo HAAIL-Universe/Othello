@@ -205,6 +205,42 @@ def ensure_core_schema() -> None:
         "CREATE INDEX IF NOT EXISTS idx_goals_status ON goals(status);",
         "CREATE INDEX IF NOT EXISTS idx_goals_created_at ON goals(created_at DESC);",
 
+        # Sessions + messages + transcripts (Phase 1 spine)
+        """
+        CREATE TABLE IF NOT EXISTS sessions (
+            id SERIAL PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);",
+        """
+        CREATE TABLE IF NOT EXISTS messages (
+            id SERIAL PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            session_id INTEGER REFERENCES sessions(id) ON DELETE SET NULL,
+            source TEXT NOT NULL DEFAULT 'text',
+            transcript TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'ready',
+            stt_provider TEXT,
+            stt_model TEXT,
+            audio_duration_ms INTEGER,
+            error TEXT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_messages_user_id ON messages(user_id);",
+        "CREATE INDEX IF NOT EXISTS idx_messages_session_id ON messages(session_id);",
+        """
+        CREATE TABLE IF NOT EXISTS transcripts (
+            id SERIAL PRIMARY KEY,
+            message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+            transcript TEXT NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_transcripts_message_id ON transcripts(message_id);",
+
         # Existing goal plan steps table (legacy multi-step goals)
         """
         CREATE TABLE IF NOT EXISTS plan_steps (
@@ -262,6 +298,23 @@ def ensure_core_schema() -> None:
         "CREATE INDEX IF NOT EXISTS idx_plan_items_plan ON plan_items(plan_id);",
         "CREATE INDEX IF NOT EXISTS idx_plan_items_status ON plan_items(status);",
         "CREATE INDEX IF NOT EXISTS idx_plan_items_type ON plan_items(type);",
+
+        # Suggestions (confirm-gated inference)
+        """
+        CREATE TABLE IF NOT EXISTS suggestions (
+            id SERIAL PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+            provenance JSONB NOT NULL DEFAULT '{}'::jsonb,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            decided_at TIMESTAMPTZ,
+            decided_reason TEXT
+        );
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_suggestions_user_status ON suggestions(user_id, status);",
+        "CREATE INDEX IF NOT EXISTS idx_suggestions_user_kind ON suggestions(user_id, kind);",
 
         # Insights table
         """

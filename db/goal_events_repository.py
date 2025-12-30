@@ -3,6 +3,8 @@ from typing import Any, Dict, List, Optional
 import logging
 import time
 import psycopg2
+from psycopg2.extras import Json
+
 from db.database import execute_query, fetch_one, fetch_all, execute_and_fetch_one
 
 logger = logging.getLogger("GoalEventsRepository")
@@ -50,7 +52,10 @@ def append_goal_event(
         RETURNING id, user_id, goal_id, step_id, event_type, payload, occurred_at
     """
     try:
-        return execute_and_fetch_one(query, (user_id, goal_id, step_id, event_type, payload)) or {}
+        return execute_and_fetch_one(
+            query,
+            (user_id, goal_id, step_id, event_type, Json(payload)),
+        ) or {}
     except psycopg2.Error as exc:
         logger.warning(
             "Goal events insert failed request_id=%s reason=%s",
@@ -107,6 +112,28 @@ def safe_list_goal_events(user_id: str, goal_id: int, limit: int = 50) -> List[D
         return events if isinstance(events, list) else []
     except Exception as exc:
         logger.warning("Goal events list failed: %s", exc, exc_info=True)
+        return []
+
+
+def list_user_goal_events(user_id: str, limit: int = 100) -> List[Dict[str, Any]]:
+    query = """
+        SELECT id, user_id, goal_id, step_id, event_type, payload, occurred_at
+        FROM goal_events
+        WHERE user_id = %s
+        ORDER BY occurred_at DESC
+        LIMIT %s
+    """
+    return fetch_all(query, (user_id, limit))
+
+
+def safe_list_user_goal_events(user_id: str, limit: int = 100) -> List[Dict[str, Any]]:
+    """List user goal events but never raise; returns [] on failure."""
+    ensure_goal_events_table()
+    try:
+        events = list_user_goal_events(user_id, limit=limit)
+        return events if isinstance(events, list) else []
+    except Exception as exc:
+        logger.warning("Goal events user list failed: %s", exc, exc_info=True)
         return []
 
 

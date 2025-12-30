@@ -3,7 +3,7 @@ import os
 import re
 import time
 from datetime import date, timedelta, datetime
-from flask import Flask, request, jsonify, send_file, session, send_from_directory, g
+from flask import Flask, request, jsonify, send_file, session, send_from_directory, g, Blueprint
 from flask_cors import CORS
 import asyncio
 from typing import Any, Dict, Optional, List
@@ -25,11 +25,29 @@ load_dotenv(override=False)
 if _preexisting_openai_key and _preexisting_openai_key.strip():
     os.environ["OPENAI_API_KEY"] = _preexisting_openai_key
 
+def _is_truthy_env(value: Optional[str]) -> bool:
+    if value is None:
+        return False
+    normalized = str(value).strip().lower()
+    return normalized in ("1", "true", "yes", "on")
+
+def _is_phase1_enabled() -> bool:
+    phase = (os.environ.get("OTHELLO_PHASE") or "").strip().lower()
+    if phase == "phase1":
+        return True
+    return _is_truthy_env(os.environ.get("OTHELLO_PHASE1"))
+
+_PHASE1_ENABLED = _is_phase1_enabled()
+if _PHASE1_ENABLED:
+    os.environ["OTHELLO_PHASE1_DB_ONLY"] = "1"
+
 # Configure logging to show DEBUG messages
 logging.basicConfig(
     level=logging.DEBUG,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
+if _PHASE1_ENABLED:
+    logging.getLogger("API.Startup").info("[Phase-1] DB-only + confirm-gated mode enabled")
 
 # Constants
 MAX_ERROR_MSG_LENGTH = 200  # Maximum length for error message logging
@@ -278,6 +296,8 @@ def register_asset_routes(app):
         return send_from_directory(os.path.join(os.getcwd(), 'interface'), filename)
 
 # Register debug and asset routes after app/session setup
+v1 = Blueprint("v1", __name__, url_prefix="/v1")
+
 register_debug_routes(app)
 register_asset_routes(app)
 
@@ -382,8 +402,8 @@ try:
     init_pool()
     ensure_core_schema()
     db_initialized = True
-    print("[API] ✓ Database connection pool initialized successfully")
-    print("[API] ✓ Connected to Neon PostgreSQL database")
+    print("[API] [OK] Database connection pool initialized successfully")
+    print("[API] [OK] Connected to Neon PostgreSQL database")
     try:
         _insight_check = fetch_one("SELECT COUNT(*) AS count FROM insights;")
         logging.getLogger("API").info(
@@ -395,9 +415,9 @@ try:
             "[API] Insights table check failed: %s", log_exc, exc_info=True
         )
 except Exception as e:
-    print(f"[API] ✗ Warning: Failed to initialize database: {e}")
-    print("[API] ✗ The app will run but goal persistence may not work correctly")
-    print("[API] ✗ Check that DATABASE_URL is set in .env and the database is accessible")
+    print(f"[API] [ERR] Warning: Failed to initialize database: {e}")
+    print("[API] [ERR] The app will run but goal persistence may not work correctly")
+    print("[API] [ERR] Check that DATABASE_URL is set in .env and the database is accessible")
 
 # Lazy initialization of agent components (runtime only)
 _agent_components = None
@@ -1049,6 +1069,40 @@ def _parse_plan_text_with_log(plan_text: str, logger: logging.Logger) -> List[Di
     return steps
 
 
+def _fallback_steps_from_text(source_text: str) -> List[Dict[str, Any]]:
+    if not isinstance(source_text, str):
+        return []
+    text = source_text.strip()
+    if not text:
+        return []
+    raw_steps: List[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        match = re.match(r"^[-*•]\s+(.*)$", stripped)
+        if match is None:
+            match = re.match(r"^\d+[\).]\s+(.*)$", stripped)
+        if match:
+            candidate = match.group(1).strip()
+            if candidate:
+                raw_steps.append(candidate)
+    if not raw_steps:
+        sentences = re.split(r"(?<=[.!?])\s+", text)
+        for sentence in sentences:
+            candidate = sentence.strip()
+            if candidate:
+                raw_steps.append(candidate)
+            if len(raw_steps) >= 5:
+                break
+    if not raw_steps and text:
+        raw_steps = [text]
+    return [
+        {"step_index": idx, "description": candidate, "status": "pending"}
+        for idx, candidate in enumerate(raw_steps[:5], start=1)
+    ]
+
+
 def require_auth(f):
     @wraps(f)
     def decorated(*args, **kwargs):
@@ -1169,6 +1223,578 @@ def ready_check():
             "message": "Service not ready",
             "details": "ready_check_exception",
         }), 503
+
+
+def _v1_envelope(*, data: Optional[Dict[str, Any]] = None, error: Optional[Dict[str, Any]] = None, status: int = 200):
+    payload = {
+        "ok": error is None,
+        "request_id": _get_request_id(),
+        "data": data,
+        "error": error,
+    }
+    response = jsonify(payload)
+    response.status_code = status
+    return response
+
+
+def _v1_error(code: str, message: str, status: int, details: Optional[Any] = None):
+    return _v1_envelope(
+        error={"code": code, "message": message, "details": details},
+        status=status,
+    )
+
+
+def _v1_from_api_response(resp):
+    status = getattr(resp, "status_code", 200)
+    payload = resp.get_json(silent=True) if hasattr(resp, "get_json") else None
+    if status >= 400:
+        code = "ERROR"
+        message = "Request failed"
+        details = None
+        if isinstance(payload, dict):
+            code = payload.get("error_code") or code
+            message = payload.get("message") or message
+            details = payload.get("details")
+        return _v1_error(code, message, status, details=details)
+    return _v1_envelope(data=payload, status=status)
+
+
+def _v1_get_user_id():
+    try:
+        return get_current_user_id(), None
+    except PermissionError:
+        return None, _v1_error("AUTH_REQUIRED", "Authentication required", 401)
+    except RuntimeError as exc:
+        return None, _v1_error(
+            "AUTH_USER_MISSING",
+            "Authenticated session missing user_id",
+            500,
+            details=str(exc),
+        )
+
+
+def _create_goal_plan_suggestion(
+    *,
+    user_id: str,
+    payload: Dict[str, Any],
+    provenance: Dict[str, Any],
+) -> Dict[str, Any]:
+    from db.suggestions_repository import create_suggestion
+    return create_suggestion(
+        user_id=user_id,
+        kind="goal_plan",
+        payload=payload,
+        provenance=provenance,
+    )
+
+
+def _apply_suggestion_decisions(
+    user_id: str,
+    decisions: List[Dict[str, Any]],
+    *,
+    event_source: str = "confirm",
+) -> List[Dict[str, Any]]:
+    from db.suggestions_repository import get_suggestion, update_suggestion_status
+    from db.goals_repository import create_goal, update_goal_meta
+    from db.goal_events_repository import safe_append_goal_event
+    from db.db_goal_manager import DbGoalManager
+
+    results: List[Dict[str, Any]] = []
+    goal_mgr = DbGoalManager()
+    for entry in decisions:
+        if not isinstance(entry, dict):
+            results.append({"ok": False, "error": "invalid_decision"})
+            continue
+        suggestion_id = entry.get("suggestion_id")
+        action = (entry.get("action") or entry.get("decision") or "").strip().lower()
+        reason = entry.get("reason")
+        try:
+            suggestion_id = int(suggestion_id)
+        except (TypeError, ValueError):
+            results.append({"ok": False, "error": "invalid_suggestion_id"})
+            continue
+        if action not in ("accept", "reject"):
+            results.append({"ok": False, "error": "invalid_action", "suggestion_id": suggestion_id})
+            continue
+
+        suggestion = get_suggestion(user_id, suggestion_id)
+        if not suggestion:
+            results.append({"ok": False, "error": "suggestion_not_found", "suggestion_id": suggestion_id})
+            continue
+
+        kind = suggestion.get("kind")
+        payload = suggestion.get("payload") or {}
+
+        if action == "reject":
+            updated = update_suggestion_status(user_id, suggestion_id, "rejected", decided_reason=reason)
+            if kind == "goal_plan":
+                goal_id = payload.get("goal_id")
+                if goal_id:
+                    safe_append_goal_event(
+                        user_id,
+                        goal_id,
+                        None,
+                        "goal_plan_rejected",
+                        {"suggestion_id": suggestion_id, "reason": reason, "source": event_source},
+                    )
+            results.append({"ok": True, "suggestion": updated, "action": "rejected"})
+            continue
+
+        if kind == "goal":
+            title = payload.get("title") or payload.get("body") or "Untitled Goal"
+            goal = create_goal({"title": title}, user_id)
+            if not goal:
+                results.append({"ok": False, "error": "goal_create_failed", "suggestion_id": suggestion_id})
+                continue
+            safe_append_goal_event(
+                user_id,
+                goal.get("id"),
+                None,
+                "goal_created",
+                {"source": event_source, "suggestion_id": suggestion_id, "title": title},
+            )
+            updated = update_suggestion_status(user_id, suggestion_id, "accepted", decided_reason=reason)
+            results.append({"ok": True, "action": "accepted", "goal": goal, "suggestion": updated})
+            continue
+
+        if kind == "goal_plan":
+            goal_id = payload.get("goal_id")
+            try:
+                goal_id = int(goal_id)
+            except (TypeError, ValueError):
+                results.append({"ok": False, "error": "invalid_goal_id", "suggestion_id": suggestion_id})
+                continue
+            steps = payload.get("steps") or payload.get("plan_steps") or []
+            if not isinstance(steps, list) or not steps:
+                results.append({"ok": False, "error": "no_steps", "suggestion_id": suggestion_id})
+                continue
+            mode = (payload.get("mode") or "replace").strip().lower()
+            section_label = payload.get("section_label")
+            section_prefix = payload.get("section_prefix")
+            plan_text = payload.get("plan_text")
+            summary = payload.get("summary")
+            meta_updates = payload.get("meta_updates") or {}
+            try:
+                if mode == "append" and hasattr(goal_mgr, "append_goal_plan"):
+                    goal_mgr.append_goal_plan(
+                        user_id,
+                        goal_id,
+                        steps,
+                        default_section=section_label,
+                    )
+                elif hasattr(goal_mgr, "save_goal_plan_section") and section_label:
+                    goal_mgr.save_goal_plan_section(
+                        user_id,
+                        goal_id,
+                        steps,
+                        section_label,
+                        section_prefix=section_prefix,
+                    )
+                else:
+                    goal_mgr.save_goal_plan(user_id, goal_id, steps)
+            except Exception:
+                results.append({"ok": False, "error": "plan_save_failed", "suggestion_id": suggestion_id})
+                continue
+            if plan_text or summary:
+                try:
+                    goal_mgr.update_goal_plan(user_id, goal_id, plan=plan_text, summary=summary)
+                except Exception:
+                    pass
+            if meta_updates:
+                try:
+                    update_goal_meta(goal_id, meta_updates, user_id=user_id)
+                except Exception:
+                    pass
+            safe_append_goal_event(
+                user_id,
+                goal_id,
+                None,
+                "goal_plan_confirmed",
+                {
+                    "suggestion_id": suggestion_id,
+                    "step_count": len(steps),
+                    "mode": mode,
+                    "source": event_source,
+                },
+            )
+            updated = update_suggestion_status(user_id, suggestion_id, "accepted", decided_reason=reason)
+            results.append({
+                "ok": True,
+                "action": "accepted",
+                "goal_id": goal_id,
+                "step_count": len(steps),
+                "suggestion": updated,
+            })
+            continue
+
+        results.append({"ok": False, "error": "unsupported_kind", "suggestion_id": suggestion_id})
+
+    return results
+
+
+@v1.route("/health", methods=["GET"])
+def v1_health_check():
+    return _v1_envelope(data={"ok": True})
+
+
+@v1.route("/ready", methods=["GET"])
+def v1_ready_check():
+    state = _ready_state()
+    status = 200 if state["ready"] else 503
+    return _v1_envelope(data=state, status=status)
+
+
+@v1.route("/auth/login", methods=["POST"])
+def v1_auth_login():
+    return _v1_from_api_response(auth_login())
+
+
+@v1.route("/auth/me", methods=["GET"])
+def v1_auth_me():
+    return _v1_from_api_response(auth_me())
+
+
+@v1.route("/auth/logout", methods=["POST"])
+def v1_auth_logout():
+    return _v1_from_api_response(auth_logout())
+
+
+@v1.route("/sessions", methods=["POST"])
+def v1_create_session():
+    user_id, error = _v1_get_user_id()
+    if error:
+        return error
+    from db.messages_repository import create_session
+    session = create_session(user_id)
+    session_id = session.get("id") if isinstance(session, dict) else None
+    if not session_id:
+        return _v1_error("SESSION_CREATE_FAILED", "Failed to create session", 500)
+    return _v1_envelope(data={"session_id": session_id}, status=201)
+
+
+@v1.route("/messages", methods=["POST"])
+def v1_create_message():
+    user_id, error = _v1_get_user_id()
+    if error:
+        return error
+    if not request.is_json:
+        return _v1_error("VALIDATION_ERROR", "JSON body required", 400)
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return _v1_error("VALIDATION_ERROR", "JSON object required", 400)
+
+    transcript = data.get("transcript")
+    if transcript is None:
+        transcript = data.get("text")
+    if not isinstance(transcript, str) or not transcript.strip():
+        return _v1_error("VALIDATION_ERROR", "transcript is required", 400)
+
+    source = data.get("source") or "text"
+    if not isinstance(source, str) or not source.strip():
+        source = "text"
+
+    session_id = data.get("session_id")
+    if session_id is not None:
+        try:
+            session_id = int(session_id)
+        except (TypeError, ValueError):
+            return _v1_error("VALIDATION_ERROR", "session_id must be an integer", 400)
+
+    from db.messages_repository import create_message
+    # Canonical transcript lives on messages.transcript; transcripts table stores snapshots for audit.
+    record = create_message(
+        user_id=user_id,
+        transcript=transcript.strip(),
+        source=source.strip(),
+        session_id=session_id,
+        status="final",
+        create_session_if_missing=True,
+    )
+    return _v1_envelope(data={"message": record}, status=201)
+
+
+@v1.route("/sessions/<int:session_id>/messages", methods=["GET"])
+def v1_list_session_messages(session_id: int):
+    user_id, error = _v1_get_user_id()
+    if error:
+        return error
+    from db.messages_repository import list_messages_for_session
+    rows = list_messages_for_session(user_id, session_id)
+    return _v1_envelope(data={"session_id": session_id, "messages": rows}, status=200)
+
+
+@v1.route("/messages/<int:message_id>", methods=["GET"])
+def v1_get_message(message_id: int):
+    user_id, error = _v1_get_user_id()
+    if error:
+        return error
+    from db.messages_repository import get_message
+    record = get_message(user_id, message_id)
+    if not record:
+        return _v1_error("NOT_FOUND", "Message not found", 404, details={"message_id": message_id})
+    return _v1_envelope(data={"message": record}, status=200)
+
+
+def _v1_update_message_payload(message_id: int, data: Dict[str, Any]):
+    user_id, error = _v1_get_user_id()
+    if error:
+        return error
+    if not isinstance(data, dict):
+        return _v1_error("VALIDATION_ERROR", "JSON object required", 400)
+    status = data.get("status")
+    transcript = data.get("transcript")
+    if transcript is None:
+        transcript = data.get("text")
+    if status is None and transcript is None:
+        return _v1_error("VALIDATION_ERROR", "status or transcript required", 400)
+    if transcript is not None and not isinstance(transcript, str):
+        return _v1_error("VALIDATION_ERROR", "transcript must be a string", 400)
+    if transcript is not None and status is None:
+        status = "final"
+
+    allowed_statuses = {"uploading", "transcribing", "ready", "failed", "final"}
+    if status is not None:
+        if not isinstance(status, str):
+            return _v1_error("VALIDATION_ERROR", "status must be a string", 400)
+        status = status.strip().lower()
+        if status not in allowed_statuses:
+            return _v1_error("VALIDATION_ERROR", "status is invalid", 400)
+
+    from db.messages_repository import get_message, update_message
+    current = get_message(user_id, message_id)
+    if not current:
+        return _v1_error("NOT_FOUND", "Message not found", 404, details={"message_id": message_id})
+    current_status = (current.get("status") or "").strip().lower()
+    transitions = {
+        "uploading": {"transcribing", "ready", "failed", "final"},
+        "transcribing": {"ready", "failed", "final"},
+        "ready": {"final", "failed"},
+        "failed": {"transcribing", "final"},
+        "final": {"final"},
+    }
+    if status is not None:
+        allowed_next = transitions.get(current_status, set())
+        if status != current_status and status not in allowed_next:
+            return _v1_error(
+                "INVALID_STATUS_TRANSITION",
+                "Invalid status transition",
+                409,
+                details={"from": current_status, "to": status},
+            )
+
+    # Canonical transcript lives on messages.transcript; transcripts table stores snapshots for audit.
+    record = update_message(
+        user_id=user_id,
+        message_id=message_id,
+        status=status,
+        transcript=transcript.strip() if isinstance(transcript, str) else None,
+    )
+    if not record:
+        return _v1_error("UPDATE_FAILED", "Failed to update message", 500)
+    return _v1_envelope(data={"message": record}, status=200)
+
+
+@v1.route("/messages/<int:message_id>", methods=["PATCH"])
+def v1_update_message(message_id: int):
+    if not request.is_json:
+        return _v1_error("VALIDATION_ERROR", "JSON body required", 400)
+    data = request.get_json(silent=True)
+    return _v1_update_message_payload(message_id, data)
+
+
+@v1.route("/messages/<int:message_id>/finalize", methods=["POST"])
+def v1_finalize_message(message_id: int):
+    if not request.is_json:
+        return _v1_error("VALIDATION_ERROR", "JSON body required", 400)
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return _v1_error("VALIDATION_ERROR", "JSON object required", 400)
+    transcript = data.get("transcript")
+    if transcript is None:
+        transcript = data.get("text")
+    if not isinstance(transcript, str) or not transcript.strip():
+        return _v1_error("VALIDATION_ERROR", "transcript is required", 400)
+    payload = {"status": "final", "transcript": transcript}
+    return _v1_update_message_payload(message_id, payload)
+
+
+@v1.route("/analyze", methods=["POST"])
+def v1_analyze():
+    user_id, error = _v1_get_user_id()
+    if error:
+        return error
+    if not request.is_json:
+        return _v1_error("VALIDATION_ERROR", "JSON body required", 400)
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return _v1_error("VALIDATION_ERROR", "JSON object required", 400)
+
+    message_ids = data.get("message_ids") or []
+    if not isinstance(message_ids, list) or not message_ids:
+        return _v1_error("VALIDATION_ERROR", "message_ids must be a non-empty list", 400)
+    normalized_ids = []
+    for value in message_ids:
+        try:
+            normalized_ids.append(int(value))
+        except (TypeError, ValueError):
+            return _v1_error("VALIDATION_ERROR", "message_ids must be integers", 400)
+
+    from db.messages_repository import list_messages_by_ids
+    from db.suggestions_repository import create_suggestion
+
+    rows = list_messages_by_ids(user_id, normalized_ids)
+    if not rows:
+        return _v1_error("NOT_FOUND", "No messages found", 404, details={"message_ids": normalized_ids})
+
+    llm_error_code = None
+    raw_llm_error = data.get("llm_error_code")
+    if isinstance(raw_llm_error, str) and raw_llm_error.strip():
+        llm_error_code = raw_llm_error.strip()
+    elif not is_openai_configured():
+        llm_error_code = "missing_api_key"
+
+    def _fallback_goal_payload(text: str) -> Optional[Dict[str, Any]]:
+        raw = str(text or "").strip()
+        if not raw:
+            return None
+        if is_goal_list_request(raw):
+            return None
+        if parse_goal_selection_request(raw) is not None:
+            return None
+        patterns = (
+            r"^my goal is\b",
+            r"^my goal\b",
+            r"^i want to\b",
+            r"^i'd like to\b",
+            r"^help me\b",
+            r"^can you help me\b",
+            r"^please help me\b",
+        )
+        if not any(re.search(pattern, raw, flags=re.IGNORECASE) for pattern in patterns):
+            return None
+        title_suggestion = _extract_goal_title_suggestion(raw)
+        return {
+            "title": title_suggestion,
+            "body": raw,
+            "confidence": 0.6,
+        }
+
+    created = []
+    for row in rows:
+        transcript = (row.get("transcript") or "").strip()
+        if not transcript:
+            continue
+        suggestion = _detect_goal_intent_suggestion(transcript, str(row.get("id")))
+        if suggestion:
+            payload = {
+                "title": suggestion.get("title_suggestion"),
+                "body": suggestion.get("body_suggestion"),
+                "confidence": suggestion.get("confidence"),
+            }
+            provenance = {
+                "message_ids": [row.get("id")],
+                "source": "v1_analyze_llm",
+                "detector": "goal_intent_heuristic",
+            }
+            created.append(
+                create_suggestion(
+                    user_id=user_id,
+                    kind="goal",
+                    payload=payload,
+                    provenance=provenance,
+                )
+            )
+            continue
+
+        fallback_payload = _fallback_goal_payload(transcript)
+        if not fallback_payload:
+            continue
+        fallback_reason = "llm_unavailable" if not is_openai_configured() else "heuristic"
+        provenance = {
+            "message_ids": [row.get("id")],
+            "source": "v1_analyze_fallback",
+            "detector": "fallback_pattern",
+            "fallback_reason": fallback_reason,
+        }
+        if llm_error_code:
+            provenance["llm_error_code"] = llm_error_code
+        created.append(
+            create_suggestion(
+                user_id=user_id,
+                kind="goal",
+                payload=fallback_payload,
+                provenance=provenance,
+            )
+        )
+
+    return _v1_envelope(
+        data={"suggestions": created, "analyzed_message_ids": normalized_ids},
+        status=200,
+    )
+
+
+@v1.route("/suggestions", methods=["GET"])
+def v1_list_suggestions():
+    user_id, error = _v1_get_user_id()
+    if error:
+        return error
+    status = (request.args.get("status") or "pending").strip().lower()
+    if not status:
+        return _v1_error("VALIDATION_ERROR", "status is required", 400)
+    kind = request.args.get("kind")
+    if kind is not None:
+        kind = str(kind).strip()
+        if not kind:
+            kind = None
+    limit = request.args.get("limit")
+    try:
+        limit_value = int(limit) if limit is not None else 50
+    except (TypeError, ValueError):
+        return _v1_error("VALIDATION_ERROR", "limit must be an integer", 400)
+    if limit_value <= 0:
+        return _v1_error("VALIDATION_ERROR", "limit must be positive", 400)
+    from db.suggestions_repository import list_suggestions
+    rows = list_suggestions(user_id=user_id, status=status, kind=kind, limit=limit_value)
+    return _v1_envelope(data={"suggestions": rows}, status=200)
+
+
+@v1.route("/confirm", methods=["POST"])
+def v1_confirm():
+    user_id, error = _v1_get_user_id()
+    if error:
+        return error
+    if not request.is_json:
+        return _v1_error("VALIDATION_ERROR", "JSON body required", 400)
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return _v1_error("VALIDATION_ERROR", "JSON object required", 400)
+
+    decisions = data.get("decisions")
+    if decisions is None:
+        decisions = [data]
+    if not isinstance(decisions, list) or not decisions:
+        return _v1_error("VALIDATION_ERROR", "decisions must be a non-empty list", 400)
+
+    results = _apply_suggestion_decisions(user_id, decisions, event_source="v1_confirm")
+    return _v1_envelope(data={"results": results}, status=200)
+
+
+@v1.route("/read/history", methods=["GET"])
+def v1_read_history():
+    user_id, error = _v1_get_user_id()
+    if error:
+        return error
+    limit = request.args.get("limit")
+    try:
+        limit_value = int(limit) if limit is not None else 100
+    except (TypeError, ValueError):
+        return _v1_error("VALIDATION_ERROR", "limit must be an integer", 400)
+    from db.goal_events_repository import safe_list_user_goal_events
+    events = safe_list_user_goal_events(user_id, limit=limit_value)
+    return _v1_envelope(data={"events": events}, status=200)
+
+
+app.register_blueprint(v1)
 
 # Serve static assets (JS, CSS, etc.) if referenced as /static/...
 @app.route('/static/<path:filename>')
@@ -1515,6 +2141,9 @@ def handle_message():
     payload_bytes = request.content_length or 0
     log_started = False
     event_storage_ok: Optional[bool] = None
+    phase1_skipped: List[str] = []
+    if _PHASE1_ENABLED:
+        phase1_skipped = ["postprocess", "insights"]
 
     def _log_request_start(goal_value: Optional[Any]) -> None:
         nonlocal log_started
@@ -1734,61 +2363,54 @@ def handle_message():
             section_label = data.get("section_label")
             if not isinstance(section_label, str) or not section_label.strip():
                 section_label = f"Chat Plan: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}"
+            payload = {
+                "goal_id": active_goal["id"],
+                "steps": steps,
+                "plan_text": plan_text,
+                "mode": "append",
+                "section_label": section_label,
+            }
+            provenance = {
+                "source": "api_message",
+                "ui_action": ui_action,
+                "request_id": request_id,
+                "client_message_id": client_message_id,
+                "goal_id": active_goal["id"],
+            }
             try:
-                if hasattr(architect_agent.goal_mgr, "append_goal_plan"):
-                    architect_agent.goal_mgr.append_goal_plan(
-                        user_id,
-                        active_goal["id"],
-                        steps,
-                        default_section=section_label,
-                    )
-                elif hasattr(architect_agent.goal_mgr, "save_goal_plan_section"):
-                    architect_agent.goal_mgr.save_goal_plan_section(
-                        user_id,
-                        active_goal["id"],
-                        steps,
-                        section_label,
-                        section_prefix=section_label,
-                    )
-                else:
-                    architect_agent.goal_mgr.save_goal_plan(
-                        user_id,
-                        active_goal["id"],
-                        steps,
-                    )
+                suggestion = _create_goal_plan_suggestion(
+                    user_id=user_id,
+                    payload=payload,
+                    provenance=provenance,
+                )
             except Exception:
                 logger.error(
-                    "API: plan_from_text_append save failed request_id=%s goal_id=%s",
+                    "API: plan_from_text_append suggestion failed request_id=%s goal_id=%s",
                     request_id,
                     active_goal.get("id"),
                     exc_info=True,
                 )
-                return api_error("PLAN_SAVE_FAILED", "Failed to save plan steps", 500)
-            try:
-                architect_agent.goal_mgr.update_goal_plan(
-                    user_id,
-                    active_goal["id"],
-                    plan=plan_text,
+                return api_error("PLAN_SUGGESTION_FAILED", "Failed to create pending suggestion", 500)
+            suggestion_id = suggestion.get("id") if isinstance(suggestion, dict) else None
+            if not suggestion_id:
+                logger.error(
+                    "API: plan_from_text_append suggestion missing id request_id=%s goal_id=%s",
+                    request_id,
+                    active_goal.get("id"),
                 )
-            except Exception:
-                pass
-            try:
-                note_label = f"[Plan Updated] Appended {len(steps)} steps from chat"
-                architect_agent.goal_mgr.add_note_to_goal(
-                    user_id,
-                    active_goal["id"],
-                    "system",
-                    note_label,
-                    request_id=request_id,
-                )
-            except Exception:
-                pass
+                return api_error("PLAN_SUGGESTION_FAILED", "Failed to create pending suggestion", 500)
             response = {
-                "reply": f"Added {len(steps)} steps to the current plan.",
-                "meta": {"intent": "plan_steps_added"},
+                "reply": f"Prepared {len(steps)} steps for confirmation.",
+                "meta": {
+                    "intent": "plan_steps_proposed",
+                    "pending_suggestion_id": suggestion_id,
+                    "requires_confirmation": True,
+                },
                 "goal_id": active_goal["id"],
                 "section_label": section_label,
             }
+            if _PHASE1_ENABLED:
+                response["meta"]["phase1_skipped"] = phase1_skipped
             _log_goal_intent_status(False, "fallback")
             return jsonify(response)
 
@@ -1815,44 +2437,52 @@ def handle_message():
                     "No actionable steps found; provide bullets or numbered tasks.",
                     400,
                 )
+            payload = {
+                "goal_id": active_goal["id"],
+                "steps": steps,
+                "plan_text": plan_text,
+                "mode": "replace",
+            }
+            provenance = {
+                "source": "api_message",
+                "ui_action": ui_action,
+                "request_id": request_id,
+                "client_message_id": client_message_id,
+                "goal_id": active_goal["id"],
+            }
             try:
-                architect_agent.goal_mgr.save_goal_plan(
-                    user_id,
-                    active_goal["id"],
-                    steps,
+                suggestion = _create_goal_plan_suggestion(
+                    user_id=user_id,
+                    payload=payload,
+                    provenance=provenance,
                 )
             except Exception:
                 logger.error(
-                    "API: plan_from_text save failed request_id=%s goal_id=%s",
+                    "API: plan_from_text suggestion failed request_id=%s goal_id=%s",
                     request_id,
                     active_goal.get("id"),
                     exc_info=True,
                 )
-                return api_error("PLAN_SAVE_FAILED", "Failed to save plan steps", 500)
-            try:
-                architect_agent.goal_mgr.update_goal_plan(
-                    user_id,
-                    active_goal["id"],
-                    plan=plan_text,
+                return api_error("PLAN_SUGGESTION_FAILED", "Failed to create pending suggestion", 500)
+            suggestion_id = suggestion.get("id") if isinstance(suggestion, dict) else None
+            if not suggestion_id:
+                logger.error(
+                    "API: plan_from_text suggestion missing id request_id=%s goal_id=%s",
+                    request_id,
+                    active_goal.get("id"),
                 )
-            except Exception:
-                pass
-            try:
-                note_label = f"[Plan Updated] Added {len(steps)} steps from chat"
-                architect_agent.goal_mgr.add_note_to_goal(
-                    user_id,
-                    active_goal["id"],
-                    "system",
-                    note_label,
-                    request_id=request_id,
-                )
-            except Exception:
-                pass
+                return api_error("PLAN_SUGGESTION_FAILED", "Failed to create pending suggestion", 500)
             response = {
-                "reply": f"Added {len(steps)} steps to the current plan.",
-                "meta": {"intent": "plan_steps_added"},
+                "reply": f"Prepared {len(steps)} steps for confirmation.",
+                "meta": {
+                    "intent": "plan_steps_proposed",
+                    "pending_suggestion_id": suggestion_id,
+                    "requires_confirmation": True,
+                },
                 "goal_id": active_goal["id"],
             }
+            if _PHASE1_ENABLED:
+                response["meta"]["phase1_skipped"] = phase1_skipped
             _log_goal_intent_status(False, "fallback")
             return jsonify(response)
 
@@ -1894,6 +2524,8 @@ def handle_message():
                 ) or ""
             except Exception:
                 goal_context = ""
+            llm_error_code = None
+            fallback_on_llm_error = False
             loop = None
             try:
                 loop = asyncio.new_event_loop()
@@ -1916,9 +2548,19 @@ def handle_message():
                     exc_info=True,
                 )
                 llm_exc = _unwrap_llm_exception(exc)
-                if llm_exc:
-                    return handle_llm_error(llm_exc, logger)
-                return api_error("PLAN_FROM_INTENT_FAILED", "Failed to build plan", 500)
+                if llm_exc and isinstance(llm_exc, openai.AuthenticationError):
+                    fallback_on_llm_error = True
+                    llm_error_code = getattr(llm_exc, "code", None) or "authentication_error"
+                if isinstance(exc, ValueError) and "OpenAI chat completion failed" in str(exc):
+                    fallback_on_llm_error = True
+                    if llm_error_code is None:
+                        llm_error_code = "llm_wrapper_error"
+                if not fallback_on_llm_error:
+                    if llm_exc:
+                        return handle_llm_error(llm_exc, logger)
+                    return api_error("PLAN_FROM_INTENT_FAILED", "Failed to build plan", 500)
+                plan_reply = ""
+                _agent_status = {}
             finally:
                 if loop is not None:
                     try:
@@ -1927,6 +2569,74 @@ def handle_message():
                         logger.debug("API: event loop close failed but continuing")
             plan_text = plan_reply or ""
             steps = _parse_plan_text_with_log(plan_text, logger)
+            if not steps and isinstance(_agent_status, dict) and _agent_status.get("planner_active") is False:
+                fallback_on_llm_error = True
+                if llm_error_code is None:
+                    llm_error_code = "llm_wrapper_error"
+            if not steps and (plan_text or "").strip().lower().startswith("sorry, something went wrong"):
+                fallback_on_llm_error = True
+                if llm_error_code is None:
+                    llm_error_code = "llm_wrapper_error"
+            if fallback_on_llm_error and not steps:
+                fallback_steps = _fallback_steps_from_text(intent_text or user_input)
+                if not fallback_steps:
+                    return api_error(
+                        "PLAN_PARSE_EMPTY",
+                        "No actionable steps found; provide bullets or numbered tasks.",
+                        400,
+                    )
+                payload = {
+                    "goal_id": active_goal["id"],
+                    "steps": fallback_steps,
+                    "mode": "replace",
+                    "intent_index": intent_index,
+                    "intent_text": intent_text,
+                }
+                provenance = {
+                    "source": "fallback_parser",
+                    "llm_error_code": llm_error_code,
+                    "ui_action": ui_action,
+                    "request_id": request_id,
+                    "client_message_id": client_message_id,
+                    "goal_id": active_goal["id"],
+                    "intent_index": intent_index,
+                }
+                try:
+                    suggestion = _create_goal_plan_suggestion(
+                        user_id=user_id,
+                        payload=payload,
+                        provenance=provenance,
+                    )
+                except Exception:
+                    logger.error(
+                        "API: plan_from_intent fallback suggestion failed request_id=%s goal_id=%s",
+                        request_id,
+                        active_goal.get("id"),
+                        exc_info=True,
+                    )
+                    return api_error("PLAN_SUGGESTION_FAILED", "Failed to create pending suggestion", 500)
+                suggestion_id = suggestion.get("id") if isinstance(suggestion, dict) else None
+                if not suggestion_id:
+                    logger.error(
+                        "API: plan_from_intent fallback suggestion missing id request_id=%s goal_id=%s",
+                        request_id,
+                        active_goal.get("id"),
+                    )
+                    return api_error("PLAN_SUGGESTION_FAILED", "Failed to create pending suggestion", 500)
+                response = {
+                    "reply": f"Prepared {len(fallback_steps)} steps from your intent for confirmation.",
+                    "meta": {
+                        "intent": "plan_steps_proposed",
+                        "intent_index": intent_index,
+                        "pending_suggestion_id": suggestion_id,
+                        "requires_confirmation": True,
+                    },
+                    "goal_id": active_goal["id"],
+                }
+                if _PHASE1_ENABLED:
+                    response["meta"]["phase1_skipped"] = phase1_skipped
+                _log_goal_intent_status(False, "fallback")
+                return jsonify(response)
             if not steps:
                 return api_error(
                     "PLAN_PARSE_EMPTY",
@@ -1945,53 +2655,61 @@ def handle_message():
                 section_label = f"{section_prefix}: {section_label}"
             for step in steps:
                 step["section"] = section_label
+            payload = {
+                "goal_id": active_goal["id"],
+                "steps": steps,
+                "plan_text": plan_text,
+                "mode": "replace",
+                "section_label": section_label,
+                "section_prefix": section_prefix,
+                "intent_index": intent_index,
+            }
+            provenance = {
+                "source": "api_message",
+                "ui_action": ui_action,
+                "request_id": request_id,
+                "client_message_id": client_message_id,
+                "goal_id": active_goal["id"],
+                "intent_index": intent_index,
+            }
             try:
-                if hasattr(architect_agent.goal_mgr, "save_goal_plan_section"):
-                    architect_agent.goal_mgr.save_goal_plan_section(
-                        user_id,
-                        active_goal["id"],
-                        steps,
-                        section_label,
-                        section_prefix=section_prefix,
-                    )
-                else:
-                    architect_agent.goal_mgr.save_goal_plan(
-                        user_id,
-                        active_goal["id"],
-                        steps,
-                    )
+                suggestion = _create_goal_plan_suggestion(
+                    user_id=user_id,
+                    payload=payload,
+                    provenance=provenance,
+                )
             except Exception:
                 logger.error(
-                    "API: plan_from_intent save failed request_id=%s goal_id=%s",
+                    "API: plan_from_intent suggestion failed request_id=%s goal_id=%s",
                     request_id,
                     active_goal.get("id"),
                     exc_info=True,
                 )
-                return api_error("PLAN_SAVE_FAILED", "Failed to save plan steps", 500)
-            try:
-                architect_agent.goal_mgr.update_goal_plan(
-                    user_id,
-                    active_goal["id"],
-                    plan=plan_text,
+                return api_error("PLAN_SUGGESTION_FAILED", "Failed to create pending suggestion", 500)
+            suggestion_id = suggestion.get("id") if isinstance(suggestion, dict) else None
+            if not suggestion_id:
+                logger.error(
+                    "API: plan_from_intent suggestion missing id request_id=%s goal_id=%s",
+                    request_id,
+                    active_goal.get("id"),
                 )
-            except Exception:
-                pass
-            try:
-                note_label = f"[Plan Updated] Added {len(steps)} steps from intent #{intent_index}"
-                architect_agent.goal_mgr.add_note_to_goal(
-                    user_id,
-                    active_goal["id"],
-                    "system",
-                    note_label,
-                    request_id=request_id,
-                )
-            except Exception:
-                pass
+                return api_error("PLAN_SUGGESTION_FAILED", "Failed to create pending suggestion", 500)
+            reply_with_confirm = plan_text
+            if reply_with_confirm:
+                reply_with_confirm = reply_with_confirm.rstrip()
+            reply_with_confirm = f"{reply_with_confirm}\n\nConfirm to apply these steps.".strip()
             response = {
-                "reply": plan_text,
-                "meta": {"intent": "plan_steps_added", "intent_index": intent_index},
+                "reply": reply_with_confirm,
+                "meta": {
+                    "intent": "plan_steps_proposed",
+                    "intent_index": intent_index,
+                    "pending_suggestion_id": suggestion_id,
+                    "requires_confirmation": True,
+                },
                 "goal_id": active_goal["id"],
             }
+            if _PHASE1_ENABLED:
+                response["meta"]["phase1_skipped"] = phase1_skipped
             _log_goal_intent_status(False, "fallback")
             return jsonify(response)
 
@@ -2334,8 +3052,12 @@ def handle_message():
         goal_intent_detected = bool(goal_intent_suggestion)
 
         # === Post-processing (analysis only - no persistence here) ===========
-        summary = postprocess_and_save(user_input)
-        print("[DEBUG] Postprocess summary:", summary)  # Comment/remove in prod
+        if _PHASE1_ENABLED:
+            logger.info("API: Phase-1 DB-only mode - skipping postprocess")
+            summary = None
+        else:
+            summary = postprocess_and_save(user_input)
+            print("[DEBUG] Postprocess summary:", summary)  # Comment/remove in prod
 
         # === Build goal_context for Architect (if an active goal exists) =====
         goal_context = None
@@ -2376,7 +3098,8 @@ def handle_message():
                             architect_agent.generate_goal_plan(
                                 user_id,
                                 goal_id=active_goal['id'],
-                                instruction=user_input
+                                instruction=user_input,
+                                persist=False,
                             )
                         )
                     finally:
@@ -2384,24 +3107,63 @@ def handle_message():
                 
                     if plan_result:
                         # Successfully generated plan - build natural language summary
-                        step_count = len(plan_result.get('plan_steps', []))
+                        plan_steps = plan_result.get("plan_steps") or []
+                        step_count = len(plan_steps)
                         next_action = plan_result.get('next_action', 'Begin with the first step')
                         priority = plan_result.get('priority', 'medium')
                         status = plan_result.get('status', 'active')
+                        payload = {
+                            "goal_id": active_goal["id"],
+                            "plan_steps": plan_steps,
+                            "summary": plan_result.get("summary"),
+                            "next_action": next_action,
+                            "mode": "replace",
+                        }
+                        provenance = {
+                            "source": "api_message",
+                            "ui_action": "plan_request",
+                            "request_id": request_id,
+                            "client_message_id": client_message_id,
+                            "goal_id": active_goal["id"],
+                        }
+                        try:
+                            suggestion = _create_goal_plan_suggestion(
+                                user_id=user_id,
+                                payload=payload,
+                                provenance=provenance,
+                            )
+                        except Exception:
+                            logger.error(
+                                "API: plan_request suggestion failed request_id=%s goal_id=%s",
+                                request_id,
+                                active_goal.get("id"),
+                                exc_info=True,
+                            )
+                            return api_error("PLAN_SUGGESTION_FAILED", "Failed to create pending suggestion", 500)
+                        suggestion_id = suggestion.get("id") if isinstance(suggestion, dict) else None
+                        if not suggestion_id:
+                            logger.error(
+                                "API: plan_request suggestion missing id request_id=%s goal_id=%s",
+                                request_id,
+                                active_goal.get("id"),
+                            )
+                            return api_error("PLAN_SUGGESTION_FAILED", "Failed to create pending suggestion", 500)
                     
                         agentic_reply = (
-                            f"I've created a {step_count}-step plan for this goal.\n\n"
+                            f"I've prepared a {step_count}-step plan for this goal.\n\n"
                             f"Status: {status}\n"
                             f"Priority: {priority}\n\n"
                             f"Your next action: {next_action}\n\n"
-                            f"You can review all steps in the GOALS tab."
+                            "Confirm to apply these steps."
                         )
                     
                         agent_status = {
                             "planner_active": True,
                             "had_goal_update_xml": True,
                             "plan_generated": True,
-                            "step_count": step_count
+                            "step_count": step_count,
+                            "pending_suggestion_id": suggestion_id,
+                            "requires_confirmation": True,
                         }
                         reply_source = "llm"
                     
@@ -2560,7 +3322,7 @@ def handle_message():
                 "request_id": request_id,
             }
             try:
-                if user_id:
+                if user_id and not _PHASE1_ENABLED:
                     logger.info("API: running insight extraction for message (casual mode)")
                     response["insights_meta"] = _normalize_insights_meta(
                         _process_insights_pipeline(
@@ -2573,8 +3335,12 @@ def handle_message():
                         "API: insight extraction completed (created=%s)",
                         response["insights_meta"].get("created", "?"),
                     )
+                elif user_id and _PHASE1_ENABLED:
+                    logger.info("API: Phase-1 DB-only mode - skipping insight extraction")
             except Exception as exc:
                 logger.warning("API: insight extraction skipped due to error: %s", exc, exc_info=True)
+            if _PHASE1_ENABLED:
+                response.setdefault("meta", {})["phase1_skipped"] = phase1_skipped
             goal_intent_attached = _attach_goal_intent_suggestion(
                 response,
                 user_input=user_input,
@@ -2656,7 +3422,7 @@ def handle_message():
             "request_id": request_id,
         }
         try:
-            if user_id:
+            if user_id and not _PHASE1_ENABLED:
                 logger.info("API: running insight extraction for message (goal mode)")
                 response["insights_meta"] = _normalize_insights_meta(
                     _process_insights_pipeline(
@@ -2669,8 +3435,12 @@ def handle_message():
                     "API: insight extraction completed (created=%s)",
                     response["insights_meta"].get("created", "?"),
                 )
+            elif user_id and _PHASE1_ENABLED:
+                logger.info("API: Phase-1 DB-only mode - skipping insight extraction")
         except Exception as exc:
             logger.warning("API: insight extraction skipped due to error: %s", exc, exc_info=True)
+        if _PHASE1_ENABLED:
+            response.setdefault("meta", {})["phase1_skipped"] = phase1_skipped
         goal_intent_attached = _attach_goal_intent_suggestion(
             response,
             user_input=user_input,
@@ -2694,6 +3464,28 @@ def handle_message():
         return api_error("INTERNAL_ERROR", "Internal server error", 500)
     finally:
         _log_request_end()
+
+
+@app.route("/api/confirm", methods=["POST"])
+@require_auth
+def api_confirm():
+    user_id, error = _get_user_id_or_error()
+    if error:
+        return error
+    if not request.is_json:
+        return _v1_error("VALIDATION_ERROR", "JSON body required", 400)
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return _v1_error("VALIDATION_ERROR", "JSON object required", 400)
+
+    decisions = data.get("decisions")
+    if decisions is None:
+        decisions = [data]
+    if not isinstance(decisions, list) or not decisions:
+        return _v1_error("VALIDATION_ERROR", "decisions must be a non-empty list", 400)
+
+    results = _apply_suggestion_decisions(user_id, decisions, event_source="api_confirm")
+    return _v1_envelope(data={"results": results}, status=200)
 
 
 @app.route("/api/suggestions/dismiss", methods=["POST"])
@@ -2906,6 +3698,13 @@ def goals():
                 details=type(e).__name__,
             )
 
+    if _PHASE1_ENABLED:
+        return api_error(
+            "PHASE1_WRITE_BLOCKED",
+            "Phase-1 blocks legacy /api goal creation; use /v1 confirm flow",
+            409,
+        )
+
     data = request.get_json(silent=True)
     if not isinstance(data, dict):
         return api_error("VALIDATION_ERROR", "JSON object required", 400)
@@ -3013,6 +3812,12 @@ def add_goal_note(goal_id: int):
     user_id, error = _get_user_id_or_error()
     if error:
         return error
+    if _PHASE1_ENABLED:
+        return api_error(
+            "PHASE1_WRITE_BLOCKED",
+            "Phase-1 blocks legacy /api goal notes; use /v1 confirm flow",
+            409,
+        )
 
     data = request.get_json(silent=True)
     if not isinstance(data, dict):
@@ -3190,6 +3995,12 @@ def archive_goal(goal_id):
     user_id, error = _get_user_id_or_error()
     if error:
         return error
+    if _PHASE1_ENABLED:
+        return api_error(
+            "PHASE1_WRITE_BLOCKED",
+            "Phase-1 blocks legacy /api goal archive; use /v1 confirm flow",
+            409,
+        )
 
     try:
         goal = architect_agent.goal_mgr.get_goal(user_id, goal_id)
@@ -3362,6 +4173,12 @@ def update_step_status(goal_id, step_id):
     user_id, error = _get_user_id_or_error()
     if error:
         return error
+    if _PHASE1_ENABLED:
+        return api_error(
+            "PHASE1_WRITE_BLOCKED",
+            "Phase-1 blocks legacy /api step updates; use /v1 confirm flow",
+            409,
+        )
     data = request.get_json() or {}
     new_status = data.get("status")
     
@@ -3430,6 +4247,12 @@ def update_step_detail(goal_id, step_id):
     user_id, error = _get_user_id_or_error()
     if error:
         return error
+    if _PHASE1_ENABLED:
+        return api_error(
+            "PHASE1_WRITE_BLOCKED",
+            "Phase-1 blocks legacy /api step detail updates; use /v1 confirm flow",
+            409,
+        )
     data = request.get_json() or {}
     detail = data.get("detail")
     raw_step_index = data.get("step_index")
@@ -3570,6 +4393,12 @@ def trigger_goal_planning(goal_id):
     user_id, error = _get_user_id_or_error()
     if error:
         return error
+    if _PHASE1_ENABLED:
+        return api_error(
+            "PHASE1_WRITE_BLOCKED",
+            "Phase-1 blocks legacy /api goal planning; use /v1 analyze + confirm",
+            409,
+        )
     data = request.get_json() or {}
     instruction = data.get("instruction", "").strip()
     

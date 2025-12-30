@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 import re
 from dataclasses import dataclass, field
 from datetime import datetime, date
@@ -64,6 +65,12 @@ class RoutineStore:
 
     # ------------------------------------------------------------------
     def _load_or_seed(self) -> List[Dict[str, Any]]:
+        global _ROUTINES_DB_ONLY_WARNED
+        if _PHASE1_DB_ONLY:
+            if not _ROUTINES_DB_ONLY_WARNED:
+                self.logger.warning("RoutineStore: JSON routines disabled in Phase-1 DB-only mode")
+                _ROUTINES_DB_ONLY_WARNED = True
+            return []
         if self.store_path.exists():
             try:
                 with self.store_path.open("r", encoding="utf-8") as f:
@@ -372,6 +379,13 @@ class DayPlanner:
                 return plan
         except Exception as exc:
             self.logger.warning(f"DayPlanner: failed to load DB plan for {target_date}: {exc}")
+
+        global _PLAN_CACHE_DB_ONLY_WARNED
+        if _PHASE1_DB_ONLY:
+            if not _PLAN_CACHE_DB_ONLY_WARNED:
+                self.logger.warning("DayPlanner: JSON plan cache disabled in Phase-1 DB-only mode")
+                _PLAN_CACHE_DB_ONLY_WARNED = True
+            return None
 
         path = self._plan_cache_path(uid, target_date)
         if not path.exists():
@@ -964,3 +978,7 @@ __all__ = [
     "RoutineVariant",
     "RoutineStep",
 ]
+
+_PHASE1_DB_ONLY = (os.getenv("OTHELLO_PHASE1_DB_ONLY") or "").strip().lower() in ("1", "true", "yes")
+_ROUTINES_DB_ONLY_WARNED = False
+_PLAN_CACHE_DB_ONLY_WARNED = False

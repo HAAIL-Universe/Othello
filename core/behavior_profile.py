@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 from collections import defaultdict
 from datetime import datetime, timedelta, date
 from pathlib import Path
@@ -119,6 +120,13 @@ class BehaviorProfile:
         if plans:
             return plans
 
+        global _PLAN_FALLBACK_DB_ONLY_WARNED
+        if _PHASE1_DB_ONLY:
+            if not _PLAN_FALLBACK_DB_ONLY_WARNED:
+                self.logger.warning("BehaviorProfile: JSON plan fallback disabled in Phase-1 DB-only mode")
+                _PLAN_FALLBACK_DB_ONLY_WARNED = True
+            return []
+
         # Fallback to JSON snapshots
         try:
             for path in sorted(self.plan_dir.glob("plan_*.json")):
@@ -205,6 +213,12 @@ class BehaviorProfile:
     def _load_recent_reflections(self, days: int = 14) -> List[Dict[str, Any]]:
         cutoff = datetime.utcnow().date() - timedelta(days=days)
         refs: List[Dict[str, Any]] = []
+        global _REFLECTIONS_DB_ONLY_WARNED
+        if _PHASE1_DB_ONLY:
+            if not _REFLECTIONS_DB_ONLY_WARNED:
+                self.logger.warning("BehaviorProfile: JSON reflections disabled in Phase-1 DB-only mode")
+                _REFLECTIONS_DB_ONLY_WARNED = True
+            return refs
         if not self.reflection_dir.exists():
             return refs
         for path in sorted(self.reflection_dir.glob("reflection_*.json"), reverse=True):
@@ -254,3 +268,7 @@ class BehaviorProfile:
 
 
 __all__ = ["BehaviorProfile"]
+
+_PHASE1_DB_ONLY = (os.getenv("OTHELLO_PHASE1_DB_ONLY") or "").strip().lower() in ("1", "true", "yes")
+_PLAN_FALLBACK_DB_ONLY_WARNED = False
+_REFLECTIONS_DB_ONLY_WARNED = False

@@ -29,6 +29,7 @@ Usage:
 
 import json
 import logging
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Optional
@@ -75,6 +76,12 @@ class MemoryManager:
         Returns:
             List of memory entries. Returns empty list if file doesn't exist or is invalid.
         """
+        global _MEMORY_DB_ONLY_WARNED
+        if _PHASE1_DB_ONLY:
+            if not _MEMORY_DB_ONLY_WARNED:
+                self.logger.warning("MemoryManager: JSON memory disabled in Phase-1 DB-only mode")
+                _MEMORY_DB_ONLY_WARNED = True
+            return []
         if not self.memory_file.exists():
             self.logger.debug("MemoryManager: Memory file does not exist yet, starting fresh")
             return []
@@ -244,3 +251,7 @@ class MemoryManager:
             Number of memory entries
         """
         return len(self._load_memories())
+
+
+_PHASE1_DB_ONLY = (os.getenv("OTHELLO_PHASE1_DB_ONLY") or "").strip().lower() in ("1", "true", "yes")
+_MEMORY_DB_ONLY_WARNED = False

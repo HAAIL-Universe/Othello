@@ -455,7 +455,14 @@ class Architect:
             self.logger.debug(f"Failed XML parsing traceback:", exc_info=True)
             return None
 
-    async def generate_goal_plan(self, user_id: str, goal_id: int, instruction: str = None) -> Optional[Dict[str, Any]]:
+    async def generate_goal_plan(
+        self,
+        user_id: str,
+        goal_id: int,
+        instruction: str = None,
+        *,
+        persist: bool = True,
+    ) -> Optional[Dict[str, Any]]:
         """
         Generate or update a structured plan for the given goal using the canonical
         <goal_update> XML schema.
@@ -584,6 +591,17 @@ class Architect:
                 f"status={status}, priority={priority}"
             )
             
+            if not persist:
+                return {
+                    "goal_id": goal_id,
+                    "summary": summary,
+                    "status": status or "active",
+                    "priority": priority or "medium",
+                    "category": category or "other",
+                    "plan_steps": plan_steps,
+                    "next_action": next_action
+                }
+
             # Save to database
             # Update goal metadata
             meta_updates = {}

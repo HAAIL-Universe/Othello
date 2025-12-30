@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -211,6 +212,12 @@ class OthelloEngine:
         }
 
     def _compute_streak(self, target_date: date) -> int:
+        global _REFLECTIONS_DB_ONLY_WARNED
+        if _PHASE1_DB_ONLY:
+            if not _REFLECTIONS_DB_ONLY_WARNED:
+                self.logger.warning("OthelloEngine: JSON reflections disabled in Phase-1 DB-only mode")
+                _REFLECTIONS_DB_ONLY_WARNED = True
+            return 0
         files = sorted(self.reflection_dir.glob("reflection_*.json"), reverse=True)
         streak = 0
         for path in files:
@@ -231,6 +238,12 @@ class OthelloEngine:
         return streak
 
     def _rolling_completion_rate(self, window_days: int, include_date: date) -> float:
+        global _REFLECTIONS_DB_ONLY_WARNED
+        if _PHASE1_DB_ONLY:
+            if not _REFLECTIONS_DB_ONLY_WARNED:
+                self.logger.warning("OthelloEngine: JSON reflections disabled in Phase-1 DB-only mode")
+                _REFLECTIONS_DB_ONLY_WARNED = True
+            return 0.0
         cutoff = include_date - timedelta(days=window_days - 1)
         total_planned = 0
         total_done = 0
@@ -294,3 +307,6 @@ class OthelloEngine:
 
 
 __all__ = ["OthelloEngine"]
+
+_PHASE1_DB_ONLY = (os.getenv("OTHELLO_PHASE1_DB_ONLY") or "").strip().lower() in ("1", "true", "yes")
+_REFLECTIONS_DB_ONLY_WARNED = False
