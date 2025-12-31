@@ -854,18 +854,22 @@ def _load_companion_context(
     user_id: Optional[str],
     logger: logging.Logger,
     *,
+    channel: str = "companion",
     max_turns: int = CHAT_CONTEXT_TURNS,
     max_chars: int = CHAT_CONTEXT_MAX_CHARS,
 ) -> List[Dict[str, str]]:
     uid = str(user_id or "").strip()
     if not uid:
         return []
+    channel_name = str(channel or "companion").strip().lower()
+    if channel_name not in {"companion", "planner"}:
+        channel_name = "companion"
     limit = max(0, int(max_turns) * 2)
     if limit <= 0:
         return []
     try:
         from db.messages_repository import list_recent_messages
-        rows = list_recent_messages(uid, limit=limit, channel="companion")
+        rows = list_recent_messages(uid, limit=limit, channel=channel_name)
     except Exception as exc:
         logger.warning(
             "API: failed to load companion history user_id=%s error=%s",
@@ -895,9 +899,10 @@ def _load_companion_context(
     messages.reverse()
     if messages:
         logger.debug(
-            "API: loaded companion history messages=%s chars=%s",
+            "API: loaded history messages=%s chars=%s channel=%s",
             len(messages),
             total_chars,
+            channel_name,
         )
     return messages
 
@@ -2742,6 +2747,10 @@ def handle_message():
         ui_action = raw_ui_action.strip().lower() if isinstance(raw_ui_action, str) else ""
         current_mode = (data.get("current_mode") or "companion").strip().lower()
         current_view = data.get("current_view")
+        raw_channel = data.get("channel")
+        req_channel = str(raw_channel or "companion").strip().lower()
+        if req_channel not in {"companion", "planner"}:
+            req_channel = "companion"
         raw_client_message_id = data.get("client_message_id")
         if raw_client_message_id is None:
             raw_client_message_id = data.get("clientMessageId")
@@ -2782,8 +2791,8 @@ def handle_message():
             return True
 
         companion_context = None
-        if current_mode == "companion" and _should_persist_chat():
-            companion_context = _load_companion_context(user_id, logger)
+        if _should_persist_chat():
+            companion_context = _load_companion_context(user_id, logger, channel=req_channel)
 
         def _persist_chat_exchange(reply_text: Optional[str]) -> None:
             if not reply_text or not _should_persist_chat():
@@ -2798,14 +2807,14 @@ def handle_message():
                     user_id=user_id,
                     transcript=user_input,
                     source="text",
-                    channel="companion",
+                    channel=req_channel,
                     status="final",
                 )
                 create_message(
                     user_id=user_id,
                     transcript=cleaned_reply,
                     source="assistant",
-                    channel="companion",
+                    channel=req_channel,
                     status="final",
                 )
             except Exception as exc:
@@ -2821,7 +2830,7 @@ def handle_message():
             _persist_chat_exchange(reply_text)
             return jsonify(payload)
 
-        if current_mode == "companion" and companion_context:
+        if req_channel == "companion" and companion_context:
             last_assistant = next(
                 (msg for msg in reversed(companion_context) if msg.get("role") == "assistant"),
                 None,
@@ -3121,7 +3130,13 @@ def handle_message():
                     detail = "Missing or invalid OPENAI_API_KEY"
                 else:
                     detail = f"Agent init failed ({type(_agent_init_error).__name__})"
-            fallback_reply = _llm_unavailable_prompt(None)
+            if req_channel == "companion":
+                fallback_reply = _llm_unavailable_prompt(None)
+            else:
+                fallback_reply = (
+                    "I'm having trouble reaching the assistant right now. "
+                    "Could you share a bit more detail so I can help you plan?"
+                )
             response = {
                 "reply": fallback_reply,
                 "agent_status": {"planner_active": False, "had_goal_update_xml": False},
@@ -4062,7 +4077,13 @@ def handle_message():
                     # Check if it's an LLM error - return structured error
                     llm_exc = _unwrap_llm_exception(e)
                     if llm_exc:
-                        agentic_reply = _llm_unavailable_prompt(active_goal.get("id"))
+                        if req_channel == "companion":
+                            agentic_reply = _llm_unavailable_prompt(active_goal.get("id"))
+                        else:
+                            agentic_reply = (
+                                "I'm having trouble reaching the assistant right now. "
+                                "Could you share a bit more detail so I can help you plan?"
+                            )
                         agent_status = {
                             "planner_active": False,
                             "had_goal_update_xml": False,
@@ -4117,7 +4138,13 @@ def handle_message():
                     # Check if it's an LLM error - return structured error
                     llm_exc = _unwrap_llm_exception(e)
                     if llm_exc:
-                        agentic_reply = _llm_unavailable_prompt(active_goal.get("id"))
+                        if req_channel == "companion":
+                            agentic_reply = _llm_unavailable_prompt(active_goal.get("id"))
+                        else:
+                            agentic_reply = (
+                                "I'm having trouble reaching the assistant right now. "
+                                "Could you share a bit more detail so I can help you plan?"
+                            )
                         agent_status = {"planner_active": False, "had_goal_update_xml": False}
                         reply_source = "fallback"
                     else:
@@ -4142,7 +4169,10 @@ def handle_message():
             if _is_placeholder_reply(agentic_reply) or (
                 goal_intent_detected and not (agentic_reply or "").strip()
             ):
-                agentic_reply = _goal_intent_prompt(active_goal.get("id"))
+                if req_channel == "companion":
+                    agentic_reply = _goal_intent_prompt(active_goal.get("id"))
+                else:
+                    agentic_reply = "Please share a bit more detail so I can help you plan."
                 reply_source = "fallback"
 
         if active_goal is None:
@@ -4173,7 +4203,13 @@ def handle_message():
                 # Check if it's an LLM error - return structured error
                 llm_exc = _unwrap_llm_exception(e)
                 if llm_exc:
-                    agentic_reply = _llm_unavailable_prompt(None)
+                    if req_channel == "companion":
+                        agentic_reply = _llm_unavailable_prompt(None)
+                    else:
+                        agentic_reply = (
+                            "I'm having trouble reaching the assistant right now. "
+                            "Could you share a bit more detail so I can help you plan?"
+                        )
                     agent_status = {"planner_active": False, "had_goal_update_xml": False}
                     reply_source = "fallback"
                 else:
@@ -4188,7 +4224,10 @@ def handle_message():
             if _is_placeholder_reply(agentic_reply) or (
                 goal_intent_detected and not (agentic_reply or "").strip()
             ):
-                agentic_reply = _goal_intent_prompt(None)
+                if req_channel == "companion":
+                    agentic_reply = _goal_intent_prompt(None)
+                else:
+                    agentic_reply = "Please share a bit more detail so I can help you plan."
                 reply_source = "fallback"
 
             response = {
