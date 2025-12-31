@@ -1815,7 +1815,7 @@ def v1_create_session():
 @v1.route("/messages", methods=["GET", "POST"])
 def v1_messages():
     if request.method == "GET":
-        user_id, error = _v1_get_user_id()
+        user_id, error = _get_user_id_or_error()
         if error:
             return error
         limit = request.args.get("limit")
@@ -2313,7 +2313,10 @@ def auth_me():
 @app.route("/api/auth/logout", methods=["POST"])
 def auth_logout():
     session.clear()
-    return jsonify({"ok": True})
+    response = jsonify({"ok": True})
+    cookie_name = app.config.get("SESSION_COOKIE_NAME", "session")
+    response.delete_cookie(cookie_name)
+    return response
 
 
 def _dev_reset_enabled() -> bool:

@@ -2075,6 +2075,7 @@
           if (BOOT_DEBUG) console.log('[BOOT] /api/auth/me error', e);
         }
         isAuthed = false;
+        resetAuthBoundary("needs_login");
         showLoginOverlay();
         setBootState(BOOT_STATE.NEEDS_LOGIN);
         if (BOOT_DEBUG) console.log('[BOOT] Transition: NEEDS_LOGIN');
@@ -2144,11 +2145,13 @@
         } catch {}
         // Clear UI state if needed
         isAuthed = false;
-        clearChatState();
-        othelloState.pendingGoalEdit = null;
+        resetAuthBoundary("logout");
         closeSettings();
         showLoginOverlay();
         setBootState(BOOT_STATE.NEEDS_LOGIN);
+        if (window && window.location) {
+          window.location.reload();
+        }
       }
 
       async function handleUnauthorized(origin) {
@@ -3725,6 +3728,45 @@
       othelloState.goalIntentSuggestions = {};
     }
 
+    function resetAuthBoundary(reason) {
+      if (connectRetryTimeout) {
+        clearTimeout(connectRetryTimeout);
+        connectRetryTimeout = null;
+      }
+      if (pendingStartTimeout) {
+        clearTimeout(pendingStartTimeout);
+        pendingStartTimeout = null;
+      }
+      if (recognition && isRecording) {
+        try { recognition.stop(); } catch {}
+        try { recognition.abort(); } catch {}
+      }
+      isRecording = false;
+      clearChatState();
+      othelloState.goals = [];
+      othelloState.activeGoalId = null;
+      othelloState.currentDetailGoalId = null;
+      othelloState.pendingGoalEdit = null;
+      othelloState.goalUpdateCounts = {};
+      othelloState.currentAgentStatus = null;
+      if (goalsList) goalsList.innerHTML = "";
+      if (detailContent) detailContent.innerHTML = "";
+      if (typeof hideGoalDetail === "function") hideGoalDetail();
+      if (plannerHeadline) plannerHeadline.textContent = "Sign in to view today's plan.";
+      if (plannerEnergy) plannerEnergy.textContent = "";
+      if (plannerError) plannerError.style.display = "none";
+      if (plannerRoutinesList) plannerRoutinesList.innerHTML = "";
+      if (plannerRoutinesCount) plannerRoutinesCount.textContent = "";
+      if (plannerGoalsList) plannerGoalsList.innerHTML = "";
+      if (plannerGoalsCount) plannerGoalsCount.textContent = "";
+      if (todayPlanItems) todayPlanItems.innerHTML = "";
+      if (todayPlanSuggestions) todayPlanSuggestions.innerHTML = "";
+      if (todayPlanCount) todayPlanCount.textContent = "";
+      if (buildPlanStatus) buildPlanStatus.textContent = "";
+      updateFocusRibbon();
+      if (BOOT_DEBUG) console.log("[AUTH] Reset boundary", reason || "");
+    }
+
     async function fetchChatHistory(limit = 50) {
       const resp = await fetch(`${V1_MESSAGES_API}?limit=${limit}`, { credentials: "include", cache: "no-store" });
       if (resp.status === 401 || resp.status === 403) {
@@ -3745,6 +3787,7 @@
     }
 
     async function loadChatHistory() {
+      if (!isAuthed) return;
       try {
         const messages = await fetchChatHistory();
         clearChatState();
