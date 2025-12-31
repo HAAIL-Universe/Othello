@@ -3953,9 +3953,12 @@
       bubble.appendChild(meta);
 
       if (role === "bot" && othelloState.currentMode === "companion") {
+        const sourceClientMessageId = options && typeof options.sourceClientMessageId === "string"
+          ? options.sourceClientMessageId.trim()
+          : "";
         const listItems = extractListItems(text);
         if (hasStructuredList(text) && listItems.length) {
-          const bar = createCommitmentBar(listItems, text);
+          const bar = createCommitmentBar(listItems, text, sourceClientMessageId);
           bubble.appendChild(bar);
         }
       }
@@ -4514,7 +4517,7 @@
         }
 
         const data = await res.json();
-        addMessage("bot", data.reply || "[no reply]");
+        addMessage("bot", data.reply || "[no reply]", { sourceClientMessageId: clientMessageId });
         
         // Update agent status display
         if (data.agent_status) {
@@ -4851,7 +4854,78 @@
       return res.json();
     }
 
-    async function postCommitment(action, items, rawText) {
+    function extractGoalTitleFromDraft(rawText) {
+      if (!rawText) return "";
+      const match = rawText.match(/^(?:ok\s*-\s*)?goal:\s*(.+)$/im);
+      if (match) return match[1].trim();
+      return "";
+    }
+
+    async function draftPlanFromSteps(items, rawText, sourceClientMessageId) {
+      const steps = (items || [])
+        .map(item => String(item || "").trim())
+        .filter(Boolean);
+      if (!steps.length) {
+        throw new Error("No steps found.");
+      }
+      const messageIds = [];
+      for (const step of steps) {
+        const payload = await v1Request(
+          V1_MESSAGES_API,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "include",
+            body: JSON.stringify({
+              transcript: step,
+              source: "text",
+              channel: "planner",
+            }),
+          },
+          "Create plan step"
+        );
+        const message = payload && payload.data ? payload.data.message : null;
+        const msgId = message && typeof message.id === "number" ? message.id : null;
+        if (msgId) {
+          messageIds.push(msgId);
+        }
+      }
+      if (!messageIds.length) {
+        throw new Error("No step messages created.");
+      }
+      const goalTitle = extractGoalTitleFromDraft(rawText);
+      const draftPayload = {
+        message_ids: messageIds,
+        channel: "companion",
+        steps,
+      };
+      if (goalTitle) {
+        draftPayload.title = goalTitle;
+      }
+      if (sourceClientMessageId) {
+        draftPayload.source_client_message_id = sourceClientMessageId;
+      }
+      const draft = await v1Request(
+        "/v1/plan/draft",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify(draftPayload),
+        },
+        "Draft plan"
+      );
+      const suggestionIds = Array.isArray(draft?.data?.suggestion_ids)
+        ? draft.data.suggestion_ids
+        : [];
+      console.debug("[Othello UI] plan draft created", {
+        suggestionCount: suggestionIds.length,
+        suggestionIds,
+      });
+      return { suggestionIds };
+    }
+
+    async function postCommitment(action, items, rawText, sourceClientMessageId) {
       const safeItems = items && items.length ? items : [rawText];
       const title = (safeItems[0] || "New commitment").trim();
       let message;
@@ -4882,7 +4956,7 @@
         }
         return res.json();
       } else if (action === "plan") {
-        message = `Add these tasks to today's plan:\n- ${safeItems.join("\n- ")}`;
+        return draftPlanFromSteps(safeItems, rawText, sourceClientMessageId);
       } else if (action === "idea") {
         message = `Save this as an idea/inbox entry:\n${rawText}\nItems:\n- ${safeItems.join("\n- ")}`;
       } else {
@@ -4901,7 +4975,7 @@
       return res.json();
     }
 
-    function createCommitmentBar(items, rawText) {
+    function createCommitmentBar(items, rawText, sourceClientMessageId = "") {
       const bar = document.createElement("div");
       bar.className = "commitment-bar";
 
@@ -4916,14 +4990,29 @@
           status.textContent = "Sending…";
           btn.disabled = true;
           try {
-            await postCommitment(action, items, rawText);
-            status.textContent = "Saved";
+            const result = await postCommitment(action, items, rawText, sourceClientMessageId);
             if (action === "plan") {
-              loadTodayPlanner();
-            } else if (action === "goal") {
-              refreshGoals();
+              const count = Array.isArray(result?.suggestionIds) ? result.suggestionIds.length : 0;
+              const label = `Drafted ${count} plan item${count === 1 ? "" : "s"}`;
+              status.textContent = count ? label : "Drafted plan items";
+              showToast(`${label} \u2014 review in Today Planner \u2192 Pending Suggestions.`);
+              if (othelloState.currentView === "today-planner") {
+                await loadTodayPlanner();
+              } else {
+                setMode("today");
+                switchView("today-planner");
+              }
+            } else {
+              status.textContent = "Saved";
+              if (action === "goal") {
+                refreshGoals();
+              }
             }
           } catch (err) {
+            if (err && (err.status === 401 || err.status === 403)) {
+              await handleUnauthorized("plan-draft-cta");
+              return;
+            }
             status.textContent = err && err.message ? err.message : "Failed";
           } finally {
             setTimeout(() => { status.textContent = ""; }, 1500);
