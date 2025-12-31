@@ -1881,6 +1881,87 @@ def v1_messages():
     return _v1_envelope(data={"message": record}, status=201)
 
 
+@v1.route("/data/clear", methods=["POST"])
+def v1_clear_data():
+    user_id, error = _get_user_id_or_error()
+    if error:
+        return error
+    if not request.is_json:
+        return api_error("VALIDATION_ERROR", "JSON body required", 400)
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return api_error("VALIDATION_ERROR", "JSON object required", 400)
+    confirm = data.get("confirm")
+    if confirm != "DELETE":
+        return api_error("CONFIRM_REQUIRED", "Type DELETE to confirm", 400)
+    scopes = data.get("scopes")
+    if not isinstance(scopes, list) or not scopes:
+        return api_error("VALIDATION_ERROR", "scopes must be a non-empty list", 400)
+    normalized_scopes = []
+    invalid_scopes = []
+    for scope in scopes:
+        if not isinstance(scope, str):
+            invalid_scopes.append(scope)
+            continue
+        cleaned = scope.strip().lower()
+        if cleaned in ("goals", "plans", "insights", "history"):
+            normalized_scopes.append(cleaned)
+        else:
+            invalid_scopes.append(scope)
+    if invalid_scopes:
+        return api_error(
+            "VALIDATION_ERROR",
+            "Invalid scopes provided",
+            400,
+            details={"invalid_scopes": invalid_scopes},
+        )
+
+    deleted: Dict[str, int] = {}
+    from db.database import get_connection
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            if "plans" in normalized_scopes:
+                cursor.execute(
+                    "DELETE FROM plan_items WHERE plan_id IN (SELECT id FROM plans WHERE user_id = %s)",
+                    (user_id,),
+                )
+                deleted["plan_items"] = cursor.rowcount
+                cursor.execute("DELETE FROM plans WHERE user_id = %s", (user_id,))
+                deleted["plans"] = cursor.rowcount
+                cursor.execute("DELETE FROM goal_task_history WHERE user_id = %s", (user_id,))
+                deleted["goal_task_history"] = cursor.rowcount
+            if "goals" in normalized_scopes:
+                cursor.execute(
+                    "DELETE FROM plan_steps WHERE goal_id IN (SELECT id FROM goals WHERE user_id = %s)",
+                    (user_id,),
+                )
+                deleted["goal_steps"] = cursor.rowcount
+                cursor.execute("DELETE FROM goal_events WHERE user_id = %s", (user_id,))
+                deleted["goal_events"] = cursor.rowcount
+                cursor.execute("DELETE FROM goals WHERE user_id = %s", (user_id,))
+                deleted["goals"] = cursor.rowcount
+            if "insights" in normalized_scopes:
+                cursor.execute("DELETE FROM insights WHERE user_id = %s", (user_id,))
+                deleted["insights"] = cursor.rowcount
+            if "history" in normalized_scopes:
+                cursor.execute("DELETE FROM suggestions WHERE user_id = %s", (user_id,))
+                deleted["suggestions"] = cursor.rowcount
+                cursor.execute("DELETE FROM messages WHERE user_id = %s", (user_id,))
+                deleted["messages"] = cursor.rowcount
+                cursor.execute("DELETE FROM sessions WHERE user_id = %s", (user_id,))
+                deleted["sessions"] = cursor.rowcount
+        conn.commit()
+
+    return jsonify(
+        {
+            "ok": True,
+            "request_id": _get_request_id(),
+            "scopes": normalized_scopes,
+            "deleted": deleted,
+        }
+    )
+
+
 @v1.route("/sessions/<int:session_id>/messages", methods=["GET"])
 def v1_list_session_messages(session_id: int):
     user_id, error = _v1_get_user_id()

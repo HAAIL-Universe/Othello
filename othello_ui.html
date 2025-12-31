@@ -1692,6 +1692,19 @@
             <div id="settings-status" class="settings-status"></div>
           </div>
         </div>
+        <div class="settings-section" id="settings-clear-data">
+          <div class="danger-zone">
+            <div class="danger-zone__title">Danger zone</div>
+            <div class="danger-zone__desc">Clear per-user data. This cannot be undone.</div>
+            <div class="settings-actions">
+              <button id="clear-goals-btn" class="settings-button danger" type="button">Clear Goals</button>
+              <button id="clear-plans-btn" class="settings-button danger" type="button">Clear Plans</button>
+              <button id="clear-insights-btn" class="settings-button danger" type="button">Clear Insights</button>
+              <button id="clear-history-btn" class="settings-button danger" type="button">Clear History</button>
+            </div>
+            <div id="clear-data-status" class="settings-status"></div>
+          </div>
+        </div>
       </div>
     </div>
     <div id="archive-overlay" class="settings-overlay" style="display:none;">
@@ -1895,6 +1908,11 @@
     const devResetConfirm = document.getElementById('dev-reset-confirm');
     const devResetBtn = document.getElementById('dev-reset-btn');
     const settingsStatus = document.getElementById('settings-status');
+    const clearGoalsBtn = document.getElementById('clear-goals-btn');
+    const clearPlansBtn = document.getElementById('clear-plans-btn');
+    const clearInsightsBtn = document.getElementById('clear-insights-btn');
+    const clearHistoryBtn = document.getElementById('clear-history-btn');
+    const clearDataStatus = document.getElementById('clear-data-status');
     const archiveOverlay = document.getElementById('archive-overlay');
     const archiveCloseBtn = document.getElementById('archive-close');
     const archiveCancelBtn = document.getElementById('archive-cancel');
@@ -2276,6 +2294,83 @@
         }
       }
 
+      function formatDeletedCounts(deleted) {
+        if (!deleted || typeof deleted !== "object") return "No records deleted.";
+        const parts = Object.entries(deleted).map(([key, value]) => `${key}: ${value}`);
+        return parts.length ? parts.join(", ") : "No records deleted.";
+      }
+
+      async function handleClearData(scopes, label) {
+        if (!isAuthed) return;
+        const confirmText = window.prompt(`Type DELETE to clear ${label}.`);
+        if (confirmText !== "DELETE") {
+          if (clearDataStatus) clearDataStatus.textContent = "Cancelled.";
+          return;
+        }
+        if (clearDataStatus) clearDataStatus.textContent = `Clearing ${label}...`;
+        const payload = { scopes, confirm: "DELETE" };
+        try {
+          const resp = await fetch("/v1/data/clear", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "include",
+            body: JSON.stringify(payload)
+          });
+          if (resp.status === 401 || resp.status === 403) {
+            await handleUnauthorized("clear-data");
+            return;
+          }
+          if (!resp.ok) {
+            let errMsg = `Clear failed (${resp.status}).`;
+            try {
+              const data = await resp.json();
+              errMsg = (data && (data.message || data.error)) || errMsg;
+            } catch {}
+            if (clearDataStatus) clearDataStatus.textContent = errMsg;
+            return;
+          }
+          const data = await resp.json();
+          const deleted = data && data.deleted ? data.deleted : {};
+          if (clearDataStatus) clearDataStatus.textContent = `Cleared ${label}.`;
+          showToast(`Deleted ${formatDeletedCounts(deleted)}`);
+          if (Array.isArray(scopes)) {
+            if (scopes.includes("goals")) {
+              othelloState.goals = [];
+              othelloState.activeGoalId = null;
+              othelloState.goalUpdateCounts = {};
+              updateFocusRibbon();
+              if (typeof hideGoalDetail === "function") hideGoalDetail();
+              if (typeof refreshGoals === "function") {
+                await refreshGoals();
+              }
+            }
+            if (scopes.includes("plans")) {
+              if (typeof loadTodayPlanner === "function") {
+                await loadTodayPlanner();
+              }
+            }
+            if (scopes.includes("insights")) {
+              if (typeof refreshInsightsCounts === "function") {
+                await refreshInsightsCounts();
+              }
+              if (typeof loadInsightsInbox === "function") {
+                await loadInsightsInbox();
+              }
+            }
+            if (scopes.includes("history")) {
+              clearChatState();
+              chatHydrated = false;
+              if (typeof loadChatHistory === "function") {
+                await loadChatHistory();
+              }
+            }
+          }
+        } catch (err) {
+          console.error("[Othello UI] clear data failed", err);
+          if (clearDataStatus) clearDataStatus.textContent = "Clear failed.";
+        }
+      }
+
       function bootApp() {
         setBootState(BOOT_STATE.BOOTING_APP);
         if (BOOT_DEBUG) console.log('[BOOT] Booting app…');
@@ -2376,6 +2471,10 @@
           });
         }
         if (devResetBtn) devResetBtn.onclick = handleDevReset;
+        if (clearGoalsBtn) clearGoalsBtn.onclick = () => handleClearData(["goals"], "goals");
+        if (clearPlansBtn) clearPlansBtn.onclick = () => handleClearData(["plans"], "plans");
+        if (clearInsightsBtn) clearInsightsBtn.onclick = () => handleClearData(["insights"], "insights");
+        if (clearHistoryBtn) clearHistoryBtn.onclick = () => handleClearData(["history"], "history");
       }
 
       if (archiveCloseBtn) archiveCloseBtn.onclick = closeArchiveModal;
