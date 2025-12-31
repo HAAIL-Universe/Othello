@@ -274,6 +274,14 @@ def ensure_core_schema() -> None:
         """,
         "CREATE INDEX IF NOT EXISTS idx_plans_plan_date ON plans(plan_date);",
         "CREATE INDEX IF NOT EXISTS idx_plans_user_date ON plans(user_id, plan_date);",
+        "ALTER TABLE plans ADD COLUMN IF NOT EXISTS plan_id INTEGER GENERATED ALWAYS AS (id) STORED;",
+        "ALTER TABLE plans ADD COLUMN IF NOT EXISTS plan_date_local DATE;",
+        "ALTER TABLE plans ADD COLUMN IF NOT EXISTS timezone TEXT DEFAULT 'UTC';",
+        "ALTER TABLE plans ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'draft';",
+        "ALTER TABLE plans ADD COLUMN IF NOT EXISTS created_at_utc TIMESTAMPTZ DEFAULT NOW();",
+        "ALTER TABLE plans ADD COLUMN IF NOT EXISTS confirmed_at_utc TIMESTAMPTZ;",
+        "UPDATE plans SET plan_date_local = plan_date WHERE plan_date_local IS NULL;",
+        "UPDATE plans SET created_at_utc = created_at WHERE created_at_utc IS NULL;",
 
         # Daily plan items
         """
@@ -298,6 +306,17 @@ def ensure_core_schema() -> None:
         "CREATE INDEX IF NOT EXISTS idx_plan_items_plan ON plan_items(plan_id);",
         "CREATE INDEX IF NOT EXISTS idx_plan_items_status ON plan_items(status);",
         "CREATE INDEX IF NOT EXISTS idx_plan_items_type ON plan_items(type);",
+        "ALTER TABLE plan_items ADD COLUMN IF NOT EXISTS user_id TEXT;",
+        "ALTER TABLE plan_items ADD COLUMN IF NOT EXISTS source_kind TEXT;",
+        "ALTER TABLE plan_items ADD COLUMN IF NOT EXISTS source_id TEXT;",
+        "ALTER TABLE plan_items ADD COLUMN IF NOT EXISTS title TEXT;",
+        "ALTER TABLE plan_items ADD COLUMN IF NOT EXISTS order_index INTEGER;",
+        "ALTER TABLE plan_items ADD COLUMN IF NOT EXISTS notes TEXT;",
+        "ALTER TABLE plan_items ADD COLUMN IF NOT EXISTS created_at_utc TIMESTAMPTZ DEFAULT NOW();",
+        "ALTER TABLE plan_items ADD COLUMN IF NOT EXISTS updated_at_utc TIMESTAMPTZ DEFAULT NOW();",
+        "UPDATE plan_items SET created_at_utc = created_at WHERE created_at_utc IS NULL;",
+        "UPDATE plan_items SET updated_at_utc = updated_at WHERE updated_at_utc IS NULL;",
+        "UPDATE plan_items SET user_id = plans.user_id FROM plans WHERE plan_items.plan_id = plans.id AND plan_items.user_id IS NULL;",
 
         # Suggestions (confirm-gated inference)
         """

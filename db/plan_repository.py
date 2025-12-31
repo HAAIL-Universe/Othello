@@ -3,6 +3,8 @@ from typing import Any, Dict, List, Optional
 
 import logging
 
+from psycopg2.extras import Json
+
 from db.database import execute_query, fetch_one, fetch_all, execute_and_fetch_one
 
 
@@ -92,11 +94,18 @@ def insert_plan_item(plan_id: int, item: Dict[str, Any]) -> Optional[Dict[str, A
     query = """
         INSERT INTO plan_items (
             plan_id, item_id, type, section, status, reschedule_to, skip_reason,
-            priority, effort, energy, metadata, created_at, updated_at
+            priority, effort, energy, metadata, user_id, source_kind, source_id,
+            title, order_index, notes, created_at, updated_at, created_at_utc, updated_at_utc
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
+        VALUES (
+            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+            COALESCE(%s, (SELECT user_id FROM plans WHERE id = %s)),
+            %s, %s, %s, %s, %s,
+            NOW(), NOW(), NOW(), NOW()
+        )
         RETURNING id, plan_id, item_id, type, section, status, reschedule_to, skip_reason,
-                  priority, effort, energy, metadata, created_at, updated_at;
+                  priority, effort, energy, metadata, user_id, source_kind, source_id,
+                  title, order_index, notes, created_at, updated_at, created_at_utc, updated_at_utc;
     """
     return execute_and_fetch_one(
         query,
@@ -111,7 +120,14 @@ def insert_plan_item(plan_id: int, item: Dict[str, Any]) -> Optional[Dict[str, A
             item.get("priority"),
             item.get("effort"),
             item.get("energy_profile") or item.get("energy"),
-            item.get("metadata") or item,
+            Json(item.get("metadata") or item),
+            item.get("user_id"),
+            plan_id,
+            item.get("source_kind"),
+            item.get("source_id"),
+            item.get("title"),
+            item.get("order_index"),
+            item.get("notes"),
         ),
     )
 
@@ -129,7 +145,8 @@ def replace_plan_items(plan_id: int, items: List[Dict[str, Any]]) -> List[Dict[s
 def get_plan_items(plan_id: int) -> List[Dict[str, Any]]:
     query = """
         SELECT id, plan_id, item_id, type, section, status, reschedule_to, skip_reason,
-               priority, effort, energy, metadata, created_at, updated_at
+               priority, effort, energy, metadata, user_id, source_kind, source_id,
+               title, order_index, notes, created_at, updated_at, created_at_utc, updated_at_utc
         FROM plan_items
         WHERE plan_id = %s
         ORDER BY id ASC;
@@ -180,9 +197,110 @@ def update_plan_item_status(
 def get_plan_item(plan_id: int, item_id: str) -> Optional[Dict[str, Any]]:
     query = """
         SELECT id, plan_id, item_id, type, section, status, reschedule_to, skip_reason,
-               priority, effort, energy, metadata, created_at, updated_at
+               priority, effort, energy, metadata, user_id, source_kind, source_id,
+               title, order_index, notes, created_at, updated_at, created_at_utc, updated_at_utc
         FROM plan_items
         WHERE plan_id = %s AND item_id = %s
         LIMIT 1;
     """
     return fetch_one(query, (plan_id, item_id))
+
+
+def get_user_timezone(user_id: str) -> str:
+    row = fetch_one("SELECT timezone FROM users WHERE user_id = %s", (user_id,))
+    timezone = (row or {}).get("timezone") if row else None
+    return timezone or "UTC"
+
+
+def get_plan_by_local_date(user_id: str, plan_date_local: date) -> Optional[Dict[str, Any]]:
+    query = """
+        SELECT id, user_id,
+               COALESCE(plan_date_local, plan_date) AS plan_date_local,
+               timezone, status, created_at_utc, confirmed_at_utc
+        FROM plans
+        WHERE user_id = %s AND COALESCE(plan_date_local, plan_date) = %s
+        LIMIT 1;
+    """
+    return fetch_one(query, (user_id, plan_date_local))
+
+
+def get_plan_with_items_by_local_date(user_id: str, plan_date_local: date) -> Optional[Dict[str, Any]]:
+    plan = get_plan_by_local_date(user_id, plan_date_local)
+    if not plan:
+        return None
+    items = list_plan_items_ordered(plan["id"])
+    plan["items"] = items
+    return plan
+
+
+def upsert_plan_header(
+    user_id: str,
+    plan_date_local: date,
+    timezone: str,
+    status: str,
+    confirmed_at_utc: Optional[Any] = None,
+) -> Optional[Dict[str, Any]]:
+    query = """
+        INSERT INTO plans (
+            user_id, plan_date, plan_date_local, timezone, status,
+            created_at, updated_at, created_at_utc, confirmed_at_utc
+        )
+        VALUES (%s, %s, %s, %s, %s, NOW(), NOW(), NOW(), %s)
+        ON CONFLICT (user_id, plan_date)
+        DO UPDATE SET
+            plan_date_local = EXCLUDED.plan_date_local,
+            timezone = EXCLUDED.timezone,
+            status = EXCLUDED.status,
+            confirmed_at_utc = COALESCE(plans.confirmed_at_utc, EXCLUDED.confirmed_at_utc),
+            updated_at = NOW()
+        RETURNING id, user_id, plan_date_local, timezone, status, created_at_utc, confirmed_at_utc;
+    """
+    return execute_and_fetch_one(
+        query,
+        (
+            user_id,
+            plan_date_local,
+            plan_date_local,
+            timezone,
+            status,
+            confirmed_at_utc,
+        ),
+    )
+
+
+def list_plan_items_ordered(plan_id: int) -> List[Dict[str, Any]]:
+    query = """
+        SELECT id, plan_id, item_id, title, status, order_index, notes,
+               source_kind, source_id, created_at_utc, updated_at_utc
+        FROM plan_items
+        WHERE plan_id = %s
+        ORDER BY order_index NULLS LAST, id ASC;
+    """
+    return fetch_all(query, (plan_id,))
+
+
+def get_next_plan_item_order_index(plan_id: int) -> int:
+    row = fetch_one("SELECT COALESCE(MAX(order_index), 0) AS max_order FROM plan_items WHERE plan_id = %s", (plan_id,))
+    return int((row or {}).get("max_order") or 0) + 1
+
+
+def insert_plan_item_from_payload(
+    *,
+    plan_id: int,
+    user_id: str,
+    payload: Dict[str, Any],
+    order_index: int,
+) -> Optional[Dict[str, Any]]:
+    item = {
+        "item_id": payload.get("item_id") or f"suggestion:{payload.get('suggestion_id')}",
+        "type": "plan_item",
+        "status": payload.get("status") or "planned",
+        "title": payload.get("title") or "Untitled plan item",
+        "order_index": order_index,
+        "notes": payload.get("notes"),
+        "source_kind": payload.get("source_kind"),
+        "source_id": payload.get("source_id"),
+        "user_id": user_id,
+        "metadata": payload,
+    }
+    return insert_plan_item(plan_id, item)

@@ -1780,6 +1780,20 @@
             <div class="planner-subline" id="planner-energy"></div>
           </div>
           <div id="planner-error" class="planner-error" style="display:none;"></div>
+          <div class="planner-card" id="today-plan-card">
+            <div class="planner-card__header">
+              <div class="planner-section__title">Today Plan</div>
+              <div class="planner-section__count" id="today-plan-count"></div>
+            </div>
+            <div class="planner-actions" style="margin-bottom: 0.75rem;">
+              <button class="planner-action-btn" id="build-plan-btn">Build today's plan</button>
+              <div class="planner-section__count" id="build-plan-status"></div>
+            </div>
+            <div id="today-plan-error" class="planner-error" style="display:none;"></div>
+            <div class="planner-blocks" id="today-plan-items"></div>
+            <div class="planner-section__title" style="margin-top: 0.75rem;">Pending Suggestions</div>
+            <div class="planner-blocks" id="today-plan-suggestions"></div>
+          </div>
           <div class="planner-card" id="planner-routines">
             <div class="planner-card__header">
               <div class="planner-section__title">Routines</div>
@@ -2418,6 +2432,12 @@
     const plannerRoutinesCount = document.getElementById('planner-routines-count');
     const plannerGoalsList = document.getElementById('planner-goals-list');
     const plannerGoalsCount = document.getElementById('planner-goals-count');
+    const todayPlanCount = document.getElementById('today-plan-count');
+    const todayPlanItems = document.getElementById('today-plan-items');
+    const todayPlanError = document.getElementById('today-plan-error');
+    const todayPlanSuggestions = document.getElementById('today-plan-suggestions');
+    const buildPlanBtn = document.getElementById('build-plan-btn');
+    const buildPlanStatus = document.getElementById('build-plan-status');
     const insightsList = document.getElementById('insights-list');
     const insightsEmpty = document.getElementById('insights-empty');
     const insightsError = document.getElementById('insights-error');
@@ -2739,6 +2759,235 @@
       return data.plan || {};
     }
 
+    function setTodayPlanError(message, requestId) {
+      if (!todayPlanError) return;
+      const suffix = requestId ? ` (request_id: ${requestId})` : "";
+      todayPlanError.textContent = `${message || "Plan error."}${suffix}`;
+      todayPlanError.style.display = "block";
+    }
+    function clearTodayPlanError() {
+      if (!todayPlanError) return;
+      todayPlanError.textContent = "";
+      todayPlanError.style.display = "none";
+    }
+    function setBuildPlanStatus(message) {
+      if (!buildPlanStatus) return;
+      buildPlanStatus.textContent = message || "";
+    }
+    async function v1Request(url, options, label) {
+      const resp = await fetch(url, options);
+      if (resp.status === 401 || resp.status === 403) {
+        const err = new Error("Unauthorized");
+        err.status = resp.status;
+        throw err;
+      }
+      let payload = null;
+      try {
+        payload = await resp.json();
+      } catch {}
+      if (!resp.ok || (payload && payload.ok === false)) {
+        const message = payload && payload.error && payload.error.message
+          ? payload.error.message
+          : `${label} failed (${resp.status}).`;
+        const err = new Error(message);
+        err.status = resp.status;
+        err.requestId = payload && payload.request_id ? payload.request_id : null;
+        throw err;
+      }
+      return payload;
+    }
+    async function fetchV1TodayPlan() {
+      const payload = await v1Request("/v1/read/today", { cache: "no-store", credentials: "include" }, "Today plan");
+      return payload?.data?.plan || {};
+    }
+    async function fetchPlanItemSuggestions() {
+      const payload = await v1Request(
+        "/v1/suggestions?status=pending&kind=plan_item&limit=20",
+        { credentials: "include" },
+        "Plan suggestions"
+      );
+      return Array.isArray(payload?.data?.suggestions) ? payload.data.suggestions : [];
+    }
+    function renderTodayPlanItems(plan) {
+      if (!todayPlanItems) return;
+      const items = Array.isArray(plan && plan.items) ? plan.items : [];
+      todayPlanItems.innerHTML = "";
+      if (todayPlanCount) {
+        todayPlanCount.textContent = `${items.length} item${items.length === 1 ? "" : "s"}`;
+      }
+      if (!items.length) {
+        todayPlanItems.innerHTML = `<div class="planner-empty">No plan items yet.</div>`;
+        return;
+      }
+      items.forEach((item) => {
+        const row = document.createElement("div");
+        row.className = "planner-task";
+        const left = document.createElement("div");
+        const label = document.createElement("div");
+        label.className = "planner-task__label";
+        label.textContent = item.title || item.notes || "Untitled plan item";
+        left.appendChild(label);
+        const right = document.createElement("div");
+        right.className = "planner-block__right";
+        right.appendChild(createStatusChip(item.status || "planned"));
+
+        row.appendChild(left);
+        row.appendChild(right);
+        todayPlanItems.appendChild(row);
+      });
+    }
+    function renderPlanSuggestions(suggestions) {
+      if (!todayPlanSuggestions) return;
+      const items = Array.isArray(suggestions) ? suggestions : [];
+      todayPlanSuggestions.innerHTML = "";
+      if (!items.length) {
+        todayPlanSuggestions.innerHTML = `<div class="planner-empty">No pending plan suggestions.</div>`;
+        return;
+      }
+      items.forEach((suggestion) => {
+        const card = document.createElement("div");
+        card.className = "planner-block";
+
+        const header = document.createElement("div");
+        header.className = "planner-block__header";
+
+        const headerLeft = document.createElement("div");
+        const title = document.createElement("div");
+        title.className = "planner-block__title";
+        const payload = suggestion && suggestion.payload ? suggestion.payload : {};
+        title.textContent = payload.title || `Suggestion ${suggestion.id || ""}`.trim();
+
+        headerLeft.appendChild(title);
+
+        const headerRight = document.createElement("div");
+        headerRight.className = "planner-block__right";
+        headerRight.appendChild(createStatusChip("pending"));
+
+        const confirmBtn = document.createElement("button");
+        confirmBtn.className = "planner-action-btn";
+        confirmBtn.textContent = "Confirm";
+        confirmBtn.addEventListener("click", async () => {
+          if (!suggestion || !suggestion.id) return;
+          confirmBtn.disabled = true;
+          try {
+            await v1Request(
+              `/v1/suggestions/${suggestion.id}/accept`,
+              {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                credentials: "include",
+                body: JSON.stringify({ reason: "confirm" })
+              },
+              "Confirm suggestion"
+            );
+            setBuildPlanStatus("Suggestion confirmed.");
+            await loadTodayPlanPanel();
+          } catch (err) {
+            if (err && (err.status === 401 || err.status === 403)) {
+              await handleUnauthorized('today-plan-accept');
+              return;
+            }
+            setTodayPlanError(err && err.message ? err.message : "Could not confirm suggestion.", err && err.requestId ? err.requestId : null);
+          } finally {
+            confirmBtn.disabled = false;
+          }
+        });
+
+        headerRight.appendChild(confirmBtn);
+        header.appendChild(headerLeft);
+        header.appendChild(headerRight);
+        card.appendChild(header);
+
+        todayPlanSuggestions.appendChild(card);
+      });
+    }
+    function getLatestChatMessageText() {
+      const entries = Object.values(othelloState.messagesByClientId || {});
+      if (!entries.length) return null;
+      entries.sort((a, b) => (b.ts || 0) - (a.ts || 0));
+      const latest = entries[0];
+      return latest && typeof latest.text === "string" ? latest.text.trim() : null;
+    }
+    async function createV1MessageFromText(text) {
+      const payload = await v1Request(
+        "/v1/messages",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({ transcript: text, source: "text" })
+        },
+        "Create message"
+      );
+      return payload?.data?.message || null;
+    }
+    async function buildPlanDraftPayload() {
+      const recentText = getLatestChatMessageText();
+      if (recentText) {
+        const message = await createV1MessageFromText(recentText);
+        if (message && typeof message.id === "number") {
+          return { payload: { message_ids: [message.id] }, note: "Drafting from latest chat message." };
+        }
+      }
+      return { payload: { include_rollover: true }, note: "No recent chat message found; drafting from rollover only." };
+    }
+    async function loadTodayPlanPanel() {
+      if (!todayPlanItems || !todayPlanSuggestions) return;
+      clearTodayPlanError();
+      try {
+        const plan = await fetchV1TodayPlan();
+        renderTodayPlanItems(plan);
+      } catch (e) {
+        if (e && (e.status === 401 || e.status === 403)) {
+          await handleUnauthorized('today-plan-read');
+          return;
+        }
+        setTodayPlanError(e && e.message ? e.message : "Failed to load today plan.", e && e.requestId ? e.requestId : null);
+      }
+      try {
+        const suggestions = await fetchPlanItemSuggestions();
+        renderPlanSuggestions(suggestions);
+      } catch (e) {
+        if (e && (e.status === 401 || e.status === 403)) {
+          await handleUnauthorized('today-plan-suggestions');
+          return;
+        }
+        setTodayPlanError(e && e.message ? e.message : "Failed to load plan suggestions.", e && e.requestId ? e.requestId : null);
+      }
+    }
+    async function handleBuildPlanClick() {
+      if (!buildPlanBtn) return;
+      clearTodayPlanError();
+      buildPlanBtn.disabled = true;
+      setBuildPlanStatus("Drafting...");
+      try {
+        const seed = await buildPlanDraftPayload();
+        if (seed.note) setBuildPlanStatus(seed.note);
+        const payload = await v1Request(
+          "/v1/plan/draft",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "include",
+            body: JSON.stringify(seed.payload)
+          },
+          "Draft plan"
+        );
+        const ids = Array.isArray(payload?.data?.suggestion_ids) ? payload.data.suggestion_ids : [];
+        setBuildPlanStatus(`Drafted ${ids.length} suggestion${ids.length === 1 ? "" : "s"}.`);
+        await loadTodayPlanPanel();
+      } catch (e) {
+        if (e && (e.status === 401 || e.status === 403)) {
+          await handleUnauthorized('today-plan-draft');
+          return;
+        }
+        setTodayPlanError(e && e.message ? e.message : "Could not draft plan.", e && e.requestId ? e.requestId : null);
+      } finally {
+        buildPlanBtn.disabled = false;
+      }
+    }
+    if (buildPlanBtn) buildPlanBtn.addEventListener("click", handleBuildPlanClick);
+
     function renderTodayBrief(plan, brief) {
       const sections = (plan && plan.sections) || {};
       const routines = sections.routines || [];
@@ -2992,6 +3241,7 @@
         if (BOOT_DEBUG) console.log("[Today Planner] goalTasks count", goalTasks.length, { source: "ui", planSource: plan._plan_source });
         renderTodayBrief(plan, brief);
         renderPlannerSections(plan, goalTasks);
+        await loadTodayPlanPanel();
       } catch (e) {
         let httpStatus = null;
         if (e && (e.status === 401 || e.status === 403)) {

@@ -1,0 +1,51 @@
+from __future__ import annotations
+from datetime import datetime
+from typing import Any, Dict, List
+
+CAPABILITIES_VERSION = "2025-01-01"
+_CAPABILITIES: List[Dict[str, Any]] = [
+    {"id": "capabilities_help", "title": "Capabilities checklist", "phase": "phase1", "status": "available", "trigger": "Chat: 'what can you do', 'help', '/help', 'capabilities'; or GET /v1/capabilities.", "expected": "Returns deterministic list from registry.", "endpoints": ["GET /v1/capabilities -> {version, generated_at, capabilities[]}", "POST /api/message (help patterns) -> {reply, meta.intent=capabilities_help}"], "verify": ["GET /v1/capabilities returns JSON list.", "Send 'what can you do' in chat."], "notes": "Chat shortcut bypasses LLM."},
+    {"id": "service_health", "title": "Service health and readiness probes", "phase": "phase1", "status": "available", "trigger": "Call health endpoints from any client.", "expected": "Health ok; readiness shows LLM config; DB check tests connectivity.", "endpoints": ["GET /api/health -> {ok:true}", "GET /ready -> {ok, ready, reason?}", "GET /api/health/db -> {status, message, database}", "GET /v1/health -> {ok:true}", "GET /v1/ready -> {ready, openai_key_present, reason?}"], "verify": ["curl /api/health and /ready; DB check needs DATABASE_URL."], "notes": "Readiness requires OPENAI_API_KEY."},
+    {"id": "auth_session", "title": "Session auth (login/me/logout)", "phase": "phase1", "status": "available", "trigger": "Login overlay or POST /api/auth/login with access code.", "expected": "Sets session cookie; /me reports authed state.", "endpoints": ["POST /api/auth/login body {password|access_code|code|pin} -> {ok, auth_mode, user_id}", "GET /api/auth/me -> {ok, authed, user_id}", "POST /api/auth/logout -> {ok:true}", "v1 auth wrappers mirror these"], "verify": ["POST /api/auth/login then GET /api/auth/me returns authed=true."], "notes": "Requires OTHELLO_* auth env and cookie support."},
+    {"id": "chat_core", "title": "Chat + goal-intent suggestions", "phase": "phase1", "status": "available", "trigger": "Chat view send message (text or mic -> SpeechRecognition).", "expected": "Returns LLM reply; may include goal-intent suggestions; supports 'list my goals' and 'goal <id>'.", "endpoints": ["POST /api/message body {message, goal_id?, active_goal_id?, current_mode?, current_view?, client_message_id?, ui_action?} -> {reply, meta?, agent_status?}", "POST /api/suggestions/dismiss body {type, source_client_message_id} -> {ok:true}"], "verify": ["Send a message; observe reply and suggestion panel (if any)."], "notes": "Mic uses browser STT; no audio upload/STT endpoints in this repo."},
+    {"id": "goals_read_focus", "title": "Goal read + focus/unfocus", "phase": "phase1", "status": "available", "trigger": "Goals tab, 'list my goals', 'goal 1', or focus ribbon.", "expected": "Lists goals, loads detail with steps, sets/clears active goal.", "endpoints": ["GET /api/goals -> {goals}", "GET /api/goals/<goal_id> -> {goal}", "GET /api/goals/active-with-next-actions -> {goals}", "POST /api/goals/unfocus -> {ok, request_id}"], "verify": ["Open Goals tab; open a goal detail; send 'goal 1' in chat."], "notes": "Focus set via /api/message shortcut."},
+    {"id": "goal_writes_legacy", "title": "Goal creation, notes, archive (legacy)", "phase": "legacy", "status": "blocked_phase1", "trigger": "Goal intent Save/Add or archive button (Phase-1 disabled).", "expected": "Creates goals, adds notes, archives goals.", "endpoints": ["POST /api/goals body {title, description?, source_client_message_id?} -> {ok, created, goal_id}", "POST /api/goals/<goal_id>/notes body {text} -> {ok, goal_id}", "POST /api/goals/<goal_id>/archive -> {ok, status:'archived'}"], "verify": ["POST /api/goals then GET /api/goals to confirm the new goal."], "notes": "Blocked when OTHELLO_PHASE1 or OTHELLO_PHASE=phase1."},
+    {"id": "goal_steps_legacy", "title": "Goal plan/step updates (legacy)", "phase": "legacy", "status": "blocked_phase1", "trigger": "Goal detail step toggles or plan generation (Phase-1 disabled).", "expected": "Updates step status/detail or generates plan steps via LLM.", "endpoints": ["POST /api/goals/<goal_id>/steps/<step_id>/status body {status} -> {step}", "POST /api/goals/<goal_id>/steps/<step_id>/detail body {detail, step_index?} -> {step}", "POST /api/goals/<goal_id>/plan body {instruction?} -> {goal}"], "verify": ["POST a step status update and re-fetch the goal detail."], "notes": "Blocked in Phase-1; /plan requires LLM."},
+    {"id": "plan_suggestions", "title": "Plan suggestions from text/intent (confirm-gated)", "phase": "phase1", "status": "available", "trigger": "Goal detail planner actions (plan_from_text_append/plan_from_intent).", "expected": "Creates pending goal_plan suggestion; confirmation required.", "endpoints": ["POST /api/message ui_action=plan_from_text_append + plan_text -> {meta.pending_suggestion_id}", "POST /api/message ui_action=plan_from_intent + {intent_index, intent_text} -> {meta.pending_suggestion_id}", "POST /api/confirm or /v1/confirm body {decisions:[{suggestion_id, action}]} -> {results}"], "verify": ["Submit plan text, then confirm via /api/confirm."], "notes": "Suggestions only; no auto-write."},
+    {"id": "suggestions_pipeline_v1", "title": "Suggestions pipeline (v1 analyze + confirm)", "phase": "phase1", "status": "available", "trigger": "POST /v1/analyze with message_ids.", "expected": "Creates pending suggestions; listable and confirmable via v1 endpoints.", "endpoints": ["POST /v1/analyze body {message_ids:[int], llm_error_code?} -> {suggestions, analyzed_message_ids}", "GET /v1/suggestions?status=pending&kind?&limit? -> {suggestions}", "POST /v1/confirm body {decisions:[{suggestion_id, action, reason?}]} -> {results}"], "verify": ["Create a message via /v1/messages, then POST /v1/analyze."], "notes": "UI is not wired to /v1/analyze."},
+    {"id": "messages_sessions_v1", "title": "Messages + sessions (v1)", "phase": "phase1", "status": "available", "trigger": "API client posts transcripts to /v1/messages.", "expected": "Creates message/session records and supports status/transcript updates.", "endpoints": ["POST /v1/sessions -> {session_id}", "POST /v1/messages body {transcript|text, source?, session_id?} -> {message}", "GET /v1/sessions/<session_id>/messages -> {session_id, messages}", "GET /v1/messages/<message_id> -> {message}", "PATCH /v1/messages/<message_id> body {status?, transcript?} -> {message}", "POST /v1/messages/<message_id>/finalize body {transcript} -> {message}"], "verify": ["POST /v1/messages, then GET /v1/messages/<id>."], "notes": "No audio upload/STT endpoints in this repo."},
+    {"id": "history_events", "title": "History + goal task log read", "phase": "phase1", "status": "available", "trigger": "API read of goal events or task history.", "expected": "Returns recent goal events or task history slice.", "endpoints": ["GET /v1/read/history?limit=100 -> {events}", "GET /api/goal-tasks/history?status?&start_date?&end_date?&days? -> {goal_tasks}"], "verify": ["GET /v1/read/history?limit=10."], "notes": "Goal task history is API-only; UI does not call it."},
+    {"id": "today_plan", "title": "Today plan + brief", "phase": "phase2", "status": "available", "trigger": "Mode switch -> Today Planner view.", "expected": "Returns plan sections and brief; supports update/rebuild.", "endpoints": ["GET /api/today-plan?mood?&fatigue?&time_pressure? -> {plan}", "GET /api/today-brief?mood?&fatigue?&time_pressure? -> {brief}", "POST /api/plan/update body {item_id, status, ...} -> {plan}", "POST /api/plan/rebuild body {mood_context?} -> {plan}"], "verify": ["Open Today Planner view; confirm brief + sections render."], "notes": "Not part of Phase-1 scope."},
+    {"id": "insights_workflow", "title": "Insights inbox", "phase": "phase2", "status": "available", "trigger": "Insights tab in UI.", "expected": "Lists pending insights; apply/dismiss updates status and counts.", "endpoints": ["GET /api/insights/summary -> {pending_counts}", "GET /api/insights/list?status=pending -> {insights}", "POST /api/insights/apply body {id} -> {ok, applied_count}", "POST /api/insights/dismiss body {id} -> {ok}"], "verify": ["Open Insights tab; apply/dismiss if any entries exist."], "notes": "Insight creation depends on LLM/DB; apply may create goals/plan items."},
+    {"id": "admin_reset", "title": "Admin reset (dev only)", "phase": "dev", "status": "admin_only", "trigger": "Settings -> Dev reset (requires OTHELLO_ENABLE_DEV_RESET=true).", "expected": "Wipes DB tables and returns truncated table list.", "endpoints": ["GET /api/admin/capabilities -> {dev_reset_enabled}", "POST /api/admin/reset body {confirm:'RESET'} -> {ok, tables}"], "verify": ["GET /api/admin/capabilities, then POST /api/admin/reset with confirm=RESET."], "notes": "Destructive; dev only."},
+]
+
+def get_capabilities() -> List[Dict[str, Any]]:
+    return list(_CAPABILITIES)
+
+def get_capabilities_payload() -> Dict[str, Any]:
+    return {"version": CAPABILITIES_VERSION, "generated_at": datetime.utcnow().isoformat() + "Z", "capabilities": get_capabilities()}
+
+def get_help_capabilities(*, phase1_only: bool) -> List[Dict[str, Any]]:
+    allowed = {"available", "partial"}
+    if not phase1_only:
+        return [cap for cap in _CAPABILITIES if cap.get("status") in allowed]
+    return [cap for cap in _CAPABILITIES if cap.get("phase") == "phase1" and cap.get("status") in allowed]
+
+def format_capabilities_for_chat(*, phase1_only: bool) -> str:
+    caps = get_help_capabilities(phase1_only=phase1_only)
+    header = "Available now (Phase 1):" if phase1_only else "Available capabilities:"
+    lines = [header]
+    for cap in caps:
+        title = cap.get("title") or cap.get("id")
+        trigger = cap.get("trigger") or ""
+        verify = cap.get("verify") or []
+        verify_text = verify[0] if isinstance(verify, list) and verify else ""
+        phase = cap.get("phase")
+        lines.append(f"- {title} ({phase})" if phase else f"- {title}")
+        if trigger:
+            lines.append(f"  Trigger: {trigger}")
+        if verify_text:
+            lines.append(f"  How to test: {verify_text}")
+    lines.append("Full list: GET /v1/capabilities")
+    return "\n".join(lines)

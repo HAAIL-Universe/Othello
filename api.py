@@ -2,7 +2,8 @@ import logging
 import os
 import re
 import time
-from datetime import date, timedelta, datetime
+from datetime import date, timedelta, datetime, timezone
+from zoneinfo import ZoneInfo
 from flask import Flask, request, jsonify, send_file, session, send_from_directory, g, Blueprint
 from flask_cors import CORS
 import asyncio
@@ -11,6 +12,11 @@ from functools import wraps
 from passlib.hash import bcrypt
 import mimetypes
 from utils.llm_config import is_openai_configured, get_openai_api_key
+from core.capabilities_registry import (
+    format_capabilities_for_chat,
+    get_capabilities_payload,
+    get_help_capabilities,
+)
 import openai
 import httpx
 import uuid
@@ -575,6 +581,21 @@ def is_goal_list_request(text: str) -> bool:
     return any(phrase in t for phrase in goal_list_phrases)
 
 
+def is_help_request(text: str) -> bool:
+    if not text:
+        return False
+    normalized = re.sub(r"\s+", " ", text.strip().lower())
+    normalized = normalized.rstrip(" ?")
+    help_phrases = {
+        "help",
+        "/help",
+        "capabilities",
+        "what can you do",
+        "what can you do for me",
+    }
+    return normalized in help_phrases
+
+
 def format_goal_list(goals) -> str:
     """
     Turn the GoalManager list into a human-friendly reply string.
@@ -597,6 +618,53 @@ def format_goal_list(goals) -> str:
             lines.append(f"- Goal #{goal_id}: {text}")
 
     return "\n".join(lines)
+
+
+def _parse_date_local(value: Any) -> Optional[date]:
+    if value is None:
+        return None
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return value
+    try:
+        return datetime.strptime(str(value).strip(), "%Y-%m-%d").date()
+    except Exception:
+        return None
+
+
+def _serialize_datetime(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    if hasattr(value, "isoformat"):
+        return value.isoformat()
+    return str(value)
+
+
+def _normalize_timezone(value: Optional[str], logger: logging.Logger) -> str:
+    timezone_name = (value or "UTC").strip() or "UTC"
+    try:
+        ZoneInfo(timezone_name)
+        return timezone_name
+    except Exception:
+        logger.warning("API: invalid timezone '%s', defaulting to UTC", timezone_name)
+        return "UTC"
+
+
+def _resolve_plan_date_and_timezone(
+    *,
+    user_id: str,
+    date_local: Optional[Any],
+    timezone_name: Optional[str],
+    logger: logging.Logger,
+) -> tuple[date, str]:
+    from db.plan_repository import get_user_timezone
+
+    fallback_timezone = get_user_timezone(user_id)
+    resolved_timezone = _normalize_timezone(timezone_name or fallback_timezone, logger)
+    parsed_date = _parse_date_local(date_local)
+    if parsed_date:
+        return parsed_date, resolved_timezone
+    local_now = datetime.now(ZoneInfo(resolved_timezone))
+    return local_now.date(), resolved_timezone
 
 
 def _suggestion_key(suggestion_type: str, source_client_message_id: str) -> str:
@@ -1298,9 +1366,16 @@ def _apply_suggestion_decisions(
     from db.goals_repository import create_goal, update_goal_meta
     from db.goal_events_repository import safe_append_goal_event
     from db.db_goal_manager import DbGoalManager
+    from db.plan_repository import (
+        get_next_plan_item_order_index,
+        insert_plan_item_from_payload,
+        upsert_plan_header,
+    )
 
     results: List[Dict[str, Any]] = []
     goal_mgr = DbGoalManager()
+    logger = logging.getLogger("API.Confirm")
+    request_id = _get_request_id()
     for entry in decisions:
         if not isinstance(entry, dict):
             results.append({"ok": False, "error": "invalid_decision"})
@@ -1337,6 +1412,13 @@ def _apply_suggestion_decisions(
                         "goal_plan_rejected",
                         {"suggestion_id": suggestion_id, "reason": reason, "source": event_source},
                     )
+            if kind == "plan_item":
+                logger.info(
+                    "API: plan_item rejected request_id=%s user_id=%s suggestion_id=%s",
+                    request_id,
+                    user_id,
+                    suggestion_id,
+                )
             results.append({"ok": True, "suggestion": updated, "action": "rejected"})
             continue
 
@@ -1355,6 +1437,60 @@ def _apply_suggestion_decisions(
             )
             updated = update_suggestion_status(user_id, suggestion_id, "accepted", decided_reason=reason)
             results.append({"ok": True, "action": "accepted", "goal": goal, "suggestion": updated})
+            continue
+
+        if kind == "plan_item":
+            plan_date_local, timezone_name = _resolve_plan_date_and_timezone(
+                user_id=user_id,
+                date_local=payload.get("plan_date_local") or payload.get("date_local"),
+                timezone_name=payload.get("timezone"),
+                logger=logger,
+            )
+            plan = upsert_plan_header(
+                user_id=user_id,
+                plan_date_local=plan_date_local,
+                timezone=timezone_name,
+                status="confirmed",
+                confirmed_at_utc=datetime.now(timezone.utc),
+            )
+            if not plan:
+                results.append({"ok": False, "error": "plan_create_failed", "suggestion_id": suggestion_id})
+                continue
+            plan_id = plan.get("id")
+            try:
+                order_index = int(payload.get("order_index"))
+            except (TypeError, ValueError):
+                order_index = None
+            if order_index is None:
+                order_index = get_next_plan_item_order_index(plan_id)
+            payload["suggestion_id"] = suggestion_id
+            item = insert_plan_item_from_payload(
+                plan_id=plan_id,
+                user_id=user_id,
+                payload=payload,
+                order_index=order_index,
+            )
+            if not item:
+                results.append({"ok": False, "error": "plan_item_create_failed", "suggestion_id": suggestion_id})
+                continue
+            updated = update_suggestion_status(user_id, suggestion_id, "accepted", decided_reason=reason)
+            logger.info(
+                "API: plan_item accepted request_id=%s user_id=%s suggestion_id=%s plan_id=%s item_id=%s",
+                request_id,
+                user_id,
+                suggestion_id,
+                plan_id,
+                item.get("item_id"),
+            )
+            results.append(
+                {
+                    "ok": True,
+                    "action": "accepted",
+                    "plan_id": plan_id,
+                    "plan_item": item,
+                    "suggestion": updated,
+                }
+            )
             continue
 
         if kind == "goal_plan":
@@ -1442,6 +1578,210 @@ def v1_ready_check():
     state = _ready_state()
     status = 200 if state["ready"] else 503
     return _v1_envelope(data=state, status=status)
+
+
+@v1.route("/read/today", methods=["GET"])
+def v1_read_today():
+    logger = logging.getLogger("API.V1")
+    request_id = _get_request_id()
+    user_id, error = _get_user_id_or_error()
+    if error:
+        return error
+    date_local_param = request.args.get("date_local")
+    timezone_param = request.args.get("timezone")
+    plan_date_local, timezone_name = _resolve_plan_date_and_timezone(
+        user_id=user_id,
+        date_local=date_local_param,
+        timezone_name=timezone_param,
+        logger=logger,
+    )
+    from db.plan_repository import get_plan_with_items_by_local_date
+    plan = get_plan_with_items_by_local_date(user_id, plan_date_local)
+    if plan:
+        items = []
+        for item in plan.get("items") or []:
+            item_payload = dict(item)
+            item_payload["created_at_utc"] = _serialize_datetime(item.get("created_at_utc"))
+            item_payload["updated_at_utc"] = _serialize_datetime(item.get("updated_at_utc"))
+            items.append(item_payload)
+        plan_payload = {
+            "plan_id": plan.get("id"),
+            "plan_date_local": (
+                plan.get("plan_date_local").isoformat()
+                if hasattr(plan.get("plan_date_local"), "isoformat")
+                else plan.get("plan_date_local")
+            ),
+            "timezone": plan.get("timezone") or timezone_name,
+            "status": plan.get("status") or "draft",
+            "created_at_utc": _serialize_datetime(plan.get("created_at_utc")),
+            "confirmed_at_utc": _serialize_datetime(plan.get("confirmed_at_utc")),
+            "items": items,
+        }
+    else:
+        plan_payload = {
+            "plan_id": None,
+            "plan_date_local": plan_date_local.isoformat(),
+            "timezone": timezone_name,
+            "status": "none",
+            "items": [],
+        }
+    logger.info(
+        "API: v1 read today request_id=%s route=%s status=%s user_id=%s plan_date_local=%s plan_status=%s",
+        request_id,
+        request.path,
+        200,
+        user_id,
+        plan_payload.get("plan_date_local"),
+        plan_payload.get("status"),
+    )
+    return _v1_envelope(data={"plan": plan_payload}, status=200)
+
+
+@v1.route("/plan/draft", methods=["POST"])
+def v1_plan_draft():
+    logger = logging.getLogger("API.V1")
+    request_id = _get_request_id()
+    user_id, error = _get_user_id_or_error()
+    if error:
+        return error
+    if not request.is_json:
+        return api_error("VALIDATION_ERROR", "JSON body required", 400)
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return api_error("VALIDATION_ERROR", "JSON object required", 400)
+    message_ids = data.get("message_ids") or []
+    include_rollover = bool(data.get("include_rollover"))
+    date_local_param = data.get("date_local")
+    timezone_param = data.get("timezone")
+    if message_ids and not isinstance(message_ids, list):
+        return api_error("VALIDATION_ERROR", "message_ids must be a list", 400)
+    if not message_ids and not include_rollover:
+        return api_error("VALIDATION_ERROR", "message_ids or include_rollover required", 400)
+    plan_date_local, timezone_name = _resolve_plan_date_and_timezone(
+        user_id=user_id,
+        date_local=date_local_param,
+        timezone_name=timezone_param,
+        logger=logger,
+    )
+    suggestion_ids: List[int] = []
+    from db.suggestions_repository import create_suggestion
+    if message_ids:
+        normalized_ids: List[int] = []
+        for value in message_ids:
+            try:
+                normalized_ids.append(int(value))
+            except (TypeError, ValueError):
+                return api_error("VALIDATION_ERROR", "message_ids must be integers", 400)
+        from db.messages_repository import list_messages_by_ids
+        rows = list_messages_by_ids(user_id, normalized_ids)
+        if not rows:
+            return api_error("NOT_FOUND", "No messages found", 404, details={"message_ids": normalized_ids})
+        for row in rows:
+            transcript = (row.get("transcript") or "").strip()
+            if not transcript:
+                continue
+            title = transcript[:120].strip()
+            payload = {
+                "title": title,
+                "notes": transcript,
+                "source_kind": "message",
+                "source_id": str(row.get("id")),
+                "plan_date_local": plan_date_local.isoformat(),
+                "timezone": timezone_name,
+            }
+            provenance = {
+                "source": "v1_plan_draft",
+                "message_id": row.get("id"),
+                "request_id": request_id,
+            }
+            suggestion = create_suggestion(
+                user_id=user_id,
+                kind="plan_item",
+                payload=payload,
+                provenance=provenance,
+            )
+            suggestion_id = suggestion.get("id") if isinstance(suggestion, dict) else None
+            if suggestion_id:
+                suggestion_ids.append(int(suggestion_id))
+
+    if include_rollover:
+        from db.plan_repository import get_plan_with_items_by_local_date
+        rollover_date = plan_date_local - timedelta(days=1)
+        rollover_plan = get_plan_with_items_by_local_date(user_id, rollover_date)
+        rollover_items = (rollover_plan or {}).get("items") or []
+        for item in rollover_items:
+            status = (item.get("status") or "planned").strip().lower()
+            if status in ("done", "completed", "skipped", "canceled", "dropped"):
+                continue
+            title = item.get("title") or item.get("notes") or item.get("item_id") or "Rollover item"
+            payload = {
+                "title": str(title).strip()[:120] or "Rollover item",
+                "notes": item.get("notes"),
+                "source_kind": "rollover",
+                "source_id": str(item.get("item_id") or item.get("id") or ""),
+                "plan_date_local": plan_date_local.isoformat(),
+                "timezone": timezone_name,
+            }
+            if item.get("order_index") is not None:
+                payload["order_index"] = item.get("order_index")
+            provenance = {
+                "source": "v1_plan_draft_rollover",
+                "rollover_plan_date": rollover_date.isoformat(),
+                "request_id": request_id,
+            }
+            suggestion = create_suggestion(
+                user_id=user_id,
+                kind="plan_item",
+                payload=payload,
+                provenance=provenance,
+            )
+            suggestion_id = suggestion.get("id") if isinstance(suggestion, dict) else None
+            if suggestion_id:
+                suggestion_ids.append(int(suggestion_id))
+
+    logger.info(
+        "API: v1 plan draft request_id=%s route=%s status=%s user_id=%s plan_date_local=%s suggestions=%s",
+        request_id,
+        request.path,
+        200,
+        user_id,
+        plan_date_local.isoformat(),
+        len(suggestion_ids),
+    )
+    return _v1_envelope(data={"suggestion_ids": suggestion_ids}, status=200)
+
+
+@v1.route("/suggestions/<int:suggestion_id>/accept", methods=["POST"])
+def v1_accept_suggestion(suggestion_id: int):
+    logger = logging.getLogger("API.V1")
+    request_id = _get_request_id()
+    user_id, error = _get_user_id_or_error()
+    if error:
+        return error
+    reason = None
+    if request.is_json:
+        payload = request.get_json(silent=True)
+        if isinstance(payload, dict):
+            reason = payload.get("reason")
+    results = _apply_suggestion_decisions(
+        user_id,
+        [{"suggestion_id": suggestion_id, "action": "accept", "reason": reason}],
+        event_source="v1_accept",
+    )
+    logger.info(
+        "API: v1 suggestion accept request_id=%s route=%s status=%s user_id=%s suggestion_id=%s",
+        request_id,
+        request.path,
+        200,
+        user_id,
+        suggestion_id,
+    )
+    return _v1_envelope(data={"results": results}, status=200)
+
+
+@v1.route("/capabilities", methods=["GET"])
+def v1_capabilities():
+    return jsonify(get_capabilities_payload())
 
 
 @v1.route("/auth/login", methods=["POST"])
@@ -2219,6 +2559,17 @@ def handle_message():
             if session.get("authed"):
                 return user_error
             user_id = None
+
+        if is_help_request(user_input):
+            help_caps = get_help_capabilities(phase1_only=_PHASE1_ENABLED)
+            response = {
+                "reply": format_capabilities_for_chat(phase1_only=_PHASE1_ENABLED),
+                "capabilities": help_caps,
+                "meta": {"intent": "capabilities_help"},
+            }
+            if _PHASE1_ENABLED:
+                response["meta"]["phase1_skipped"] = phase1_skipped
+            return jsonify(response)
 
         def _log_goal_intent_status(goal_intent_detected: bool, reply_source: str) -> None:
             logger.info(
