@@ -220,6 +220,7 @@ def ensure_core_schema() -> None:
             user_id TEXT NOT NULL,
             session_id INTEGER REFERENCES sessions(id) ON DELETE SET NULL,
             source TEXT NOT NULL DEFAULT 'text',
+            channel TEXT NOT NULL DEFAULT 'companion',
             transcript TEXT NOT NULL DEFAULT '',
             status TEXT NOT NULL DEFAULT 'ready',
             stt_provider TEXT,
@@ -231,6 +232,8 @@ def ensure_core_schema() -> None:
         """,
         "CREATE INDEX IF NOT EXISTS idx_messages_user_id ON messages(user_id);",
         "CREATE INDEX IF NOT EXISTS idx_messages_session_id ON messages(session_id);",
+        "ALTER TABLE messages ADD COLUMN IF NOT EXISTS channel TEXT NOT NULL DEFAULT 'companion';",
+        "UPDATE messages SET channel = 'companion' WHERE channel IS NULL;",
         """
         CREATE TABLE IF NOT EXISTS transcripts (
             id SERIAL PRIMARY KEY,

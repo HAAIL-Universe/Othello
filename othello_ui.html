@@ -2407,6 +2407,7 @@
     let sttLastInterim = "";
     let pendingMicStart = false;
     let pendingStartTimeout = null;
+    let chatHydrated = false;
 
     // DOM elements - declare all elements used in the script
     const input = document.getElementById('user-input');
@@ -2925,7 +2926,7 @@
           method: "POST",
           headers: { "Content-Type": "application/json" },
           credentials: "include",
-          body: JSON.stringify({ transcript: text, source: "text" })
+          body: JSON.stringify({ transcript: text, source: "text", channel: "planner" })
         },
         "Create message"
       );
@@ -3743,6 +3744,7 @@
       }
       isRecording = false;
       clearChatState();
+      chatHydrated = false;
       othelloState.goals = [];
       othelloState.activeGoalId = null;
       othelloState.currentDetailGoalId = null;
@@ -3767,8 +3769,9 @@
       if (BOOT_DEBUG) console.log("[AUTH] Reset boundary", reason || "");
     }
 
-    async function fetchChatHistory(limit = 50) {
-      const resp = await fetch(`${V1_MESSAGES_API}?limit=${limit}`, { credentials: "include", cache: "no-store" });
+    async function fetchChatHistory(limit = 50, channel = "companion") {
+      const target = `${V1_MESSAGES_API}?limit=${limit}&channel=${encodeURIComponent(channel)}`;
+      const resp = await fetch(target, { credentials: "include", cache: "no-store" });
       if (resp.status === 401 || resp.status === 403) {
         const err = new Error("Unauthorized");
         err.status = resp.status;
@@ -3787,10 +3790,11 @@
     }
 
     async function loadChatHistory() {
-      if (!isAuthed) return;
+      if (!isAuthed || chatHydrated) return;
       try {
         const messages = await fetchChatHistory();
         clearChatState();
+        chatHydrated = true;
         if (!Array.isArray(messages) || messages.length === 0) return;
         messages.forEach((msg) => {
           const text = msg && msg.transcript ? String(msg.transcript) : "";
@@ -4356,6 +4360,7 @@
           headers: {"Content-Type": "application/json"},
           body: JSON.stringify({ 
             message: text,
+            channel: "companion",
             goal_id: othelloState.activeGoalId || null,
             active_goal_id: othelloState.activeGoalId || null,
             current_mode: othelloState.currentMode,

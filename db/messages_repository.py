@@ -21,6 +21,7 @@ def create_message(
     user_id: str,
     transcript: str,
     source: str = "text",
+    channel: str = "companion",
     session_id: Optional[int] = None,
     status: str = "ready",
     stt_provider: Optional[str] = None,
@@ -38,6 +39,7 @@ def create_message(
             user_id,
             session_id,
             source,
+            channel,
             transcript,
             status,
             stt_provider,
@@ -46,8 +48,8 @@ def create_message(
             error,
             created_at
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
-        RETURNING id, user_id, session_id, source, transcript, status,
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+        RETURNING id, user_id, session_id, source, channel, transcript, status,
                   stt_provider, stt_model, audio_duration_ms, error, created_at
     """
     record = execute_and_fetch_one(
@@ -56,6 +58,7 @@ def create_message(
             user_id,
             session_id,
             source,
+            channel,
             transcript,
             status,
             stt_provider,
@@ -98,19 +101,19 @@ def list_messages_for_session(user_id: str, session_id: int) -> List[Dict[str, A
     return fetch_all(query, (user_id, session_id))
 
 
-def list_recent_messages(user_id: str, limit: int = 50) -> List[Dict[str, Any]]:
+def list_recent_messages(user_id: str, limit: int = 50, channel: str = "companion") -> List[Dict[str, Any]]:
     query = """
-        SELECT id, user_id, session_id, source, transcript, status, error, created_at
+        SELECT id, user_id, session_id, source, channel, transcript, status, error, created_at
         FROM (
-            SELECT id, user_id, session_id, source, transcript, status, error, created_at
+            SELECT id, user_id, session_id, source, channel, transcript, status, error, created_at
             FROM messages
-            WHERE user_id = %s
+            WHERE user_id = %s AND channel = %s
             ORDER BY created_at DESC, id DESC
             LIMIT %s
         ) recent
         ORDER BY created_at ASC, id ASC
     """
-    return fetch_all(query, (user_id, limit))
+    return fetch_all(query, (user_id, channel, limit))
 
 
 def get_message(user_id: str, message_id: int) -> Optional[Dict[str, Any]]:

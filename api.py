@@ -1818,6 +1818,10 @@ def v1_messages():
         user_id, error = _get_user_id_or_error()
         if error:
             return error
+        channel = request.args.get("channel") or "companion"
+        channel = str(channel).strip().lower()
+        if channel not in {"companion", "planner", "system"}:
+            return _v1_error("VALIDATION_ERROR", "channel is invalid", 400)
         limit = request.args.get("limit")
         try:
             limit_value = int(limit) if limit is not None else 50
@@ -1828,7 +1832,7 @@ def v1_messages():
         if limit_value > 200:
             limit_value = 200
         from db.messages_repository import list_recent_messages
-        rows = list_recent_messages(user_id, limit=limit_value)
+        rows = list_recent_messages(user_id, limit=limit_value, channel=channel)
         return _v1_envelope(data={"messages": rows}, status=200)
 
     user_id, error = _v1_get_user_id()
@@ -1849,6 +1853,12 @@ def v1_messages():
     source = data.get("source") or "text"
     if not isinstance(source, str) or not source.strip():
         source = "text"
+    channel = data.get("channel") or "companion"
+    if not isinstance(channel, str) or not channel.strip():
+        channel = "companion"
+    channel = channel.strip().lower()
+    if channel not in {"companion", "planner", "system"}:
+        return _v1_error("VALIDATION_ERROR", "channel is invalid", 400)
 
     session_id = data.get("session_id")
     if session_id is not None:
@@ -1863,6 +1873,7 @@ def v1_messages():
         user_id=user_id,
         transcript=transcript.strip(),
         source=source.strip(),
+        channel=channel,
         session_id=session_id,
         status="final",
         create_session_if_missing=True,
@@ -2602,12 +2613,14 @@ def handle_message():
                     user_id=user_id,
                     transcript=user_input,
                     source="text",
+                    channel="companion",
                     status="final",
                 )
                 create_message(
                     user_id=user_id,
                     transcript=cleaned_reply,
                     source="assistant",
+                    channel="companion",
                     status="final",
                 )
             except Exception as exc:
