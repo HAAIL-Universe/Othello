@@ -22,6 +22,7 @@ import openai
 import httpx
 import uuid
 from werkzeug.exceptions import HTTPException
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 # NOTE: Keep import-time work minimal! Do not import LLM/agent modules or connect to DB at module scope unless required for health endpoints.
 from dotenv import load_dotenv
@@ -190,6 +191,12 @@ if not _secret_env:
         logging.warning("[API] WARNING: SECRET_KEY/OTHELLO_SECRET_KEY is not set in environment! Using insecure default. Set SECRET_KEY or OTHELLO_SECRET_KEY in Render environment variables.")
     _secret_env = "dev-secret-key"
 app.config["SECRET_KEY"] = _secret_env
+_is_render = bool(os.getenv("RENDER") or os.getenv("RENDER_SERVICE_ID"))
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+app.config["SESSION_COOKIE_SECURE"] = bool(_is_render)
+if _is_render:
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
 
 def _log_auth_config():
     """Log presence booleans for auth-related env; never log values."""
