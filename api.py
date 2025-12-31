@@ -1812,8 +1812,25 @@ def v1_create_session():
     return _v1_envelope(data={"session_id": session_id}, status=201)
 
 
-@v1.route("/messages", methods=["POST"])
-def v1_create_message():
+@v1.route("/messages", methods=["GET", "POST"])
+def v1_messages():
+    if request.method == "GET":
+        user_id, error = _v1_get_user_id()
+        if error:
+            return error
+        limit = request.args.get("limit")
+        try:
+            limit_value = int(limit) if limit is not None else 50
+        except (TypeError, ValueError):
+            return _v1_error("VALIDATION_ERROR", "limit must be an integer", 400)
+        if limit_value <= 0:
+            return _v1_error("VALIDATION_ERROR", "limit must be positive", 400)
+        if limit_value > 200:
+            limit_value = 200
+        from db.messages_repository import list_recent_messages
+        rows = list_recent_messages(user_id, limit=limit_value)
+        return _v1_envelope(data={"messages": rows}, status=200)
+
     user_id, error = _v1_get_user_id()
     if error:
         return error
@@ -2560,6 +2577,49 @@ def handle_message():
                 return user_error
             user_id = None
 
+        def _should_persist_chat() -> bool:
+            if not user_id:
+                return False
+            if ui_action:
+                return False
+            if user_input.startswith("__"):
+                return False
+            return True
+
+        def _persist_chat_exchange(reply_text: Optional[str]) -> None:
+            if not reply_text or not _should_persist_chat():
+                return
+            cleaned_reply = str(reply_text).strip()
+            if not cleaned_reply:
+                return
+            try:
+                from db.messages_repository import create_message
+
+                create_message(
+                    user_id=user_id,
+                    transcript=user_input,
+                    source="text",
+                    status="final",
+                )
+                create_message(
+                    user_id=user_id,
+                    transcript=cleaned_reply,
+                    source="assistant",
+                    status="final",
+                )
+            except Exception as exc:
+                logger.warning(
+                    "API: chat persistence failed request_id=%s error=%s",
+                    request_id,
+                    type(exc).__name__,
+                    exc_info=True,
+                )
+
+        def _respond(payload: Dict[str, Any]):
+            reply_text = payload.get("reply") if isinstance(payload, dict) else None
+            _persist_chat_exchange(reply_text)
+            return jsonify(payload)
+
         if is_help_request(user_input):
             help_caps = get_help_capabilities(phase1_only=_PHASE1_ENABLED)
             response = {
@@ -2569,7 +2629,7 @@ def handle_message():
             }
             if _PHASE1_ENABLED:
                 response["meta"]["phase1_skipped"] = phase1_skipped
-            return jsonify(response)
+            return _respond(response)
 
         def _log_goal_intent_status(goal_intent_detected: bool, reply_source: str) -> None:
             logger.info(
@@ -2623,7 +2683,7 @@ def handle_message():
                 suggestion=suggestion,
             )
             _log_goal_intent_status(goal_intent_detected, "fallback")
-            return jsonify(response)
+            return _respond(response)
         requested_goal_id = _coerce_goal_id(raw_goal_id) if raw_goal_id is not None else None
         if raw_goal_id is not None and requested_goal_id is None:
             return api_error(
@@ -2763,7 +2823,7 @@ def handle_message():
             if _PHASE1_ENABLED:
                 response["meta"]["phase1_skipped"] = phase1_skipped
             _log_goal_intent_status(False, "fallback")
-            return jsonify(response)
+            return _respond(response)
 
         if ui_action == "plan_from_text":
             if user_id is None:
@@ -2835,7 +2895,7 @@ def handle_message():
             if _PHASE1_ENABLED:
                 response["meta"]["phase1_skipped"] = phase1_skipped
             _log_goal_intent_status(False, "fallback")
-            return jsonify(response)
+            return _respond(response)
 
         if ui_action == "plan_from_intent":
             if user_id is None:
@@ -2987,7 +3047,7 @@ def handle_message():
                 if _PHASE1_ENABLED:
                     response["meta"]["phase1_skipped"] = phase1_skipped
                 _log_goal_intent_status(False, "fallback")
-                return jsonify(response)
+                return _respond(response)
             if not steps:
                 return api_error(
                     "PLAN_PARSE_EMPTY",
@@ -3062,7 +3122,7 @@ def handle_message():
             if _PHASE1_ENABLED:
                 response["meta"]["phase1_skipped"] = phase1_skipped
             _log_goal_intent_status(False, "fallback")
-            return jsonify(response)
+            return _respond(response)
 
         focused_goal_edit = _parse_focused_goal_edit_command(user_input)
         if focused_goal_edit:
@@ -3075,7 +3135,7 @@ def handle_message():
                     "meta": {"intent": "focused_goal_edit_missing_focus"},
                 }
                 _log_goal_intent_status(False, "fallback")
-                return jsonify(response)
+                return _respond(response)
             payload = focused_goal_edit.get("payload", "")
             if not payload:
                 reply_text = "Please include text after 'append to goal:' or 'update goal:'."
@@ -3084,7 +3144,7 @@ def handle_message():
                     "meta": {"intent": "focused_goal_edit_missing_text"},
                 }
                 _log_goal_intent_status(False, "fallback")
-                return jsonify(response)
+                return _respond(response)
             try:
                 if focused_goal_edit["mode"] == "append":
                     updated_goal = architect_agent.goal_mgr.append_goal_description(
@@ -3119,7 +3179,7 @@ def handle_message():
                     "meta": {"intent": "focused_goal_edit_failed"},
                 }
                 _log_goal_intent_status(False, "fallback")
-                return jsonify(response)
+                return _respond(response)
             try:
                 note_label = (
                     "[Goal Append] Appended text (len=%s)" % len(payload)
@@ -3143,7 +3203,7 @@ def handle_message():
                     "meta": {"intent": "focused_goal_edit_reload_failed"},
                 }
                 _log_goal_intent_status(False, "fallback")
-                return jsonify(response)
+                return _respond(response)
             reply_text = (
                 "Appended to the focused goal." if focused_goal_edit["mode"] == "append"
                 else "Updated the focused goal."
@@ -3154,7 +3214,7 @@ def handle_message():
                 "goal": fresh_goal,
             }
             _log_goal_intent_status(False, "fallback")
-            return jsonify(response)
+            return _respond(response)
 
         pending_edit = session.get("pending_goal_edit")
         if isinstance(pending_edit, dict):
@@ -3260,7 +3320,7 @@ def handle_message():
                 "goal": fresh_goal,
             }
             _log_goal_intent_status(False, "fallback")
-            return jsonify(response)
+            return _respond(response)
 
         pending_mode = _detect_goal_edit_arm(data, user_input)
         if pending_mode in ("update", "append"):
@@ -3273,7 +3333,7 @@ def handle_message():
                     "meta": {"intent": "pending_goal_edit_missing_focus"},
                 }
                 _log_goal_intent_status(False, "fallback")
-                return jsonify(response)
+                return _respond(response)
             status = (active_goal.get("status") or "").strip().lower()
             if status == "archived":
                 return api_error(
@@ -3304,7 +3364,7 @@ def handle_message():
                 "meta": {"intent": "pending_goal_edit_set", "mode": pending_mode},
             }
             _log_goal_intent_status(False, "fallback")
-            return jsonify(response)
+            return _respond(response)
 
         # --- Shortcut 1: user is asking for their goals; answer directly -----
         if is_goal_list_request(user_input):
@@ -3347,7 +3407,7 @@ def handle_message():
                 },
             }
             _log_goal_intent_status(False, "fallback")
-            return jsonify(response)
+            return _respond(response)
 
         # --- Shortcut 2: user wants to focus on a specific goal -------------
         goal_id = parse_goal_selection_request(user_input)
@@ -3371,7 +3431,7 @@ def handle_message():
                     },
                 }
                 _log_goal_intent_status(False, "fallback")
-                return jsonify(response)
+                return _respond(response)
 
             architect_agent.goal_mgr.set_active_goal(user_id, goal_id)
             ctx = architect_agent.goal_mgr.build_goal_context(user_id, goal_id, max_notes=5)
@@ -3392,7 +3452,7 @@ def handle_message():
                 },
             }
             _log_goal_intent_status(False, "fallback")
-            return jsonify(response)
+            return _respond(response)
         # ---------------------------------------------------------------------
 
         goal_intent_suggestion = _get_goal_intent_suggestion(
@@ -3703,7 +3763,7 @@ def handle_message():
                 suggestion=goal_intent_suggestion,
             )
             _log_goal_intent_status(goal_intent_attached, reply_source)
-            return jsonify(response)
+            return _respond(response)
 
         # --- Log conversation into active goal -------------------------------
         def _event_ok(result):
@@ -3803,7 +3863,7 @@ def handle_message():
             suggestion=goal_intent_suggestion,
         )
         _log_goal_intent_status(goal_intent_attached, reply_source)
-        return jsonify(response)
+        return _respond(response)
 
     except Exception as exc:
         logger.exception(

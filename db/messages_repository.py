@@ -98,6 +98,21 @@ def list_messages_for_session(user_id: str, session_id: int) -> List[Dict[str, A
     return fetch_all(query, (user_id, session_id))
 
 
+def list_recent_messages(user_id: str, limit: int = 50) -> List[Dict[str, Any]]:
+    query = """
+        SELECT id, user_id, session_id, source, transcript, status, error, created_at
+        FROM (
+            SELECT id, user_id, session_id, source, transcript, status, error, created_at
+            FROM messages
+            WHERE user_id = %s
+            ORDER BY created_at DESC, id DESC
+            LIMIT %s
+        ) recent
+        ORDER BY created_at ASC, id ASC
+    """
+    return fetch_all(query, (user_id, limit))
+
+
 def get_message(user_id: str, message_id: int) -> Optional[Dict[str, Any]]:
     query = """
         SELECT id, user_id, session_id, source, transcript, status, error, created_at

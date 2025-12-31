@@ -2144,6 +2144,8 @@
         } catch {}
         // Clear UI state if needed
         isAuthed = false;
+        clearChatState();
+        othelloState.pendingGoalEdit = null;
         closeSettings();
         showLoginOverlay();
         setBootState(BOOT_STATE.NEEDS_LOGIN);
@@ -2284,6 +2286,9 @@
             if (typeof refreshGoals === 'function') {
               await refreshGoals();
             }
+            if (typeof loadChatHistory === 'function') {
+              await loadChatHistory();
+            }
             if (typeof refreshInsightsCounts === 'function') {
               await refreshInsightsCounts();
             }
@@ -2391,6 +2396,7 @@
     const API = "/api/message";
     const GOALS_API = "/api/goals";
     const PLAN_UPDATE_API = "/api/plan/update";
+    const V1_MESSAGES_API = "/v1/messages";
 
     let recognition = null;
     let isRecording = false;
@@ -2454,7 +2460,8 @@
       goalUpdateCounts: {},
       currentAgentStatus: null,
       messagesByClientId: {},
-      dismissedSuggestionIds: new Set()
+      dismissedSuggestionIds: new Set(),
+      goalIntentSuggestions: {}
     };
     let devResetEnabled = false;
 
@@ -3710,6 +3717,53 @@
     }
 
     // ===== CHAT FUNCTIONS =====
+    function clearChatState() {
+      if (chatLog) chatLog.innerHTML = "";
+      const chatPlaceholder = document.getElementById("chat-placeholder");
+      if (chatPlaceholder) chatPlaceholder.classList.remove("hidden");
+      othelloState.messagesByClientId = {};
+      othelloState.goalIntentSuggestions = {};
+    }
+
+    async function fetchChatHistory(limit = 50) {
+      const resp = await fetch(`${V1_MESSAGES_API}?limit=${limit}`, { credentials: "include", cache: "no-store" });
+      if (resp.status === 401 || resp.status === 403) {
+        const err = new Error("Unauthorized");
+        err.status = resp.status;
+        throw err;
+      }
+      let payload = null;
+      try {
+        payload = await resp.json();
+      } catch {}
+      if (!resp.ok || (payload && payload.ok === false)) {
+        throw new Error("Failed to load chat history");
+      }
+      return payload && payload.data && Array.isArray(payload.data.messages)
+        ? payload.data.messages
+        : [];
+    }
+
+    async function loadChatHistory() {
+      try {
+        const messages = await fetchChatHistory();
+        clearChatState();
+        if (!Array.isArray(messages) || messages.length === 0) return;
+        messages.forEach((msg) => {
+          const text = msg && msg.transcript ? String(msg.transcript) : "";
+          if (!text.trim()) return;
+          const role = msg && msg.source === "assistant" ? "bot" : "user";
+          addMessage(role, text);
+        });
+      } catch (err) {
+        if (err && (err.status === 401 || err.status === 403)) {
+          await handleUnauthorized("chat-history");
+          return;
+        }
+        console.warn("[Othello UI] chat history load failed:", err);
+      }
+    }
+
     function addMessage(role, text, options = {}) {
       // Hide chat placeholder when first message appears
       const chatPlaceholder = document.getElementById("chat-placeholder");
@@ -3857,7 +3911,7 @@
     }
 
     async function createGoalFromSuggestion(opts) {
-      const { title, description, clientMessageId, statusEl, panelEl } = opts;
+      const { title, description, clientMessageId, statusEl, panelEl, onSuccess } = opts;
       const trimmedTitle = (title || "").trim();
       const trimmedDesc = (description || "").trim();
       if (trimmedTitle.length < 3) {
@@ -3896,6 +3950,9 @@
         await refreshGoals();
         if (goalId != null) {
           setActiveGoal(goalId);
+          if (typeof onSuccess === "function") {
+            await onSuccess(goalId);
+          }
           if (othelloState.currentView === "goals") {
             showGoalDetail(goalId);
           }
@@ -4109,6 +4166,7 @@
       const clientMessageId = suggestion.source_client_message_id;
       if (!clientMessageId) return;
       if (isSuggestionDismissed(suggestion.type, clientMessageId)) return;
+      othelloState.goalIntentSuggestions[clientMessageId] = suggestion;
       const entry = othelloState.messagesByClientId[clientMessageId];
       if (!entry || !entry.bubbleEl || !entry.rowEl) return;
       if (entry.panelEl) return;
@@ -4121,6 +4179,81 @@
     function applySuggestionMeta(meta) {
       const suggestions = meta && Array.isArray(meta.suggestions) ? meta.suggestions : [];
       suggestions.forEach(handleGoalIntentSuggestion);
+    }
+
+    function getLatestGoalIntentEntry() {
+      const entries = Object.entries(othelloState.messagesByClientId || {});
+      let latest = null;
+      entries.forEach(([clientMessageId, entry]) => {
+        if (!entry || !entry.panelEl) return;
+        if (!latest || (entry.ts || 0) > (latest.entry.ts || 0)) {
+          latest = { clientMessageId, entry };
+        }
+      });
+      return latest;
+    }
+
+    function parseGoalIntentDecision(text) {
+      const normalized = String(text || "")
+        .toLowerCase()
+        .replace(/[^\w\s]/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+      if (!normalized) return null;
+      if (/\b(step|steps|break|split|plan)\b/.test(normalized)) return "steps";
+      if (/\b(save|saved|goal|yes|ok|okay|yep)\b/.test(normalized)) return "save";
+      return null;
+    }
+
+    async function resolveGoalIntentDecision(text) {
+      const decision = parseGoalIntentDecision(text);
+      if (!decision) return false;
+      const latest = getLatestGoalIntentEntry();
+      if (!latest) return false;
+      const { clientMessageId, entry } = latest;
+      const suggestion = othelloState.goalIntentSuggestions[clientMessageId];
+      if (!suggestion || !entry) return false;
+      const panelEl = entry.panelEl;
+      const statusEl = panelEl ? panelEl.querySelector(".ux-goal-intent-status") : null;
+      const title = pickSuggestionTitle(suggestion, entry.text);
+      const description = pickSuggestionBody(suggestion, entry.text);
+
+      if (decision === "save") {
+        await createGoalFromSuggestion({
+          title,
+          description,
+          clientMessageId,
+          statusEl,
+          panelEl
+        });
+        return true;
+      }
+
+      if (decision === "steps") {
+        await createGoalFromSuggestion({
+          title,
+          description,
+          clientMessageId,
+          statusEl,
+          panelEl,
+          onSuccess: async (goalId) => {
+            if (statusEl) statusEl.textContent = "Drafting steps...";
+            const intentItems = parseIntentItems(description || title);
+            const intentIndex = intentItems.length ? (intentItems[0].index || 1) : 1;
+            const intentText = intentItems.length ? intentItems[0].text : (description || title);
+            try {
+              await postPlanFromIntent(goalId, intentIndex, intentText);
+              showToast("Drafted steps for confirmation");
+            } catch (err) {
+              console.error("[Othello UI] plan from intent failed:", err);
+              if (statusEl) statusEl.textContent = "Could not draft steps.";
+            }
+          }
+        });
+        return true;
+      }
+
+      return false;
     }
 
     function normalizeGoalId(goalId) {
@@ -4161,6 +4294,18 @@
       input.value = "";
       input.focus();
       statusEl.textContent = "Thinking…";
+
+      const goalIntentResolved = await resolveGoalIntentDecision(text);
+      if (goalIntentResolved) {
+        fetch(V1_MESSAGES_API, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({ transcript: text, source: "text" })
+        }).catch(() => {});
+        statusEl.textContent = "Online";
+        return;
+      }
 
       try {
         const res = await fetch(API, {
