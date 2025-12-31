@@ -2748,12 +2748,12 @@ def handle_message():
         current_mode = (data.get("current_mode") or "companion").strip().lower()
         current_view = data.get("current_view")
         raw_channel = data.get("channel")
-        req_channel = str(raw_channel or "companion").strip().lower()
-        if req_channel not in {"companion", "planner"}:
-            req_channel = "companion"
         view_label = str(current_view or "chat")
         is_chat_view = view_label.strip().lower() == "chat"
-        chat_channel = "companion" if is_chat_view else req_channel
+        incoming_channel = str(raw_channel or "").strip().lower() or None
+        effective_channel = "companion" if is_chat_view else (incoming_channel or "companion")
+        if effective_channel not in {"companion", "planner"}:
+            effective_channel = "companion"
         raw_client_message_id = data.get("client_message_id")
         if raw_client_message_id is None:
             raw_client_message_id = data.get("clientMessageId")
@@ -2798,7 +2798,7 @@ def handle_message():
         companion_context = None
         persist_enabled = _should_persist_chat()
         if persist_enabled:
-            companion_context = _load_companion_context(user_id, logger, channel=chat_channel)
+            companion_context = _load_companion_context(user_id, logger, channel=effective_channel)
 
         def _persist_chat_exchange(reply_text: Optional[str]) -> None:
             if not reply_text or not _should_persist_chat():
@@ -2813,14 +2813,14 @@ def handle_message():
                     user_id=user_id,
                     transcript=user_input,
                     source="text",
-                    channel=chat_channel,
+                    channel=effective_channel,
                     status="final",
                 )
                 create_message(
                     user_id=user_id,
                     transcript=cleaned_reply,
                     source="assistant",
-                    channel=chat_channel,
+                    channel=effective_channel,
                     status="final",
                 )
             except Exception as exc:
@@ -2837,16 +2837,17 @@ def handle_message():
             return jsonify(payload)
 
         logger.info(
-            "API: chat routing request_id=%s current_mode=%s current_view=%s is_chat_view=%s companion_ctx_len=%s persist_chat=%s",
+            "API: routing request_id=%s mode=%s view=%s incoming_channel=%s effective_channel=%s persist_chat=%s ctx_len=%s",
             request_id,
             current_mode,
             current_view,
-            is_chat_view,
-            len(companion_context or []),
+            incoming_channel,
+            effective_channel,
             persist_enabled,
+            len(companion_context or []),
         )
 
-        if is_chat_view and companion_context:
+        if effective_channel == "companion" and companion_context:
             last_assistant = next(
                 (msg for msg in reversed(companion_context) if msg.get("role") == "assistant"),
                 None,
@@ -3146,7 +3147,7 @@ def handle_message():
                     detail = "Missing or invalid OPENAI_API_KEY"
                 else:
                     detail = f"Agent init failed ({type(_agent_init_error).__name__})"
-            if is_chat_view:
+            if effective_channel == "companion":
                 fallback_reply = _llm_unavailable_prompt(None)
             else:
                 fallback_reply = (
@@ -4093,7 +4094,7 @@ def handle_message():
                     # Check if it's an LLM error - return structured error
                     llm_exc = _unwrap_llm_exception(e)
                     if llm_exc:
-                        if is_chat_view:
+                        if effective_channel == "companion":
                             agentic_reply = _llm_unavailable_prompt(active_goal.get("id"))
                         else:
                             agentic_reply = (
@@ -4154,7 +4155,7 @@ def handle_message():
                     # Check if it's an LLM error - return structured error
                     llm_exc = _unwrap_llm_exception(e)
                     if llm_exc:
-                        if is_chat_view:
+                        if effective_channel == "companion":
                             agentic_reply = _llm_unavailable_prompt(active_goal.get("id"))
                         else:
                             agentic_reply = (
@@ -4185,7 +4186,7 @@ def handle_message():
             if _is_placeholder_reply(agentic_reply) or (
                 goal_intent_detected and not (agentic_reply or "").strip()
             ):
-                if is_chat_view:
+                if effective_channel == "companion":
                     agentic_reply = _goal_intent_prompt(active_goal.get("id"))
                 else:
                     agentic_reply = "Please share a bit more detail so I can help you plan."
@@ -4219,7 +4220,7 @@ def handle_message():
                 # Check if it's an LLM error - return structured error
                 llm_exc = _unwrap_llm_exception(e)
                 if llm_exc:
-                    if is_chat_view:
+                    if effective_channel == "companion":
                         agentic_reply = _llm_unavailable_prompt(None)
                     else:
                         agentic_reply = (
@@ -4240,7 +4241,7 @@ def handle_message():
             if _is_placeholder_reply(agentic_reply) or (
                 goal_intent_detected and not (agentic_reply or "").strip()
             ):
-                if is_chat_view:
+                if effective_channel == "companion":
                     agentic_reply = _goal_intent_prompt(None)
                 else:
                     agentic_reply = "Please share a bit more detail so I can help you plan."
