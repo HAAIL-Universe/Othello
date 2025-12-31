@@ -2827,9 +2827,134 @@ def handle_message():
                 None,
             )
             gate_prompt = False
+            questions_prompt = False
             if last_assistant:
                 last_text = (last_assistant.get("content") or "").lower()
                 gate_prompt = "saved as a goal" in last_text and "broken into steps" in last_text
+                questions_prompt = "before i draft steps" in last_text and "quick questions" in last_text
+            if questions_prompt:
+                goal_text = None
+                for msg in reversed(companion_context):
+                    if msg.get("role") != "assistant":
+                        continue
+                    content = (msg.get("content") or "").strip()
+                    if not content:
+                        continue
+                    match = re.search(r"goal:\s*(.+)", content, flags=re.IGNORECASE)
+                    if match:
+                        candidate = match.group(1).strip()
+                        if candidate:
+                            goal_text = candidate
+                            break
+                fallback_text = None
+                if not goal_text:
+                    for msg in reversed(companion_context):
+                        if msg.get("role") != "user":
+                            continue
+                        text = (msg.get("content") or "").strip()
+                        if not text:
+                            continue
+                        norm = re.sub(r"\s+", " ", text.lower()).strip()
+                        if re.match(r"^(hi|hey|hello)\b", norm) and not re.search(
+                            r"\b(goal|want|build|start|today)\b",
+                            norm,
+                        ):
+                            continue
+                        if re.search(r"\bstep(s)?\b", norm) or "break" in norm:
+                            continue
+                        if "save" in norm:
+                            continue
+                        goal_language = re.search(r"\bgoal(s)?\b", norm) is not None
+                        goal_like = False
+                        if norm.startswith(("i want to", "my goal is", "today", "build", "start")):
+                            goal_like = True
+                        if goal_language and len(norm) > 12:
+                            goal_like = True
+                        if goal_language and not goal_like:
+                            continue
+                        if len(text) <= 12:
+                            continue
+                        if goal_like:
+                            goal_text = text
+                            break
+                        if fallback_text is None:
+                            fallback_text = text
+                    if not goal_text:
+                        goal_text = fallback_text
+                if not goal_text:
+                    response = {
+                        "reply": "What's the goal you want to break into steps?",
+                        "agent_status": {"planner_active": False, "had_goal_update_xml": False},
+                        "request_id": request_id,
+                        "meta": {"intent": "goal_steps_questions"},
+                    }
+                    return _respond(response)
+                if not is_openai_configured():
+                    steps = _fallback_steps_from_text(f"{goal_text}\n{user_input}")
+                    lines = [
+                        f"{step.get('step_index', idx)}. {step.get('description', '').strip()}"
+                        for idx, step in enumerate(steps, start=1)
+                        if step.get("description")
+                    ]
+                    reply_text = "Draft steps:\n" + "\n".join(lines)
+                    response = {
+                        "reply": reply_text,
+                        "agent_status": {"planner_active": False, "had_goal_update_xml": False},
+                        "request_id": request_id,
+                        "meta": {"intent": "goal_steps_draft"},
+                    }
+                    return _respond(response)
+                loop = None
+                try:
+                    comps = get_agent_components()
+                    architect = comps["architect_agent"]
+                    prompt = (
+                        "Draft a concise numbered list of steps for the goal below.\n"
+                        f"Goal: {goal_text}\n"
+                        f"User answers: {user_input}\n"
+                        "Return only the numbered list."
+                    )
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    reply_text, _agent_status = loop.run_until_complete(
+                        architect.plan_and_execute(
+                            prompt,
+                            user_id=user_id,
+                            recent_messages=companion_context,
+                        )
+                    )
+                except Exception as exc:
+                    logger.error(
+                        "API: steps question draft failed request_id=%s",
+                        request_id,
+                        exc_info=True,
+                    )
+                    llm_exc = _unwrap_llm_exception(exc)
+                    if llm_exc:
+                        return handle_llm_error(llm_exc, logger)
+                    return api_error("STEP_DRAFT_FAILED", "Failed to draft steps", 500)
+                finally:
+                    if loop is not None:
+                        try:
+                            loop.close()
+                        except Exception:
+                            logger.debug("API: event loop close failed but continuing")
+                cleaned_reply = (reply_text or "").strip()
+                if not cleaned_reply:
+                    response = {
+                        "reply": "I couldn't draft steps from that yet. Could you add a bit more detail?",
+                        "agent_status": {"planner_active": False, "had_goal_update_xml": False},
+                        "request_id": request_id,
+                        "meta": {"intent": "goal_steps_questions"},
+                    }
+                    return _respond(response)
+                response = {
+                    "reply": cleaned_reply,
+                    "agent_status": {"planner_active": False, "had_goal_update_xml": False},
+                    "request_id": request_id,
+                    "meta": {"intent": "goal_steps_draft"},
+                }
+                return _respond(response)
             t = (user_input or "").strip().lower()
             if gate_prompt and t in {"yes", "yeah", "yep"}:
                 response = {
@@ -2852,18 +2977,40 @@ def handle_message():
                 goal_choice = True
             if gate_prompt and (steps_choice or goal_choice):
                 goal_text = None
+                fallback_text = None
                 for msg in reversed(companion_context):
                     if msg.get("role") != "user":
                         continue
                     text = (msg.get("content") or "").strip()
                     if not text:
                         continue
-                    if re.search(r"\b(step|steps|goal|goals|save)\b", text.lower()):
+                    norm = re.sub(r"\s+", " ", text.lower()).strip()
+                    if re.match(r"^(hi|hey|hello)\b", norm) and not re.search(
+                        r"\b(goal|want|build|start|today)\b",
+                        norm,
+                    ):
+                        continue
+                    if re.search(r"\bstep(s)?\b", norm) or "break" in norm:
+                        continue
+                    if "save" in norm:
+                        continue
+                    goal_language = re.search(r"\bgoal(s)?\b", norm) is not None
+                    goal_like = False
+                    if norm.startswith(("i want to", "my goal is", "today", "build", "start")):
+                        goal_like = True
+                    if goal_language and len(norm) > 12:
+                        goal_like = True
+                    if goal_language and not goal_like:
                         continue
                     if len(text) <= 12:
                         continue
-                    goal_text = text
-                    break
+                    if goal_like:
+                        goal_text = text
+                        break
+                    if fallback_text is None:
+                        fallback_text = text
+                if not goal_text:
+                    goal_text = fallback_text
                 normalized_log_text = t[:60]
                 logger.info(
                     "API: continuation resolver request_id=%s gate_prompt=%s steps_choice=%s goal_choice=%s text=%s found_goal_text=%s",
@@ -2883,18 +3030,21 @@ def handle_message():
                     }
                     return _respond(response)
                 if steps_choice:
-                    steps = _fallback_steps_from_text(goal_text)
-                    lines = [
-                        f"{step.get('step_index', idx)}. {step.get('description', '').strip()}"
-                        for idx, step in enumerate(steps, start=1)
-                        if step.get("description")
-                    ]
-                    reply_text = "Here are some steps to get started:\n" + "\n".join(lines)
+                    reply_text = "\n".join(
+                        [
+                            f"Ok - goal: {goal_text}",
+                            "Before I draft steps, a few quick questions:",
+                            "1) What time window or cadence should this fit?",
+                            "2) What does success look like for you?",
+                            "3) Any constraints or must-avoid items?",
+                            "4) What's the hardest part?",
+                        ]
+                    )
                     response = {
                         "reply": reply_text,
                         "agent_status": {"planner_active": False, "had_goal_update_xml": False},
                         "request_id": request_id,
-                        "meta": {"intent": "goal_steps_continuation"},
+                        "meta": {"intent": "goal_steps_questions"},
                     }
                     return _respond(response)
                 if goal_choice:
