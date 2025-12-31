@@ -2830,27 +2830,27 @@ def handle_message():
             if last_assistant:
                 last_text = (last_assistant.get("content") or "").lower()
                 gate_prompt = "saved as a goal" in last_text and "broken into steps" in last_text
-            t = re.sub(r"[\s.!?]+$", "", user_input.strip().lower())
-            t = re.sub(r"\s+", " ", t)
-            steps_tokens = {
-                "steps",
-                "step",
-                "break into steps",
-                "broken into steps",
-                "into steps",
-                "broken into step",
-                "break into step",
-            }
-            goal_tokens = {
-                "goal",
-                "save as goal",
-                "save it",
-                "save this as a goal",
-            }
-            steps_choice = t in steps_tokens
-            goal_choice = t in goal_tokens
+            t = (user_input or "").strip().lower()
+            if gate_prompt and t in {"yes", "yeah", "yep"}:
+                response = {
+                    "reply": "Goal or steps?",
+                    "agent_status": {"planner_active": False, "had_goal_update_xml": False},
+                    "request_id": request_id,
+                    "meta": {"intent": "goal_intent_continuation_clarify"},
+                }
+                return _respond(response)
+            has_steps_word = re.search(r"\bstep(s)?\b", t) is not None
+            has_goal_word = re.search(r"\bgoal(s)?\b", t) is not None
+            has_save_word = re.search(r"\bsave\b", t) is not None
+            steps_choice = has_steps_word and not (has_goal_word or has_save_word)
+            goal_choice = has_goal_word or has_save_word
+            if has_steps_word and has_goal_word and not has_save_word:
+                steps_choice = True
+                goal_choice = False
+            if has_steps_word and has_save_word:
+                steps_choice = False
+                goal_choice = True
             if gate_prompt and (steps_choice or goal_choice):
-                choice = "steps" if steps_choice else "goal"
                 goal_text = None
                 for msg in reversed(companion_context):
                     if msg.get("role") != "user":
@@ -2858,19 +2858,20 @@ def handle_message():
                     text = (msg.get("content") or "").strip()
                     if not text:
                         continue
-                    norm = re.sub(r"[\s.!?]+$", "", text.lower())
-                    norm = re.sub(r"\s+", " ", norm)
-                    if norm in steps_tokens or norm in goal_tokens:
+                    if re.search(r"\b(step|steps|goal|goals|save)\b", text.lower()):
                         continue
                     if len(text) <= 12:
                         continue
                     goal_text = text
                     break
+                normalized_log_text = t[:60]
                 logger.info(
-                    "API: continuation resolver request_id=%s detected=%s choice=%s found_goal_text=%s",
+                    "API: continuation resolver request_id=%s gate_prompt=%s steps_choice=%s goal_choice=%s text=%s found_goal_text=%s",
                     request_id,
-                    True,
-                    choice,
+                    gate_prompt,
+                    steps_choice,
+                    goal_choice,
+                    normalized_log_text,
                     bool(goal_text),
                 )
                 if not goal_text:
