@@ -1931,8 +1931,60 @@ def v1_messages():
         if limit_value > 200:
             limit_value = 200
         from db.messages_repository import list_recent_messages
+        include_legacy_raw = request.args.get("include_legacy_planner")
+        if include_legacy_raw is None:
+            include_legacy_raw = request.args.get("include_legacy")
+        if include_legacy_raw is None:
+            include_legacy_raw = "1"
+        include_legacy = str(include_legacy_raw).strip().lower() in ("1", "true", "yes", "on")
         rows = list_recent_messages(user_id, limit=limit_value, channel=channel)
-        return _v1_envelope(data={"messages": rows}, status=200)
+        companion_count = len(rows) if channel == "companion" else 0
+        legacy_rows = []
+        legacy_used = False
+        if channel == "companion" and include_legacy:
+            legacy_rows = list_recent_messages(user_id, limit=limit_value, channel="planner")
+            if legacy_rows:
+                legacy_used = True
+            merged = []
+            seen_ids = set()
+            for row in rows + legacy_rows:
+                msg_id = row.get("id")
+                if msg_id in seen_ids:
+                    continue
+                seen_ids.add(msg_id)
+                merged.append(row)
+            merged.sort(
+                key=lambda r: (
+                    r.get("created_at") or datetime.min.replace(tzinfo=timezone.utc),
+                    r.get("id") or 0,
+                ),
+                reverse=True,
+            )
+            merged = merged[:limit_value]
+            merged.sort(
+                key=lambda r: (
+                    r.get("created_at") or datetime.min.replace(tzinfo=timezone.utc),
+                    r.get("id") or 0,
+                )
+            )
+            rows = merged
+        logging.getLogger("API.Messages").info(
+            "v1_messages requested_channel=%s include_legacy_planner=%s counts={companion:%s,planner:%s} legacy_used=%s final_count=%s",
+            channel,
+            include_legacy,
+            companion_count,
+            len(legacy_rows),
+            legacy_used,
+            len(rows),
+        )
+        provenance = {
+            "requested_channel": channel,
+            "include_legacy_planner": include_legacy,
+            "legacy_used": legacy_used,
+            "count_companion": companion_count,
+            "count_planner": len(legacy_rows),
+        }
+        return _v1_envelope(data={"messages": rows, "provenance": provenance}, status=200)
 
     user_id, error = _v1_get_user_id()
     if error:
