@@ -59,6 +59,8 @@ if _PHASE1_ENABLED:
 # Constants
 MAX_ERROR_MSG_LENGTH = 200  # Maximum length for error message logging
 REQUEST_ID_HEADER = "X-Request-ID"
+CHAT_CONTEXT_TURNS = 12
+CHAT_CONTEXT_MAX_CHARS = 6000
 
 
 def _get_request_id() -> str:
@@ -846,6 +848,58 @@ def _clear_day_plan_cache(user_id: Optional[str], logger: logging.Logger) -> int
                 type(exc).__name__,
             )
     return removed
+
+
+def _load_companion_context(
+    user_id: Optional[str],
+    logger: logging.Logger,
+    *,
+    max_turns: int = CHAT_CONTEXT_TURNS,
+    max_chars: int = CHAT_CONTEXT_MAX_CHARS,
+) -> List[Dict[str, str]]:
+    uid = str(user_id or "").strip()
+    if not uid:
+        return []
+    limit = max(0, int(max_turns) * 2)
+    if limit <= 0:
+        return []
+    try:
+        from db.messages_repository import list_recent_messages
+        rows = list_recent_messages(uid, limit=limit, channel="companion")
+    except Exception as exc:
+        logger.warning(
+            "API: failed to load companion history user_id=%s error=%s",
+            uid,
+            type(exc).__name__,
+            exc_info=True,
+        )
+        return []
+    if not rows:
+        return []
+    messages: List[Dict[str, str]] = []
+    total_chars = 0
+    for row in reversed(rows):
+        content = (row.get("transcript") or "").strip()
+        if not content:
+            continue
+        source = (row.get("source") or "").strip().lower()
+        role = "assistant" if source == "assistant" else "user"
+        if total_chars and total_chars + len(content) > max_chars:
+            break
+        if len(content) > max_chars:
+            content = content[:max_chars]
+        messages.append({"role": role, "content": content})
+        total_chars += len(content)
+        if len(messages) >= limit:
+            break
+    messages.reverse()
+    if messages:
+        logger.debug(
+            "API: loaded companion history messages=%s chars=%s",
+            len(messages),
+            total_chars,
+        )
+    return messages
 
 
 def _goal_intent_prompt(active_goal_id: Optional[int]) -> str:
@@ -1965,6 +2019,14 @@ def v1_clear_data():
                 cursor.execute("DELETE FROM goal_task_history WHERE user_id = %s", (user_id,))
                 deleted["goal_task_history"] = cursor.rowcount
             if "goals" in normalized_scopes:
+                if "plans" not in normalized_scopes:
+                    cursor.execute(
+                        "DELETE FROM plan_items WHERE user_id = %s AND (LOWER(type) = 'goal_task' OR section = 'goal_tasks')",
+                        (user_id,),
+                    )
+                    deleted["goal_task_plan_items"] = cursor.rowcount
+                    cursor.execute("DELETE FROM goal_task_history WHERE user_id = %s", (user_id,))
+                    deleted["goal_task_history"] = cursor.rowcount
                 cursor.execute(
                     "DELETE FROM plan_steps WHERE goal_id IN (SELECT id FROM goals WHERE user_id = %s)",
                     (user_id,),
@@ -2719,6 +2781,10 @@ def handle_message():
                 return False
             return True
 
+        companion_context = None
+        if current_mode == "companion" and _should_persist_chat():
+            companion_context = _load_companion_context(user_id, logger)
+
         def _persist_chat_exchange(reply_text: Optional[str]) -> None:
             if not reply_text or not _should_persist_chat():
                 return
@@ -3084,6 +3150,7 @@ def handle_message():
                             "active_goal": active_goal,
                         } if goal_context else None,
                         user_id=user_id,
+                        recent_messages=companion_context,
                     )
                 )
             except Exception as exc:
@@ -3772,6 +3839,7 @@ def handle_message():
                                 "active_goal": active_goal,
                             } if goal_context else None,
                             user_id=user_id,
+                            recent_messages=companion_context,
                         )
                     )
                 
@@ -3829,6 +3897,7 @@ def handle_message():
                             user_input,
                             context=None,
                             user_id=user_id,
+                            recent_messages=companion_context,
                         )
                     )
                 finally:

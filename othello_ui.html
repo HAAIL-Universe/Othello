@@ -2365,6 +2365,7 @@
               }
             }
             if (refreshPlanner) {
+              othelloState.todayPlannerGoalTasks = [];
               if (typeof renderGoalTasks === "function") {
                 renderGoalTasks([]);
               }
@@ -2570,6 +2571,7 @@
       pendingGoalEdit: null,
       goalUpdateCounts: {},
       currentAgentStatus: null,
+      todayPlannerGoalTasks: [],
       messagesByClientId: {},
       dismissedSuggestionIds: new Set(),
       goalIntentSuggestions: {}
@@ -3220,6 +3222,7 @@
 
     function renderGoalTasks(goalTasks) {
       const goalCount = Array.isArray(goalTasks) ? goalTasks.length : 0;
+      othelloState.todayPlannerGoalTasks = Array.isArray(goalTasks) ? goalTasks : [];
       if (plannerGoalsList) {
         plannerGoalsList.innerHTML = "";
       }

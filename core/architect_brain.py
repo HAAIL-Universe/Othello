@@ -135,6 +135,7 @@ class Architect:
         answers: Union[Dict[str, str], str],
         context: Optional[Dict[str, str]] = None,
         user_id: Optional[str] = None,
+        recent_messages: Optional[List[Dict[str, str]]] = None,
     ) -> tuple[str, Dict[str, Any]]:
         """
         Main planning entrypoint.
@@ -188,7 +189,17 @@ class Architect:
             memory_user_id = user_id
             if memory_user_id is None and isinstance(context, dict):
                 memory_user_id = context.get("user_id")
-            short_term_memory = self._get_short_term_memory(memory_user_id)
+            if recent_messages is not None:
+                short_term_memory = [
+                    {"role": msg.get("role"), "content": msg.get("content")}
+                    for msg in recent_messages
+                    if isinstance(msg, dict)
+                    and msg.get("role") in ("user", "assistant")
+                    and isinstance(msg.get("content"), str)
+                    and msg.get("content").strip()
+                ]
+            else:
+                short_term_memory = self._get_short_term_memory(memory_user_id)
 
             self.logger.info(f"🧭 Planning response to user input: {raw_text}")
 
