@@ -2821,6 +2821,115 @@ def handle_message():
             _persist_chat_exchange(reply_text)
             return jsonify(payload)
 
+        if current_mode == "companion" and companion_context:
+            last_assistant = next(
+                (msg for msg in reversed(companion_context) if msg.get("role") == "assistant"),
+                None,
+            )
+            gate_prompt = False
+            if last_assistant:
+                last_text = (last_assistant.get("content") or "").lower()
+                gate_prompt = "saved as a goal" in last_text and "broken into steps" in last_text
+            t = re.sub(r"[\s.!?]+$", "", user_input.strip().lower())
+            t = re.sub(r"\s+", " ", t)
+            steps_tokens = {
+                "steps",
+                "step",
+                "break into steps",
+                "broken into steps",
+                "into steps",
+                "broken into step",
+                "break into step",
+            }
+            goal_tokens = {
+                "goal",
+                "save as goal",
+                "save it",
+                "save this as a goal",
+            }
+            steps_choice = t in steps_tokens
+            goal_choice = t in goal_tokens
+            if gate_prompt and (steps_choice or goal_choice):
+                choice = "steps" if steps_choice else "goal"
+                goal_text = None
+                for msg in reversed(companion_context):
+                    if msg.get("role") != "user":
+                        continue
+                    text = (msg.get("content") or "").strip()
+                    if not text:
+                        continue
+                    norm = re.sub(r"[\s.!?]+$", "", text.lower())
+                    norm = re.sub(r"\s+", " ", norm)
+                    if norm in steps_tokens or norm in goal_tokens:
+                        continue
+                    if len(text) <= 12:
+                        continue
+                    goal_text = text
+                    break
+                logger.info(
+                    "API: continuation resolver request_id=%s detected=%s choice=%s found_goal_text=%s",
+                    request_id,
+                    True,
+                    choice,
+                    bool(goal_text),
+                )
+                if not goal_text:
+                    response = {
+                        "reply": "What's the goal you want to save or break into steps?",
+                        "agent_status": {"planner_active": False, "had_goal_update_xml": False},
+                        "request_id": request_id,
+                        "meta": {"intent": "goal_intent_continuation_missing_goal"},
+                    }
+                    return _respond(response)
+                if steps_choice:
+                    steps = _fallback_steps_from_text(goal_text)
+                    lines = [
+                        f"{step.get('step_index', idx)}. {step.get('description', '').strip()}"
+                        for idx, step in enumerate(steps, start=1)
+                        if step.get("description")
+                    ]
+                    reply_text = "Here are some steps to get started:\n" + "\n".join(lines)
+                    response = {
+                        "reply": reply_text,
+                        "agent_status": {"planner_active": False, "had_goal_update_xml": False},
+                        "request_id": request_id,
+                        "meta": {"intent": "goal_steps_continuation"},
+                    }
+                    return _respond(response)
+                if goal_choice:
+                    if user_id is None:
+                        return user_error
+                    from db.suggestions_repository import create_suggestion
+                    title = _extract_goal_title_suggestion(goal_text) or goal_text.strip()[:120]
+                    provenance = {
+                        "source": "goal_intent_continuation",
+                        "request_id": request_id,
+                        "client_message_id": client_message_id,
+                    }
+                    suggestion = create_suggestion(
+                        user_id=user_id,
+                        kind="goal",
+                        payload={"title": title, "body": goal_text},
+                        provenance=provenance,
+                    )
+                    suggestion_id = suggestion.get("id") if isinstance(suggestion, dict) else None
+                    if not suggestion_id:
+                        return api_error(
+                            "SUGGESTION_CREATE_FAILED",
+                            "Failed to create pending goal suggestion",
+                            500,
+                        )
+                    response = {
+                        "reply": "Got it. I saved that as a pending goal suggestion. Confirm to apply it.",
+                        "agent_status": {"planner_active": False, "had_goal_update_xml": False},
+                        "request_id": request_id,
+                        "meta": {
+                            "intent": "goal_suggestion_pending",
+                            "suggestion_id": suggestion_id,
+                        },
+                    }
+                    return _respond(response)
+
         if is_help_request(user_input):
             help_caps = get_help_capabilities(phase1_only=_PHASE1_ENABLED)
             response = {
