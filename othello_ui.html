@@ -2334,6 +2334,7 @@
           if (clearDataStatus) clearDataStatus.textContent = `Cleared ${label}.`;
           showToast(`Deleted ${formatDeletedCounts(deleted)}`);
           if (Array.isArray(scopes)) {
+            let refreshPlanner = false;
             if (scopes.includes("goals")) {
               othelloState.goals = [];
               othelloState.activeGoalId = null;
@@ -2343,11 +2344,10 @@
               if (typeof refreshGoals === "function") {
                 await refreshGoals();
               }
+              refreshPlanner = true;
             }
             if (scopes.includes("plans")) {
-              if (typeof loadTodayPlanner === "function") {
-                await loadTodayPlanner();
-              }
+              refreshPlanner = true;
             }
             if (scopes.includes("insights")) {
               if (typeof refreshInsightsCounts === "function") {
@@ -2362,6 +2362,14 @@
               chatHydrated = false;
               if (typeof loadChatHistory === "function") {
                 await loadChatHistory();
+              }
+            }
+            if (refreshPlanner) {
+              if (typeof renderGoalTasks === "function") {
+                renderGoalTasks([]);
+              }
+              if (typeof loadTodayPlanner === "function") {
+                await loadTodayPlanner();
               }
             }
           }

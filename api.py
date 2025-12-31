@@ -2,6 +2,7 @@ import logging
 import os
 import re
 import time
+from pathlib import Path
 from datetime import date, timedelta, datetime, timezone
 from zoneinfo import ZoneInfo
 from flask import Flask, request, jsonify, send_file, session, send_from_directory, g, Blueprint
@@ -807,12 +808,44 @@ def _normalize_reply_text(text: str) -> str:
 
 def _is_placeholder_reply(text: str) -> bool:
     normalized = _normalize_reply_text(text)
-    return normalized in {
+    if normalized in {
         "it isn't saved yet",
         "it isnt saved yet",
         "it is not saved yet",
         "not saved yet",
-    }
+    }:
+        return True
+    return any(
+        phrase in normalized
+        for phrase in (
+            "isn't saved yet",
+            "isnt saved yet",
+            "not saved yet",
+        )
+    )
+
+
+def _clear_day_plan_cache(user_id: Optional[str], logger: logging.Logger) -> int:
+    uid = str(user_id or "").strip()
+    if not uid:
+        return 0
+    safe_uid = re.sub(r"[^A-Za-z0-9_.-]+", "_", uid)
+    plan_dir = Path(__file__).resolve().parent / "data" / "day_plans"
+    if not plan_dir.exists():
+        return 0
+    removed = 0
+    pattern = f"plan_{safe_uid}_*.json"
+    for path in plan_dir.glob(pattern):
+        try:
+            path.unlink()
+            removed += 1
+        except Exception as exc:
+            logger.warning(
+                "API: failed to remove plan cache file=%s error=%s",
+                path,
+                type(exc).__name__,
+            )
+    return removed
 
 
 def _goal_intent_prompt(active_goal_id: Optional[int]) -> str:
@@ -1883,6 +1916,7 @@ def v1_messages():
 
 @v1.route("/data/clear", methods=["POST"])
 def v1_clear_data():
+    logger = logging.getLogger("API")
     user_id, error = _get_user_id_or_error()
     if error:
         return error
@@ -1951,6 +1985,10 @@ def v1_clear_data():
                 cursor.execute("DELETE FROM sessions WHERE user_id = %s", (user_id,))
                 deleted["sessions"] = cursor.rowcount
         conn.commit()
+
+    if "plans" in normalized_scopes or "goals" in normalized_scopes:
+        removed = _clear_day_plan_cache(user_id, logger)
+        deleted["plan_cache_files"] = removed
 
     return jsonify(
         {
