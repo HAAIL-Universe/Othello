@@ -4468,12 +4468,15 @@
       }
 
       try {
+        const mode = (othelloState.currentMode || "companion").toLowerCase();
+        const channel = mode === "companion" ? "companion" : "planner";
+        console.debug(`[Othello UI] sendMessage mode=${mode} channel=${channel} view=${othelloState.currentView}`);
         const res = await fetch(API, {
           method: "POST",
           headers: {"Content-Type": "application/json"},
           body: JSON.stringify({ 
             message: text,
-            channel: "companion",
+            channel,
             goal_id: othelloState.activeGoalId || null,
             active_goal_id: othelloState.activeGoalId || null,
             current_mode: othelloState.currentMode,
