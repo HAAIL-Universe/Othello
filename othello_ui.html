@@ -3879,6 +3879,14 @@
       if (BOOT_DEBUG) console.log("[AUTH] Reset boundary", reason || "");
     }
 
+    function effectiveChannelForView({ currentView, currentMode }) {
+      const view = (currentView || "").toLowerCase();
+      const mode = (currentMode || "").toLowerCase();
+      if (view === "chat") return "companion";
+      if (mode === "today" || mode === "routine") return "planner";
+      return "companion";
+    }
+
     async function fetchChatHistory(limit = 50, channel = "companion") {
       const target = `${V1_MESSAGES_API}?limit=${limit}&channel=${encodeURIComponent(channel)}`;
       const resp = await fetch(target, { credentials: "include", cache: "no-store" });
@@ -3902,16 +3910,44 @@
     async function loadChatHistory() {
       if (!isAuthed || chatHydrated) return;
       try {
-        const messages = await fetchChatHistory();
+        const viewName = othelloState.currentView || "chat";
+        const modeName = othelloState.currentMode || "companion";
+        const requestedChannel = effectiveChannelForView({
+          currentView: viewName,
+          currentMode: modeName,
+        });
+        const messages = await fetchChatHistory(50, requestedChannel);
         clearChatState();
         chatHydrated = true;
-        if (!Array.isArray(messages) || messages.length === 0) return;
-        messages.forEach((msg) => {
-          const text = msg && msg.transcript ? String(msg.transcript) : "";
-          if (!text.trim()) return;
-          const role = msg && msg.source === "assistant" ? "bot" : "user";
-          addMessage(role, text);
-        });
+        let renderedCount = Array.isArray(messages) ? messages.length : 0;
+        const renderMessages = (rows) => {
+          (rows || []).forEach((msg) => {
+            const text = msg && msg.transcript ? String(msg.transcript) : "";
+            if (!text.trim()) return;
+            const role = msg && msg.source === "assistant" ? "bot" : "user";
+            addMessage(role, text);
+          });
+        };
+        if (renderedCount > 0) {
+          renderMessages(messages);
+        } else if (
+          (viewName || "").toLowerCase() === "chat"
+          && requestedChannel === "companion"
+          && !othelloState.chatHistoryFallbackTried
+        ) {
+          othelloState.chatHistoryFallbackTried = true;
+          const fallbackMessages = await fetchChatHistory(50, "planner");
+          if (Array.isArray(fallbackMessages) && fallbackMessages.length) {
+            renderedCount = fallbackMessages.length;
+            console.debug("[Othello UI] chat history fallback used planner channel", {
+              count: renderedCount,
+            });
+            renderMessages(fallbackMessages);
+          }
+        }
+        console.log(
+          `UI: loadChatHistory view=${viewName} mode=${modeName} requested_channel=${requestedChannel} count=${renderedCount}`
+        );
       } catch (err) {
         if (err && (err.status === 401 || err.status === 403)) {
           await handleUnauthorized("chat-history");
