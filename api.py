@@ -2915,7 +2915,10 @@ def handle_message():
             questions_prompt = False
             if last_assistant:
                 last_text = (last_assistant.get("content") or "").lower()
-                gate_prompt = "saved as a goal" in last_text and "broken into steps" in last_text
+                gate_prompt = (
+                    ("saved as a goal" in last_text and "broken into steps" in last_text) or
+                    "saved that as a pending goal suggestion" in last_text
+                )
                 questions_prompt = "before i draft steps" in last_text and "quick questions" in last_text
             if questions_prompt:
                 goal_text = None
