@@ -415,6 +415,12 @@ class DayPlanner:
         except Exception:
             return False
 
+    def _attach_next_action(self, plan: Dict[str, Any]) -> None:
+        if not plan:
+            return
+        flat = self._flatten_plan_items(plan)
+        plan["next_action"] = self._pick_next_action(flat, datetime.now(timezone.utc))
+
     def _pick_next_action(self, flat_items: List[Dict[str, Any]], now_utc: datetime) -> Optional[Dict[str, Any]]:
         candidates = []
         for item in flat_items:
@@ -423,23 +429,46 @@ class DayPlanner:
                 continue
             if self._is_snoozed_now(item.get("metadata") or {}, now_utc):
                 continue
-            candidates.append(item)
+            
+            # Normalize item_id without mutating original
+            item_id = item.get("item_id") or item.get("id")
+            if not item_id:
+                continue
+
+            cand = dict(item)
+            cand["item_id"] = item_id
+            candidates.append(cand)
         
         if not candidates:
             return None
 
         # Sort: in_progress > planned
+        # Then by type (steps > blocks)
         # Then by section hint (morning < afternoon < evening < any)
         section_order = {"morning": 0, "afternoon": 1, "evening": 2, "night": 3, "any": 4}
         
         def sort_key(i):
             s = i.get("status", "planned")
             status_score = 0 if s == "in_progress" else 1
+            
+            # Prefer concrete items (routine_step, goal_task) over containers (routine)
+            itype = i.get("type", "")
+            type_score = 1 if itype == "routine" else 0
+
             sec = i.get("section") or i.get("section_hint") or "any"
             sec_score = section_order.get(sec, 99)
-            # Tie-break with order_index if available, else 0
-            idx = i.get("order_index", 0)
-            return (status_score, sec_score, idx)
+            
+            # Tie-break with order_index if available, else push to end
+            idx_raw = i.get("order_index")
+            try:
+                idx = int(idx_raw) if idx_raw is not None else 10**9
+            except Exception:
+                idx = 10**9
+            
+            # Final deterministic tie-break
+            iid = str(i.get("item_id", ""))
+            
+            return (status_score, type_score, sec_score, idx, iid)
 
         candidates.sort(key=sort_key)
         return candidates[0]
@@ -479,8 +508,7 @@ class DayPlanner:
 
         # Compute next action
         if plan:
-            flat = self._flatten_plan_items(plan)
-            plan["next_action"] = self._pick_next_action(flat, datetime.now(timezone.utc))
+            self._attach_next_action(plan)
             
         return plan
 
@@ -557,11 +585,16 @@ class DayPlanner:
                         if prev["skip_reason"] and item["status"] == "skipped":
                             item["reason"] = prev["skip_reason"]
                         
-                        # Preserve snoozed_until
+                        # Preserve snoozed_until and execution timestamps
                         prev_meta = prev["metadata"]
-                        if prev_meta.get("snoozed_until"):
+                        if prev_meta.get("snoozed_until") or prev_meta.get("started_at") or prev_meta.get("completed_at"):
                             item.setdefault("metadata", {})
-                            item["metadata"]["snoozed_until"] = prev_meta["snoozed_until"]
+                            if prev_meta.get("snoozed_until"):
+                                item["metadata"]["snoozed_until"] = prev_meta["snoozed_until"]
+                            if prev_meta.get("started_at"):
+                                item["metadata"]["started_at"] = prev_meta["started_at"]
+                            if prev_meta.get("completed_at"):
+                                item["metadata"]["completed_at"] = prev_meta["completed_at"]
 
                 plan_repository.replace_plan_items(plan_row["id"], items)
         except Exception as exc:
@@ -1062,8 +1095,7 @@ class DayPlanner:
         
         plan = self._load_plan(uid, target_date)
         if plan:
-            flat = self._flatten_plan_items(plan)
-            plan["next_action"] = self._pick_next_action(flat, datetime.now(timezone.utc))
+            self._attach_next_action(plan)
             return plan
         return self.get_today_plan(user_id, mood_context=None, force_regen=False)
 
@@ -1106,8 +1138,25 @@ class DayPlanner:
         if current_status == "complete" and status != "complete":
             raise ValueError(f"Cannot transition from complete to {status}")
 
-        # Clear snooze if status changes
-        metadata_update = {"snoozed_until": None}
+        # Only apply side effects (snooze clear, timestamps) on actual status transition
+        metadata_update = {}
+        if status != current_status:
+            metadata_update["snoozed_until"] = None
+            
+            now_ts = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            existing_meta = existing_item.get("metadata") or {}
+            
+            if status == "in_progress":
+                if not existing_meta.get("started_at"):
+                    metadata_update["started_at"] = now_ts
+            elif status == "complete":
+                metadata_update["completed_at"] = now_ts
+                # If completing without ever starting, mark started_at = now
+                if not existing_meta.get("started_at"):
+                    metadata_update["started_at"] = now_ts
+            elif status == "planned":
+                if existing_meta.get("completed_at"):
+                    metadata_update["completed_at"] = None
 
         updated_row = plan_repository.update_plan_item_status(
             plan_row["id"],
@@ -1126,8 +1175,7 @@ class DayPlanner:
 
         plan = self._load_plan(uid, target_date) or {}
         if plan:
-            flat = self._flatten_plan_items(plan)
-            plan["next_action"] = self._pick_next_action(flat, datetime.now(timezone.utc))
+            self._attach_next_action(plan)
         
         entry, section_name, _ = self._find_item(plan, item_id)
 

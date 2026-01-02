@@ -3249,8 +3249,7 @@
 
       const status = item.status || "planned";
       const metadata = item.metadata || {};
-      const snoozedUntil = metadata.snoozed_until;
-      const isSnoozed = snoozedUntil && new Date(snoozedUntil) > new Date();
+      const isSnoozed = isSnoozedNow(metadata);
 
       const actions = [];
       
@@ -3320,20 +3319,23 @@
       return container;
     }
 
-    function isSnoozedNow(metadata) {
-      if (!metadata || !metadata.snoozed_until) return false;
-      let ts = metadata.snoozed_until;
-      // Treat strings without timezone as UTC by appending 'Z' only if needed
-      // Check for Z, +HH:MM, or -HH:MM at the end
-      if (!/Z|[+-]\d{2}:?\d{2}$/.test(ts)) {
-        ts += "Z";
+    function parseIsoUtcMillis(ts) {
+      if (!ts) return 0;
+      let s = String(ts);
+      if (!/Z$|[+-]\d{2}:\d{2}$/.test(s)) {
+        s += "Z";
       }
-      const snoozeDate = new Date(ts);
-      const now = new Date();
-      return !isNaN(snoozeDate.getTime()) && snoozeDate > now;
+      const d = new Date(s);
+      return isNaN(d.getTime()) ? 0 : d.getTime();
     }
 
-    function renderGoalTasks(goalTasks, snoozedCollector = null) {
+    function isSnoozedNow(metadata) {
+      if (!metadata || !metadata.snoozed_until) return false;
+      const ms = parseIsoUtcMillis(metadata.snoozed_until);
+      return ms > Date.now();
+    }
+
+    function renderGoalTasks(goalTasks, snoozedCollector = null, completedCollector = null) {
       const goalCount = Array.isArray(goalTasks) ? goalTasks.length : 0;
       othelloState.todayPlannerGoalTasks = Array.isArray(goalTasks) ? goalTasks : [];
       if (plannerGoalsList) {
@@ -3352,6 +3354,10 @@
       } else {
         let visibleCount = 0;
         goalTasks.forEach(item => {
+          if (item.status === "complete") {
+            if (completedCollector) completedCollector.push(item);
+            return;
+          }
           if (isSnoozedNow(item.metadata)) {
             if (snoozedCollector) snoozedCollector.push(item);
             return;
@@ -3398,6 +3404,7 @@
       const routines = sections.routines || [];
       const goalTasks = goalTasksOverride !== null ? goalTasksOverride : (sections.goal_tasks || []);
       const snoozedItems = [];
+      const completedItems = [];
 
       plannerRoutinesList.innerHTML = "";
       if (!routines.length) {
@@ -3406,6 +3413,10 @@
       } else {
         let visibleRoutines = 0;
         routines.forEach(item => {
+          if (item.status === "complete") {
+            completedItems.push(item);
+            return;
+          }
           if (isSnoozedNow(item.metadata)) {
             snoozedItems.push(item);
             return;
@@ -3461,6 +3472,10 @@
           } else {
             let visibleSteps = 0;
             steps.forEach(step => {
+              if (step.status === "complete") {
+                completedItems.push(step);
+                return;
+              }
               if (isSnoozedNow(step.metadata)) {
                 snoozedItems.push(step);
                 return;
@@ -3499,7 +3514,7 @@
            plannerRoutinesList.innerHTML = `<div class="planner-empty">All routines snoozed.</div>`;
         }
       }
-      renderGoalTasks(goalTasks, snoozedItems);
+      renderGoalTasks(goalTasks, snoozedItems, completedItems);
 
       // Render Snoozed Section
       const existingSnoozed = document.getElementById("planner-snoozed-section");
@@ -3530,7 +3545,11 @@
           row.className = "planner-task"; // Reuse task style
           
           const label = (item.metadata && item.metadata.label) || item.label || item.name || item.description || "(unnamed)";
-          const until = item.metadata && item.metadata.snoozed_until ? new Date(item.metadata.snoozed_until).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : "later";
+          let until = "later";
+          if (item.metadata && item.metadata.snoozed_until) {
+             const ms = parseIsoUtcMillis(item.metadata.snoozed_until);
+             if (ms > 0) until = new Date(ms).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+          }
 
           const left = document.createElement("div");
           left.innerHTML = `
@@ -3579,6 +3598,103 @@
         // Append to planner shell
         const shell = document.querySelector(".planner-shell");
         if (shell) shell.appendChild(snoozedSection);
+      }
+
+      // Render Completed Section
+      const existingCompleted = document.getElementById("planner-completed-section");
+      if (existingCompleted) existingCompleted.remove();
+
+      if (completedItems.length > 0) {
+         // Sort by completed_at desc
+         completedItems.sort((a, b) => {
+            const ta = parseIsoUtcMillis(a?.metadata?.completed_at);
+            const tb = parseIsoUtcMillis(b?.metadata?.completed_at);
+            return tb - ta;
+         });
+
+         const completedSection = document.createElement("div");
+         completedSection.id = "planner-completed-section";
+         completedSection.className = "planner-card";
+         completedSection.style.marginTop = "1rem";
+         completedSection.style.opacity = "0.6";
+         
+         const header = document.createElement("div");
+         header.className = "planner-card__header";
+         header.style.cursor = "pointer";
+         header.innerHTML = `
+           <div>
+             <div class="planner-section__title">Completed</div>
+             <div class="planner-section__count">${completedItems.length} item${completedItems.length === 1 ? "" : "s"}</div>
+           </div>
+           <div style="font-size:0.8rem; color:var(--text-soft);">▼</div>
+         `;
+         completedSection.appendChild(header);
+
+         const list = document.createElement("div");
+         list.className = "planner-blocks";
+         list.style.display = "none"; // Default collapsed
+
+         header.onclick = () => {
+            const isHidden = list.style.display === "none";
+            list.style.display = isHidden ? "block" : "none";
+            header.lastElementChild.textContent = isHidden ? "▲" : "▼";
+         };
+
+         completedItems.forEach(item => {
+            const row = document.createElement("div");
+            row.className = "planner-task";
+            
+            const label = (item.metadata && item.metadata.label) || item.label || item.name || item.description || "(unnamed)";
+            const completedAt = (item.metadata && item.metadata.completed_at) 
+               ? new Date(item.metadata.completed_at).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) 
+               : "";
+
+            const left = document.createElement("div");
+            left.innerHTML = `
+               <div class="planner-task__label" style="text-decoration: line-through; color: var(--text-soft);">${label}</div>
+               <div class="planner-task__meta">Completed ${completedAt}</div>
+            `;
+            
+            const right = document.createElement("div");
+            right.className = "planner-block__right";
+            
+            const reopenBtn = document.createElement("button");
+            reopenBtn.className = "planner-action-btn";
+            reopenBtn.textContent = "Reopen";
+            reopenBtn.onclick = async (e) => {
+               e.stopPropagation();
+               const originalText = reopenBtn.textContent;
+               reopenBtn.textContent = "...";
+               reopenBtn.disabled = true;
+               try {
+                  const payload = {
+                     status: "planned",
+                     item_id: item.item_id || item.id
+                  };
+                  const resp = await fetch(PLAN_UPDATE_API, {
+                     method: "POST",
+                     headers: { "Content-Type": "application/json" },
+                     credentials: "include",
+                     body: JSON.stringify(payload),
+                  });
+                  if (!resp.ok) throw new Error("Reopen failed");
+                  await loadTodayPlanner();
+               } catch (err) {
+                  console.error(err);
+                  reopenBtn.textContent = "Reopen";
+                  reopenBtn.disabled = false;
+               }
+            };
+            
+            right.appendChild(reopenBtn);
+            row.appendChild(left);
+            row.appendChild(right);
+            list.appendChild(row);
+         });
+         
+         completedSection.appendChild(list);
+         const shell = document.querySelector(".planner-shell");
+         if (shell) shell.appendChild(completedSection);
       }
 
       console.log("[Today Planner] renderPlannerSections", {
