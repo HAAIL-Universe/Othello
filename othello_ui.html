@@ -3329,13 +3329,134 @@
       return isNaN(d.getTime()) ? 0 : d.getTime();
     }
 
+    function parseHmToMinutes(hm) {
+      if (!hm || typeof hm !== 'string') return null;
+      const parts = hm.split(':');
+      if (parts.length !== 2) return null;
+      const h = parseInt(parts[0], 10);
+      const m = parseInt(parts[1], 10);
+      if (isNaN(h) || isNaN(m)) return null;
+      return h * 60 + m;
+    }
+
+    function getLocalNowMinutes() {
+      const now = new Date();
+      return now.getHours() * 60 + now.getMinutes();
+    }
+
+    function isOutsideTimeWindow(scheduleRule) {
+      if (!scheduleRule || !scheduleRule.time_window) return false;
+      const start = parseHmToMinutes(scheduleRule.time_window.start);
+      const end = parseHmToMinutes(scheduleRule.time_window.end);
+      if (start === null || end === null) return false;
+      
+      const now = getLocalNowMinutes();
+      if (start <= end) {
+        // Standard window (e.g. 09:00 to 17:00)
+        return now < start || now > end;
+      } else {
+        // Wraps midnight (e.g. 22:00 to 06:00)
+        // Inside if >= start OR <= end
+        // Outside if > end AND < start
+        return now > end && now < start;
+      }
+    }
+
+    function formatTimeWindow(scheduleRule) {
+      if (!scheduleRule || !scheduleRule.time_window) return "";
+      const s = scheduleRule.time_window.start;
+      const e = scheduleRule.time_window.end;
+      if (!s || !e) return "";
+      return `${s}–${e}`;
+    }
+
+    // --- Date Helpers ---
+
+    function toYmdLocal(d = new Date()) {
+      const year = d.getFullYear();
+      const month = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    }
+
+    function parseYmdToLocalDate(ymd) {
+      if (!ymd || typeof ymd !== 'string') return null;
+      const parts = ymd.split('-');
+      if (parts.length !== 3) return null;
+      const d = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
+      if (isNaN(d.getTime())) return null;
+      return d;
+    }
+
+    function isOnOrBeforeYmd(ymd, refYmd) {
+      if (!ymd || !refYmd) return false;
+      return ymd <= refYmd; // Lexicographical comparison works for YYYY-MM-DD
+    }
+
+    function addDaysYmd(refYmd, n) {
+      const d = parseYmdToLocalDate(refYmd);
+      if (!d) return null;
+      d.setDate(d.getDate() + n);
+      return toYmdLocal(d);
+    }
+
+    function safeInt(v, fallback = 999999) {
+      const i = parseInt(v, 10);
+      return isNaN(i) ? fallback : i;
+    }
+
+    // --------------------
+
     function isSnoozedNow(metadata) {
       if (!metadata || !metadata.snoozed_until) return false;
       const ms = parseIsoUtcMillis(metadata.snoozed_until);
       return ms > Date.now();
     }
 
-    function renderGoalTasks(goalTasks, snoozedCollector = null, completedCollector = null) {
+    function renderDayReview(metrics) {
+      const existing = document.getElementById("planner-day-review");
+      if (existing) existing.remove();
+
+      const container = document.querySelector(".planner-shell");
+      if (!container) return;
+
+      const strip = document.createElement("div");
+      strip.id = "planner-day-review";
+      strip.className = "planner-card";
+      strip.style.padding = "0.5rem 1rem";
+      strip.style.marginBottom = "1rem";
+      strip.style.fontSize = "0.85rem";
+      strip.style.color = "var(--text-soft)";
+      strip.style.display = "flex";
+      strip.style.justifyContent = "center";
+      strip.style.gap = "1rem";
+      strip.style.flexWrap = "wrap";
+      strip.style.background = "rgba(255, 255, 255, 0.03)";
+      strip.style.border = "1px solid var(--border)";
+
+      const parts = [];
+      if (metrics.completed > 0) parts.push(`<span style="color:var(--text-main)">Completed: ${metrics.completed}</span>`);
+      if (metrics.inProgress > 0) parts.push(`<span style="color:var(--accent)">In progress: ${metrics.inProgress}</span>`);
+      if (metrics.snoozed > 0) parts.push(`<span>Snoozed: ${metrics.snoozed}</span>`);
+      if (metrics.overdue > 0) parts.push(`<span style="color:var(--accent)">Overdue: ${metrics.overdue}</span>`);
+      if (metrics.tomorrow > 0) parts.push(`<span>Tomorrow: ${metrics.tomorrow}</span>`);
+
+      if (parts.length === 0) {
+         strip.textContent = "No activity yet today.";
+      } else {
+         strip.innerHTML = parts.join(" · ");
+      }
+
+      // Insert after brief
+      const brief = document.getElementById("planner-brief");
+      if (brief && brief.nextSibling) {
+         container.insertBefore(strip, brief.nextSibling);
+      } else {
+         container.prepend(strip);
+      }
+    }
+
+    function renderGoalTasks(goalTasks, snoozedCollector = null, completedCollector = null, overdueCollector = null, laterCollector = null, tomorrowCounter = null) {
       const goalCount = Array.isArray(goalTasks) ? goalTasks.length : 0;
       othelloState.todayPlannerGoalTasks = Array.isArray(goalTasks) ? goalTasks : [];
       if (plannerGoalsList) {
@@ -3362,6 +3483,31 @@
             if (snoozedCollector) snoozedCollector.push(item);
             return;
           }
+
+          // Check reschedule_to (only if not collecting for snoozed/completed)
+          if (!snoozedCollector && !completedCollector) {
+             const rTo = item.reschedule_to || (item.metadata && item.metadata.reschedule_to);
+             if (rTo) {
+                if (rTo === tomorrowCounter?.ymd) {
+                   // Do not hide if in_progress
+                   if (item.status !== "in_progress") {
+                      if (tomorrowCounter) tomorrowCounter.count++;
+                      return;
+                   }
+                }
+                if (isOnOrBeforeYmd(rTo, tomorrowCounter?.planDate) && rTo !== tomorrowCounter?.planDate) {
+                   if (overdueCollector) overdueCollector.push(item);
+                   return;
+                }
+             }
+             
+             // Check time window (skip if in_progress)
+             if (item.status !== "in_progress" && isOutsideTimeWindow(item.schedule_rule || (item.metadata && item.metadata.schedule_rule))) {
+               if (laterCollector) laterCollector.push(item);
+               return;
+             }
+          }
+
           visibleCount++;
           const task = document.createElement("div");
           task.className = "planner-task";
@@ -3405,6 +3551,15 @@
       const goalTasks = goalTasksOverride !== null ? goalTasksOverride : (sections.goal_tasks || []);
       const snoozedItems = [];
       const completedItems = [];
+      const laterItems = [];
+      const overdueItems = [];
+      const tomorrowCounter = { count: 0, ymd: null, planDate: null };
+      let inProgressCount = 0;
+
+      const planDateYmd = plan.plan_date || toYmdLocal();
+      const tomorrowYmd = addDaysYmd(planDateYmd, 1);
+      tomorrowCounter.ymd = tomorrowYmd;
+      tomorrowCounter.planDate = planDateYmd;
 
       plannerRoutinesList.innerHTML = "";
       if (!routines.length) {
@@ -3421,6 +3576,32 @@
             snoozedItems.push(item);
             return;
           }
+          if (item.status === "in_progress") {
+             inProgressCount++;
+          }
+
+          // Check reschedule_to
+          const rTo = item.reschedule_to || (item.metadata && item.metadata.reschedule_to);
+          if (rTo) {
+             if (rTo === tomorrowYmd) {
+                // Do not hide if in_progress
+                if (item.status !== "in_progress") {
+                   tomorrowCounter.count++;
+                   return; 
+                }
+             }
+             if (isOnOrBeforeYmd(rTo, planDateYmd) && rTo !== planDateYmd) {
+                overdueItems.push(item);
+                return;
+             }
+          }
+          
+          // Check time window (skip if in_progress)
+          if (item.status !== "in_progress" && isOutsideTimeWindow(item.schedule_rule || (item.metadata && item.metadata.schedule_rule))) {
+            laterItems.push(item);
+            return;
+          }
+
           visibleRoutines++;
           const block = document.createElement("div");
           block.className = "planner-block";
@@ -3480,6 +3661,20 @@
                 snoozedItems.push(step);
                 return;
               }
+              if (step.status === "in_progress") {
+                 inProgressCount++;
+              }
+              
+              // Inherit schedule from parent if missing
+              const stepSched = step.schedule_rule || (step.metadata && step.metadata.schedule_rule) || sched;
+              if (step.status !== "in_progress" && isOutsideTimeWindow(stepSched)) {
+                // Attach parent info for context in Later list
+                step._parentLabel = item.name || item.label;
+                step._scheduleRule = stepSched;
+                laterItems.push(step);
+                return;
+              }
+
               visibleSteps++;
               const stepRow = document.createElement("div");
               stepRow.className = "planner-step";
@@ -3502,7 +3697,7 @@
               stepsWrap.appendChild(stepRow);
             });
             if (visibleSteps === 0 && steps.length > 0) {
-               stepsWrap.innerHTML = `<div class="planner-empty">All steps snoozed.</div>`;
+               stepsWrap.innerHTML = `<div class="planner-empty">All steps snoozed or later.</div>`;
             }
           }
 
@@ -3511,10 +3706,178 @@
         });
         plannerRoutinesCount.textContent = `${visibleRoutines} item${visibleRoutines === 1 ? "" : "s"}`;
         if (visibleRoutines === 0 && routines.length > 0) {
-           plannerRoutinesList.innerHTML = `<div class="planner-empty">All routines snoozed.</div>`;
+           plannerRoutinesList.innerHTML = `<div class="planner-empty">All routines snoozed or later.</div>`;
         }
       }
-      renderGoalTasks(goalTasks, snoozedItems, completedItems);
+      
+      // Count in-progress from goal tasks too
+      goalTasks.forEach(t => {
+         if (t.status === "in_progress" && !isSnoozedNow(t.metadata)) {
+            inProgressCount++;
+         }
+      });
+
+      renderGoalTasks(goalTasks, snoozedItems, completedItems, overdueItems, laterItems, tomorrowCounter);
+
+      // Render Day Review
+      renderDayReview({
+         completed: completedItems.length,
+         inProgress: inProgressCount,
+         snoozed: snoozedItems.length,
+         overdue: overdueItems.length,
+         tomorrow: tomorrowCounter.count
+      });
+
+      // Render Tomorrow Preview
+      const existingTomorrow = document.getElementById("planner-tomorrow-preview");
+      if (existingTomorrow) existingTomorrow.remove();
+      
+      if (tomorrowCounter.count > 0) {
+         const tmDiv = document.createElement("div");
+         tmDiv.id = "planner-tomorrow-preview";
+         tmDiv.style.fontSize = "0.85rem";
+         tmDiv.style.color = "var(--text-soft)";
+         tmDiv.style.marginBottom = "0.5rem";
+         tmDiv.style.textAlign = "center";
+         tmDiv.textContent = `Tomorrow: ${tomorrowCounter.count} carried item${tomorrowCounter.count === 1 ? "" : "s"}`;
+         
+         // Insert after the main card (today-plan-card)
+         const mainCard = document.getElementById("today-plan-card");
+         if (mainCard && mainCard.parentNode) {
+            mainCard.parentNode.insertBefore(tmDiv, mainCard.nextSibling);
+         }
+      }
+
+      // Render Overdue Section
+      const existingOverdue = document.getElementById("planner-overdue-section");
+      if (existingOverdue) existingOverdue.remove();
+
+      if (overdueItems.length > 0) {
+        const overdueSection = document.createElement("div");
+        overdueSection.id = "planner-overdue-section";
+        overdueSection.className = "planner-card";
+        overdueSection.style.marginTop = "1rem";
+        overdueSection.style.borderLeft = "3px solid var(--accent)"; // Highlight
+        
+        const header = document.createElement("div");
+        header.className = "planner-card__header";
+        header.style.cursor = "pointer";
+        header.innerHTML = `
+          <div>
+            <div class="planner-section__title" style="color:var(--accent);">Overdue</div>
+            <div class="planner-section__count">${overdueItems.length} item${overdueItems.length === 1 ? "" : "s"}</div>
+          </div>
+          <div style="font-size:0.8rem; color:var(--text-soft);">▼</div>
+        `;
+        overdueSection.appendChild(header);
+
+        const list = document.createElement("div");
+        list.className = "planner-blocks";
+        // Default expanded for Overdue
+        list.style.display = "block"; 
+        header.lastElementChild.textContent = "▲";
+
+        header.onclick = () => {
+           const isHidden = list.style.display === "none";
+           list.style.display = isHidden ? "block" : "none";
+           header.lastElementChild.textContent = isHidden ? "▲" : "▼";
+        };
+        
+        overdueItems.forEach(item => {
+          const row = document.createElement("div");
+          row.className = "planner-task";
+          
+          const label = (item.metadata && item.metadata.label) || item.label || item.name || item.description || "(unnamed)";
+          const rTo = item.reschedule_to || (item.metadata && item.metadata.reschedule_to);
+          const context = item._parentLabel ? `From ${item._parentLabel}` : (item.section_hint || "Routine");
+
+          const left = document.createElement("div");
+          left.innerHTML = `
+            <div class="planner-task__label">${label} <span style="font-size:0.7rem; color:var(--accent); border:1px solid var(--accent-soft); padding:0 0.3rem; border-radius:4px; margin-left:0.3rem;">Overdue ${rTo || ""}</span></div>
+            <div class="planner-task__meta">${context}</div>
+          `;
+          
+          const right = document.createElement("div");
+          right.className = "planner-block__right";
+          right.appendChild(createStatusChip(item.status, item));
+          if (item.item_id) {
+            right.appendChild(buildPlannerActions(item));
+          }
+          
+          row.appendChild(left);
+          row.appendChild(right);
+          list.appendChild(row);
+        });
+        
+        overdueSection.appendChild(list);
+        const shell = document.querySelector(".planner-shell");
+        if (shell) shell.appendChild(overdueSection);
+      }
+
+      // Render Later Today Section
+      const existingLater = document.getElementById("planner-later-section");
+      if (existingLater) existingLater.remove();
+
+      if (laterItems.length > 0) {
+        const laterSection = document.createElement("div");
+        laterSection.id = "planner-later-section";
+        laterSection.className = "planner-card";
+        laterSection.style.marginTop = "1rem";
+        laterSection.style.opacity = "0.8";
+        
+        const header = document.createElement("div");
+        header.className = "planner-card__header";
+        header.style.cursor = "pointer";
+        header.innerHTML = `
+          <div>
+            <div class="planner-section__title">Later Today</div>
+            <div class="planner-section__count">${laterItems.length} item${laterItems.length === 1 ? "" : "s"}</div>
+          </div>
+          <div style="font-size:0.8rem; color:var(--text-soft);">▼</div>
+        `;
+        laterSection.appendChild(header);
+
+        const list = document.createElement("div");
+        list.className = "planner-blocks";
+        list.style.display = "none"; // Default collapsed
+
+        header.onclick = () => {
+           const isHidden = list.style.display === "none";
+           list.style.display = isHidden ? "block" : "none";
+           header.lastElementChild.textContent = isHidden ? "▲" : "▼";
+        };
+        
+        laterItems.forEach(item => {
+          const row = document.createElement("div");
+          row.className = "planner-task"; // Reuse task style
+          
+          const label = (item.metadata && item.metadata.label) || item.label || item.name || item.description || "(unnamed)";
+          const sched = item._scheduleRule || item.schedule_rule || (item.metadata && item.metadata.schedule_rule);
+          const timeRange = formatTimeWindow(sched);
+          const context = item._parentLabel ? `From ${item._parentLabel}` : (item.section_hint || "Routine");
+
+          const left = document.createElement("div");
+          left.innerHTML = `
+            <div class="planner-task__label">${label} <span style="font-size:0.7rem; color:var(--text-soft); border:1px solid var(--border); padding:0 0.3rem; border-radius:4px; margin-left:0.3rem;">Later ${timeRange}</span></div>
+            <div class="planner-task__meta">${context}</div>
+          `;
+          
+          const right = document.createElement("div");
+          right.className = "planner-block__right";
+          right.appendChild(createStatusChip(item.status, item));
+          if (item.item_id) {
+            right.appendChild(buildPlannerActions(item));
+          }
+          
+          row.appendChild(left);
+          row.appendChild(right);
+          list.appendChild(row);
+        });
+        
+        laterSection.appendChild(list);
+        const shell = document.querySelector(".planner-shell");
+        if (shell) shell.appendChild(laterSection);
+      }
 
       // Render Snoozed Section
       const existingSnoozed = document.getElementById("planner-snoozed-section");
@@ -3705,17 +4068,151 @@
       });
     }
 
-    function renderNextAction(plan) {
+    function renderCurrentFocus(plan) {
+      // 1. Find current item
+      const allItems = [];
+      const sections = plan.sections || {};
+      (sections.routines || []).forEach(r => {
+         if (r.steps && r.steps.length) {
+           r.steps.forEach(s => allItems.push({...s, _section: 'Routine Step', _parent: r.label}));
+         } else {
+           allItems.push({...r, _section: 'Routine'});
+         }
+      });
+      (sections.goal_tasks || []).forEach(t => allItems.push({...t, _section: 'Goal Task'}));
+      (sections.optional || []).forEach(t => allItems.push({...t, _section: 'Optional'}));
+      
+      const currentItem = allItems.find(item => 
+        (item.status === 'in_progress') && !isSnoozedNow(item.metadata)
+      );
+
+      const existingCard = document.getElementById("current-focus-card");
+      if (existingCard) existingCard.remove();
+      
+      const existingToggle = document.getElementById("planner-sections-toggle");
+      if (existingToggle) existingToggle.remove();
+
+      if (!currentItem) {
+        togglePlannerSections(true);
+        return null;
+      }
+
+      // 2. Render Card
+      const container = document.querySelector(".planner-shell");
+      const card = document.createElement("div");
+      card.id = "current-focus-card";
+      card.className = "planner-card";
+      card.style.border = "1px solid var(--accent)";
+      card.style.background = "rgba(125, 211, 252, 0.08)";
+      card.style.marginBottom = "1rem";
+      
+      const label = (currentItem.metadata && currentItem.metadata.label) || currentItem.label || currentItem.name || "Current Task";
+      const itemId = currentItem.item_id || currentItem.id;
+      const context = currentItem._section + (currentItem._parent ? ` · ${currentItem._parent}` : "");
+      
+      card.innerHTML = `
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem;">
+          <div class="planner-headline" style="font-size: 0.9rem; color: var(--accent); text-transform: uppercase; letter-spacing: 0.05em;">
+             Current Focus
+          </div>
+          <div style="font-size:0.8rem; color:var(--text-soft);">${context}</div>
+        </div>
+        <div class="planner-headline" style="font-size: 1.3rem; margin-bottom: 1rem; line-height:1.3;">${label}</div>
+      `;
+
+      const actionsDiv = document.createElement("div");
+      actionsDiv.className = "planner-actions";
+      actionsDiv.style.gap = "0.5rem";
+      actionsDiv.style.flexWrap = "wrap";
+
+      const makeBtn = (text, onClick, primary = false) => {
+        const btn = document.createElement("button");
+        btn.className = "planner-action-btn";
+        btn.textContent = text;
+        if (primary) {
+          btn.style.background = "var(--accent)";
+          btn.style.color = "var(--bg-1)";
+          btn.style.borderColor = "var(--accent)";
+          btn.style.fontWeight = "600";
+        }
+        btn.onclick = onClick;
+        return btn;
+      };
+
+      actionsDiv.appendChild(makeBtn("Done", () => updateItemStatus(itemId, 'complete'), true));
+      actionsDiv.appendChild(makeBtn("Revert", () => updateItemStatus(itemId, 'planned')));
+      actionsDiv.appendChild(makeBtn("+15m", () => snoozeItem(itemId, 15)));
+      actionsDiv.appendChild(makeBtn("+30m", () => snoozeItem(itemId, 30)));
+      actionsDiv.appendChild(makeBtn("+1h", () => snoozeItem(itemId, 60)));
+
+      card.appendChild(actionsDiv);
+
+      // Insert after brief
+      const brief = document.getElementById("planner-brief");
+      if (brief && brief.nextSibling) {
+        container.insertBefore(card, brief.nextSibling);
+      } else {
+        container.prepend(card);
+      }
+
+      // 3. Collapse other sections
+      togglePlannerSections(false);
+
+      // 4. Add Toggle
+      const toggleBtn = document.createElement("button");
+      toggleBtn.id = "planner-sections-toggle";
+      toggleBtn.className = "planner-action-btn";
+      toggleBtn.style.margin = "0 auto 1rem auto";
+      toggleBtn.style.display = "block";
+      toggleBtn.textContent = "Show all sections";
+      toggleBtn.onclick = () => {
+        const probe = document.getElementById("today-plan-card");
+        const areHidden = probe ? (probe.style.display === "none") : false;
+        togglePlannerSections(areHidden);
+        toggleBtn.textContent = areHidden ? "Hide all sections" : "Show all sections";
+      };
+      
+      card.after(toggleBtn);
+      
+      return currentItem;
+    }
+
+    function togglePlannerSections(show) {
+      const ids = ["today-plan-card", "planner-routines", "planner-goals", "planner-snoozed-section", "planner-completed-section", "planner-later-section", "planner-overdue-section"];
+      ids.forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.style.display = show ? "" : "none";
+      });
+    }
+
+    function renderNextAction(plan, excludeIds = []) {
       let nextAction = plan.next_action;
+      
+      if (nextAction && excludeIds.includes(nextAction.item_id || nextAction.id)) {
+        nextAction = null;
+      }
       
       // Fallback to client-side if server didn't provide it (legacy support)
       if (!nextAction) {
         // Compute client-side
         const allItems = [];
         const sections = plan.sections || {};
+        
+        // Date context
+        const planDateYmd = plan.plan_date || toYmdLocal();
+        const tomorrowYmd = addDaysYmd(planDateYmd, 1);
+
         (sections.routines || []).forEach(r => {
            if (r.steps && r.steps.length) {
-             r.steps.forEach(s => allItems.push(s));
+             // Pass parent schedule rule if needed
+             const parentSched = r.schedule_rule || (r.metadata && r.metadata.schedule_rule);
+             r.steps.forEach(s => {
+               // Ensure step has schedule context for filtering
+               if (!s.schedule_rule && !s.metadata?.schedule_rule && parentSched) {
+                 s._inheritedSchedule = parentSched;
+               }
+               allItems.push(s);
+             });
            } else {
              allItems.push(r);
            }
@@ -3724,18 +4221,58 @@
         
         // Filter
         const candidates = allItems.filter(item => {
+           if (excludeIds.includes(item.item_id || item.id)) return false;
            if (isSnoozedNow(item.metadata)) return false;
+           
+           // Skip "tomorrow" items
+           const rTo = item.reschedule_to || (item.metadata && item.metadata.reschedule_to);
+           if (rTo === tomorrowYmd) return false;
+
+           // Skip "later" items unless in_progress
+           const sched = item.schedule_rule || (item.metadata && item.metadata.schedule_rule) || item._inheritedSchedule;
+           if (item.status !== "in_progress" && isOutsideTimeWindow(sched)) return false;
+
            const s = (item.status || "planned").toLowerCase();
            return s === "planned" || s === "in_progress";
         });
         
-        // Sort: in_progress first, then by order/priority (implicit in list order)
+        // Sort: in_progress first, then Overdue, then by order
         candidates.sort((a, b) => {
            const aStatus = (a.status || "").toLowerCase();
            const bStatus = (b.status || "").toLowerCase();
+           
+           // 1. In Progress
            if (aStatus === "in_progress" && bStatus !== "in_progress") return -1;
            if (bStatus === "in_progress" && aStatus !== "in_progress") return 1;
-           return 0;
+           
+           // 2. Overdue
+           const aRTo = a.reschedule_to || (a.metadata && a.metadata.reschedule_to);
+           const bRTo = b.reschedule_to || (b.metadata && b.metadata.reschedule_to);
+           
+           const aIsOverdue = aRTo && isOnOrBeforeYmd(aRTo, planDateYmd) && aRTo !== planDateYmd;
+           const bIsOverdue = bRTo && isOnOrBeforeYmd(bRTo, planDateYmd) && bRTo !== planDateYmd;
+           
+           if (aIsOverdue && !bIsOverdue) return -1;
+           if (!aIsOverdue && bIsOverdue) return 1;
+
+           // 3. Prefer non-later (soft time window)
+           const aSched = a.schedule_rule || (a.metadata && a.metadata.schedule_rule) || a._inheritedSchedule;
+           const bSched = b.schedule_rule || (b.metadata && b.metadata.schedule_rule) || b._inheritedSchedule;
+           const aLater = isOutsideTimeWindow(aSched);
+           const bLater = isOutsideTimeWindow(bSched);
+           
+           if (!aLater && bLater) return -1;
+           if (aLater && !bLater) return 1;
+
+           // 4. Order Index (safe int)
+           const aIdx = safeInt(a.order_index);
+           const bIdx = safeInt(b.order_index);
+           if (aIdx !== bIdx) return aIdx - bIdx;
+
+           // 5. Tie-break by ID
+           const aId = a.item_id || a.id || "";
+           const bId = b.item_id || b.id || "";
+           return aId.localeCompare(bId);
         });
         
         if (candidates.length > 0) {
@@ -3823,7 +4360,8 @@
         if (BOOT_DEBUG) console.log("[Today Planner] goalTasks count", goalTasks.length, { source: "ui", planSource: plan._plan_source });
         renderTodayBrief(plan, brief);
         renderPlannerSections(plan, goalTasks);
-        renderNextAction(plan);
+        const currentItem = renderCurrentFocus(plan);
+        renderNextAction(plan, currentItem ? [currentItem.item_id || currentItem.id] : []);
         await loadTodayPlanPanel();
       } catch (e) {
         let httpStatus = null;

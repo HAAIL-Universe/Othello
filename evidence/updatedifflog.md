@@ -1,54 +1,126 @@
-# Update Diff Log - January 2, 2026
+# Update Diff Log
 
 ## Summary
-Applied two micro-fixes to the "Completed" section UI in `othello_ui.html`:
-1.  **Timezone-safe parsing**: Updated `parseIsoUtcMillis` to use a stricter regex for timezone detection and updated the "Completed" section sorting to use this helper with optional chaining.
-2.  **Reopen button error UX**: Simplified the error handling for the "Reopen" button to immediately restore the button text to "Reopen" and re-enable it upon failure, removing the "Error" state and timeout.
+Implemented a "Day Review" strip in the Today Planner. This lightweight dashboard provides a real-time summary of the day's progress, showing counts for Completed, In-progress, Snoozed, Overdue, and Tomorrow items. It updates dynamically on every planner refresh and persists even when sections are collapsed.
 
 ## Files Changed
-- `othello_ui.html`
+- `othello_ui.html`: Added `renderDayReview` function, updated `renderPlannerSections` and `renderGoalTasks` to compute aggregate metrics and invoke the review strip rendering.
 
 ## Anchors
-- `othello_ui.html`: `parseIsoUtcMillis` (lines ~3330)
-- `othello_ui.html`: Completed section sorting (lines ~3600)
-- `othello_ui.html`: Reopen button catch block (lines ~3680)
+- `renderDayReview` (approx line 3300)
+- `renderPlannerSections` (approx line 3400)
+- `renderGoalTasks` (approx line 3350)
 
-## Verification Results
-- **Local Check**: The HTML structure remains valid.
-- **Sorting**: The "Completed" section now uses `parseIsoUtcMillis(a?.metadata?.completed_at)` for robust sorting.
-- **UX**: The "Reopen" button immediately resets to "Reopen" on error, improving responsiveness.
+## Verification Notes
+- **Metrics Accuracy**: Verified that counts for Completed, In-progress, Snoozed, Overdue, and Tomorrow accurately reflect the state of items in the plan.
+- **Visibility**: Verified that the Day Review strip appears near the top of the planner and remains visible even when "Hide all sections" is toggled.
+- **Dynamic Updates**: Verified that completing, snoozing, or rescheduling an item immediately updates the counts in the strip.
+- **Zero State**: Verified that the strip handles zero counts gracefully (hiding individual metrics or showing "No activity yet today").
 
-## Evidence
+## Evidence Snippets
 
-### A) The full `parseIsoUtcMillis` function
+### A) `renderDayReview` Function
+
 ```javascript
-    function parseIsoUtcMillis(ts) {
-      if (!ts) return 0;
-      let s = String(ts);
-      if (!/Z$|[+-]\d{2}:\d{2}$/.test(s)) {
-        s += "Z";
+    function renderDayReview(metrics) {
+      const existing = document.getElementById("planner-day-review");
+      if (existing) existing.remove();
+
+      const container = document.querySelector(".planner-shell");
+      if (!container) return;
+
+      const strip = document.createElement("div");
+      strip.id = "planner-day-review";
+      strip.className = "planner-card";
+      strip.style.padding = "0.5rem 1rem";
+      strip.style.marginBottom = "1rem";
+      strip.style.fontSize = "0.85rem";
+      strip.style.color = "var(--text-soft)";
+      strip.style.display = "flex";
+      strip.style.justifyContent = "center";
+      strip.style.gap = "1rem";
+      strip.style.flexWrap = "wrap";
+      strip.style.background = "rgba(255, 255, 255, 0.03)";
+      strip.style.border = "1px solid var(--border)";
+
+      const parts = [];
+      if (metrics.completed > 0) parts.push(`<span style="color:var(--text-main)">Completed: ${metrics.completed}</span>`);
+      if (metrics.inProgress > 0) parts.push(`<span style="color:var(--accent)">In progress: ${metrics.inProgress}</span>`);
+      if (metrics.snoozed > 0) parts.push(`<span>Snoozed: ${metrics.snoozed}</span>`);
+      if (metrics.overdue > 0) parts.push(`<span style="color:var(--accent)">Overdue: ${metrics.overdue}</span>`);
+      if (metrics.tomorrow > 0) parts.push(`<span>Tomorrow: ${metrics.tomorrow}</span>`);
+
+      if (parts.length === 0) {
+         strip.textContent = "No activity yet today.";
+      } else {
+         strip.innerHTML = parts.join(" · ");
       }
-      const d = new Date(s);
-      return isNaN(d.getTime()) ? 0 : d.getTime();
+
+      // Insert after brief
+      const brief = document.getElementById("planner-brief");
+      if (brief && brief.nextSibling) {
+         container.insertBefore(strip, brief.nextSibling);
+      } else {
+         container.prepend(strip);
+      }
     }
 ```
 
-### B) The Completed sort block
+### B) Metrics Computation
+
 ```javascript
-      if (completedItems.length > 0) {
-         // Sort by completed_at desc
-         completedItems.sort((a, b) => {
-            const ta = parseIsoUtcMillis(a?.metadata?.completed_at);
-            const tb = parseIsoUtcMillis(b?.metadata?.completed_at);
-            return tb - ta;
-         });
+      const snoozedItems = [];
+      const completedItems = [];
+      const laterItems = [];
+      const overdueItems = [];
+      const tomorrowCounter = { count: 0, ymd: null, planDate: null };
+      let inProgressCount = 0;
+
+      // ... inside routine/step loops ...
+          if (item.status === "complete") {
+            completedItems.push(item);
+            return;
+          }
+          if (isSnoozedNow(item.metadata)) {
+            snoozedItems.push(item);
+            return;
+          }
+          if (item.status === "in_progress") {
+             inProgressCount++;
+          }
+      
+      // ... inside goal tasks loop ...
+      goalTasks.forEach(t => {
+         if (t.status === "in_progress" && !isSnoozedNow(t.metadata)) {
+            inProgressCount++;
+         }
+      });
 ```
 
-### C) The Reopen catch block
+### C) Invocation
+
 ```javascript
-               } catch (err) {
-                  console.error(err);
-                  reopenBtn.textContent = "Reopen";
-                  reopenBtn.disabled = false;
-               }
+      renderGoalTasks(goalTasks, snoozedItems, completedItems, overdueItems, laterItems, tomorrowCounter);
+
+      // Render Day Review
+      renderDayReview({
+         completed: completedItems.length,
+         inProgress: inProgressCount,
+         snoozed: snoozedItems.length,
+         overdue: overdueItems.length,
+         tomorrow: tomorrowCounter.count
+      });
 ```
+
+### D) Toggle Exclusion
+
+The `planner-day-review` ID is **not** included in the `togglePlannerSections` list, ensuring it remains visible:
+
+```javascript
+    function togglePlannerSections(show) {
+      const ids = ["today-plan-card", "planner-routines", "planner-goals", "planner-snoozed-section", "planner-completed-section", "planner-later-section", "planner-overdue-section"];
+      // ...
+    }
+```
+
+
