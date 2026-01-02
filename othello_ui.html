@@ -1788,6 +1788,29 @@
       <!-- TODAY PLANNER PLACEHOLDER -->
       <div id="today-planner-view" class="view">
         <div class="planner-shell" id="planner-shell">
+          <div style="display: flex; justify-content: flex-end; margin-bottom: 0.5rem;">
+             <button id="week-view-toggle" class="planner-action-btn" style="font-size: 0.8rem; padding: 0.4rem 0.8rem;">Week View</button>
+             <button id="suggestions-toggle" class="planner-action-btn" style="font-size: 0.8rem; padding: 0.4rem 0.8rem; margin-left: 0.5rem;">Suggestions</button>
+          </div>
+          
+          <div id="planner-suggestions-panel" class="planner-card" style="display: none; margin-bottom: 1rem; border: 1px solid var(--accent);">
+             <div class="planner-card__header" style="display: flex; justify-content: space-between; align-items: center;">
+                <div class="planner-section__title">Suggestions</div>
+                <button id="generate-suggestions-btn" class="planner-action-btn" style="font-size: 0.8rem;">Generate</button>
+             </div>
+             <div id="suggestions-list" style="padding: 1rem;"></div>
+          </div>
+          
+          <div id="planner-week-view" style="display: none;">
+             <div class="planner-card">
+                <div class="planner-card__header">
+                   <div class="planner-section__title">This Week</div>
+                </div>
+                <div id="week-view-content" class="planner-blocks"></div>
+             </div>
+          </div>
+
+          <div id="planner-day-view">
           <div class="planner-card planner-brief" id="planner-brief">
             <div class="planner-headline" id="planner-headline">Loading...</div>
             <div class="planner-subline" id="planner-energy"></div>
@@ -1821,6 +1844,7 @@
             </div>
             <div class="planner-blocks" id="planner-goals-list"></div>
           </div>
+          </div> <!-- End planner-day-view -->
         </div>
       </div>
 
@@ -4321,7 +4345,16 @@
     }
     
     window.updateItemStatus = async (itemId, status) => {
+       if (isReadOnlyDayView()) {
+           console.warn("Cannot update status in read-only view");
+           return;
+       }
        try {
+         // Invalidate week view cache
+         if (typeof weekViewCache !== 'undefined') {
+             for (const key in weekViewCache) delete weekViewCache[key];
+         }
+
          const resp = await fetch(PLAN_UPDATE_API, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -4333,7 +4366,16 @@
     };
     
     window.snoozeItem = async (itemId, minutes) => {
+       if (isReadOnlyDayView()) {
+           console.warn("Cannot snooze in read-only view");
+           return;
+       }
        try {
+         // Invalidate week view cache
+         if (typeof weekViewCache !== 'undefined') {
+             for (const key in weekViewCache) delete weekViewCache[key];
+         }
+
          const resp = await fetch(PLAN_UPDATE_API, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -4344,21 +4386,546 @@
        } catch(e) { console.error(e); }
     };
 
+    // --- Week View Logic ---
+    const weekViewCache = {}; 
+    let isWeekViewActive = false;
+    let dayViewDateYmd = null; // null means "today/live"
+
+    function getWeekStartYmd(refDate = new Date()) {
+      // Monday-start, local time
+      const d = new Date(refDate);
+      const day = d.getDay(); // 0=Sun, 1=Mon...
+      const diff = day === 0 ? -6 : 1 - day; // Delta to Monday
+      d.setDate(d.getDate() + diff);
+      return toYmdLocal(d);
+    }
+
+    function getWeekDays() {
+      const startYmd = getWeekStartYmd();
+      const days = [];
+      for (let i = 0; i < 7; i++) {
+        days.push(addDaysYmd(startYmd, i));
+      }
+      return days;
+    }
+
+    function computePlanCounts(plan) {
+        let completed = 0;
+        let inProgress = 0;
+        let overdue = 0;
+        let snoozed = 0;
+        let tomorrow = 0; 
+        
+        const planDateYmd = plan.plan_date || (plan.date ? plan.date.split('T')[0] : new Date().toISOString().split('T')[0]);
+        const d = new Date(planDateYmd);
+        d.setDate(d.getDate() + 1);
+        const tomorrowYmd = d.toISOString().split('T')[0];
+
+        const allItems = [];
+        const sections = plan.sections || {};
+        
+        const processItem = (item) => {
+            allItems.push(item);
+        };
+        
+        (sections.routines || []).forEach(r => {
+            processItem(r);
+            if (r.steps) r.steps.forEach(processItem);
+        });
+        (sections.goal_tasks || []).forEach(processItem);
+        
+        allItems.forEach(item => {
+             if (item.status === 'complete') {
+                 completed++;
+                 return;
+             }
+             
+             if (isSnoozedNow(item.metadata)) {
+                 snoozed++;
+                 return;
+             }
+             
+             if (item.status === 'in_progress') {
+                 inProgress++;
+             }
+             
+             const rTo = item.reschedule_to || (item.metadata && item.metadata.reschedule_to);
+             if (rTo) {
+                 if (rTo === tomorrowYmd) {
+                     if (item.status !== 'in_progress') {
+                         tomorrow++;
+                         return;
+                     }
+                 }
+                 if (rTo < planDateYmd) {
+                      overdue++;
+                      return;
+                 }
+             }
+        });
+        
+        return { completed, inProgress, overdue, snoozed, tomorrow };
+    }
+
+    async function fetchPlanForDate(ymd) {
+      if (weekViewCache[ymd]) return weekViewCache[ymd];
+      
+      try {
+        const resp = await fetch(`/api/today-plan?plan_date=${ymd}`, { cache: "no-store", credentials: "include" });
+        if (!resp.ok) throw new Error("Failed to fetch");
+        const data = await resp.json();
+        const plan = data.plan || {};
+        const counts = computePlanCounts(plan);
+        
+        weekViewCache[ymd] = { plan, counts, fetchedAt: Date.now() };
+        return weekViewCache[ymd];
+      } catch (e) {
+        console.error(`Failed to fetch plan for ${ymd}`, e);
+        return null;
+      }
+    }
+
+    async function loadWeekView() {
+        const container = document.getElementById("week-view-content");
+        if (!container) return;
+        container.innerHTML = '<div style="padding:1rem; text-align:center; color:var(--text-soft);">Loading week...</div>';
+        
+        const days = getWeekDays();
+        const results = await Promise.all(days.map(ymd => fetchPlanForDate(ymd)));
+        
+        container.innerHTML = '';
+        
+        results.forEach((res, idx) => {
+            const ymd = days[idx];
+            // Fix date parsing for display to avoid timezone shifts
+            const parts = ymd.split('-');
+            const dateObj = new Date(parts[0], parts[1]-1, parts[2]);
+            
+            const dayName = dateObj.toLocaleDateString('en-US', { weekday: 'short' });
+            const dateStr = dateObj.toLocaleDateString('en-US', { day: 'numeric', month: 'numeric' });
+            
+            const row = document.createElement("div");
+            row.className = "planner-task"; 
+            row.style.display = "flex";
+            row.style.justifyContent = "space-between";
+            row.style.alignItems = "center";
+            row.style.padding = "0.75rem";
+            
+            if (!res) {
+                row.innerHTML = `
+                    <div style="font-weight:600; width: 80px;">${dayName} <span style="font-weight:400; color:var(--text-soft);">${dateStr}</span></div>
+                    <div style="color:var(--text-soft);">Unavailable</div>
+                `;
+            } else {
+                const c = res.counts;
+                row.style.cursor = "pointer";
+                row.onclick = () => openWeekDrilldown(ymd);
+                row.innerHTML = `
+                    <div style="font-weight:600; width: 80px;">${dayName} <span style="font-weight:400; color:var(--text-soft);">${dateStr}</span></div>
+                    <div style="display:flex; gap:0.8rem; font-size:0.9rem;">
+                        <span title="Completed" style="color:var(--text-main);">C:${c.completed}</span>
+                        <span title="In Progress" style="color:#fcd34d;">IP:${c.inProgress}</span>
+                        <span title="Overdue" style="color:#fca5a5;">OD:${c.overdue}</span>
+                        ${c.snoozed > 0 ? `<span title="Snoozed" style="color:var(--text-soft);">S:${c.snoozed}</span>` : ''}
+                        ${c.tomorrow > 0 ? `<span title="Tomorrow" style="color:var(--text-soft);">T:${c.tomorrow}</span>` : ''}
+                    </div>
+                `;
+            }
+            container.appendChild(row);
+        });
+    }
+
+    function flattenPlanItemsForReadOnly(plan) {
+        const items = [];
+        const sections = plan.sections || {};
+        
+        const process = (item, section, parentLabel) => {
+            items.push({
+                label: (item.metadata && item.metadata.label) || item.label || item.name || "(unnamed)",
+                status: item.status,
+                section: section,
+                parent: parentLabel,
+                metadata: item.metadata,
+                reschedule_to: item.reschedule_to || (item.metadata && item.metadata.reschedule_to),
+                schedule_rule: item.schedule_rule || (item.metadata && item.metadata.schedule_rule)
+            });
+        };
+
+        (sections.routines || []).forEach(r => {
+            if (r.steps && r.steps.length) {
+                r.steps.forEach(s => process(s, "Routine", r.label));
+            } else {
+                process(r, "Routine");
+            }
+        });
+        (sections.goal_tasks || []).forEach(t => process(t, "Goal Task"));
+        
+        return items;
+    }
+
+    async function openWeekDrilldown(ymd) {
+        const res = await fetchPlanForDate(ymd);
+        if (!res) return;
+        
+        const existing = document.getElementById("planner-week-drilldown");
+        if (existing) existing.remove();
+        
+        const modal = document.createElement("div");
+        modal.id = "planner-week-drilldown";
+        modal.style.position = "fixed";
+        modal.style.zIndex = "2000";
+        modal.style.top = "0"; modal.style.left = "0"; modal.style.right = "0"; modal.style.bottom = "0";
+        modal.style.background = "rgba(2, 6, 23, 0.9)";
+        modal.style.display = "flex";
+        modal.style.alignItems = "center";
+        modal.style.justifyContent = "center";
+        modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
+        
+        const card = document.createElement("div");
+        card.className = "planner-card";
+        card.style.width = "min(500px, 90%)";
+        card.style.maxHeight = "80vh";
+        card.style.display = "flex";
+        card.style.flexDirection = "column";
+        
+        // Header
+        const parts = ymd.split('-');
+        const dateObj = new Date(parts[0], parts[1]-1, parts[2]);
+        const dateStr = dateObj.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+        
+        const c = res.counts;
+        const summary = `C:${c.completed} · IP:${c.inProgress} · OD:${c.overdue} · S:${c.snoozed} · T:${c.tomorrow}`;
+        
+        card.innerHTML = `
+            <div class="planner-card__header" style="border-bottom:1px solid var(--border); padding-bottom:0.5rem; margin-bottom:0.5rem;">
+                <div>
+                    <div class="planner-section__title" style="font-size:1.1rem;">${dateStr}</div>
+                    <div style="font-size:0.85rem; color:var(--text-soft); margin-top:0.2rem;">${summary}</div>
+                </div>
+                <button class="icon-button" style="border:none; background:transparent;" onclick="document.getElementById('planner-week-drilldown').remove()">✕</button>
+            </div>
+            <div style="flex:1; overflow-y:auto; padding-right:0.5rem;" id="drilldown-list"></div>
+            <div style="margin-top:1rem; padding-top:1rem; border-top:1px solid var(--border); text-align:center;">
+                <button class="planner-action-btn" style="width:100%; justify-content:center; padding:0.8rem;" id="drilldown-open-btn">Open in Day View</button>
+            </div>
+        `;
+        
+        // Lists
+        const listContainer = card.querySelector("#drilldown-list");
+        const items = flattenPlanItemsForReadOnly(res.plan);
+        const groups = { overdue: [], main: [], later: [], snoozed: [], completed: [] };
+        
+        const planDateYmd = res.plan.plan_date || ymd;
+        const d = new Date(planDateYmd);
+        d.setDate(d.getDate() + 1);
+        const tomorrowYmd = d.toISOString().split('T')[0];
+
+        items.forEach(item => {
+            if (item.status === 'complete') {
+                groups.completed.push(item);
+                return;
+            }
+            if (isSnoozedNow(item.metadata)) {
+                groups.snoozed.push(item);
+                return;
+            }
+            
+            const rTo = item.reschedule_to;
+            if (rTo && rTo < planDateYmd) {
+                groups.overdue.push(item);
+                return;
+            }
+            
+            // Simple heuristic for "Later" vs "Main"
+            if (item.status !== 'in_progress' && isOutsideTimeWindow(item.schedule_rule)) {
+                groups.later.push(item);
+            } else {
+                groups.main.push(item);
+            }
+        });
+        
+        const renderGroup = (title, list, color) => {
+            if (!list.length) return;
+            const h = document.createElement("div");
+            h.style.fontSize = "0.8rem";
+            h.style.fontWeight = "600";
+            h.style.color = color || "var(--text-soft)";
+            h.style.marginTop = "0.8rem";
+            h.style.marginBottom = "0.4rem";
+            h.textContent = title.toUpperCase();
+            listContainer.appendChild(h);
+            
+            list.forEach(i => {
+                const row = document.createElement("div");
+                row.style.padding = "0.4rem 0";
+                row.style.borderBottom = "1px solid rgba(255,255,255,0.05)";
+                row.style.fontSize = "0.9rem";
+                row.innerHTML = `
+                    <div style="display:flex; justify-content:space-between;">
+                        <span>${i.label}</span>
+                        <span style="font-size:0.75rem; opacity:0.7; border:1px solid var(--border); padding:0 0.3rem; border-radius:4px;">${i.status}</span>
+                    </div>
+                    <div style="font-size:0.75rem; color:var(--text-soft);">${i.section}${i.parent ? ' · ' + i.parent : ''}</div>
+                `;
+                listContainer.appendChild(row);
+            });
+        };
+        
+        renderGroup("Overdue", groups.overdue, "#fca5a5");
+        renderGroup("Active / Planned", groups.main, "var(--accent)");
+        renderGroup("Later", groups.later);
+        renderGroup("Snoozed", groups.snoozed);
+        renderGroup("Completed", groups.completed);
+        
+        if (items.length === 0) {
+            listContainer.innerHTML = '<div style="text-align:center; padding:2rem; color:var(--text-soft);">No items planned.</div>';
+        }
+
+        card.querySelector("#drilldown-open-btn").onclick = () => openDayViewForDate(ymd);
+        
+        modal.appendChild(card);
+        document.body.appendChild(modal);
+    }
+
+    function openDayViewForDate(ymd) {
+        dayViewDateYmd = ymd;
+        const modal = document.getElementById("planner-week-drilldown");
+        if (modal) modal.remove();
+        
+        isWeekViewActive = false;
+        document.getElementById("planner-week-view").style.display = "none";
+        document.getElementById("planner-day-view").style.display = "block";
+        
+        const btn = document.getElementById("week-view-toggle");
+        if (btn) btn.textContent = "Week View";
+        
+        loadTodayPlanner();
+    }
+
+    function isReadOnlyDayView() {
+        if (!dayViewDateYmd) return false;
+        return dayViewDateYmd !== toYmdLocal(new Date());
+    }
+
+    function toggleWeekView() {
+        const weekView = document.getElementById("planner-week-view");
+        const dayView = document.getElementById("planner-day-view");
+        const btn = document.getElementById("week-view-toggle");
+        
+        isWeekViewActive = !isWeekViewActive;
+        
+        if (isWeekViewActive) {
+            weekView.style.display = "block";
+            dayView.style.display = "none";
+            btn.textContent = "Back to Today";
+            loadWeekView();
+        } else {
+            weekView.style.display = "none";
+            dayView.style.display = "block";
+            btn.textContent = "Week View";
+        }
+    }
+    
+    // Initialize toggle
+    document.addEventListener("DOMContentLoaded", () => {
+        const btn = document.getElementById("week-view-toggle");
+        if (btn) btn.onclick = toggleWeekView;
+    });
+
+    // --- Suggestions Logic ---
+    
+    async function toggleSuggestions() {
+        const panel = document.getElementById("planner-suggestions-panel");
+        if (panel.style.display === "none") {
+            panel.style.display = "block";
+            loadSuggestions();
+        } else {
+            panel.style.display = "none";
+        }
+    }
+    
+    async function loadSuggestions() {
+        const list = document.getElementById("suggestions-list");
+        list.innerHTML = "Loading...";
+        
+        const dateParam = dayViewDateYmd || toYmdLocal(new Date());
+        try {
+            const res = await fetch(`/api/proposals?plan_date=${dateParam}`);
+            const data = await res.json();
+            
+            if (!data.proposals || data.proposals.length === 0) {
+                list.innerHTML = "<div style='color:var(--text-soft); font-style:italic;'>No pending suggestions.</div>";
+                return;
+            }
+            
+            list.innerHTML = "";
+            data.proposals.forEach(p => {
+                const div = document.createElement("div");
+                div.style.background = "var(--bg-2)";
+                div.style.padding = "0.8rem";
+                div.style.marginBottom = "0.5rem";
+                div.style.borderRadius = "8px";
+                div.style.border = "1px solid var(--border)";
+                
+                div.innerHTML = `
+                    <div style="font-weight:bold; margin-bottom:0.3rem;">${p.title}</div>
+                    <div style="font-size:0.9rem; color:var(--text-soft); margin-bottom:0.5rem;">${p.summary}</div>
+                    <div style="display:flex; gap:0.5rem;">
+                        <button class="planner-action-btn" onclick="applySuggestion('${p.proposal_id}')">Accept</button>
+                        <button class="planner-action-btn" style="border-color:var(--border); color:var(--text-soft);" onclick="rejectSuggestion('${p.proposal_id}')">Reject</button>
+                    </div>
+                `;
+                list.appendChild(div);
+            });
+        } catch (e) {
+            list.textContent = "Error loading suggestions.";
+            console.error(e);
+        }
+    }
+    
+    async function generateSuggestions() {
+        const btn = document.getElementById("generate-suggestions-btn");
+        btn.disabled = true;
+        btn.textContent = "Generating...";
+        
+        const dateParam = dayViewDateYmd || toYmdLocal(new Date());
+        try {
+            await fetch("/api/proposals/generate", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ plan_date: dateParam })
+            });
+            await loadSuggestions();
+        } catch (e) {
+            console.error(e);
+        } finally {
+            btn.disabled = false;
+            btn.textContent = "Generate";
+        }
+    }
+    
+    async function applySuggestion(id) {
+        try {
+            const res = await fetch("/api/proposals/apply", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ proposal_id: id })
+            });
+            const data = await res.json();
+            if (res.ok) {
+                if (data.message === "Already decided") {
+                    console.log("Suggestion already decided, refreshing...");
+                }
+                await loadTodayPlanner();
+                await loadSuggestions();
+            } else {
+                console.error("Failed to apply suggestion:", data);
+                alert("Failed to apply suggestion: " + (data.message || "Unknown error"));
+            }
+        } catch (e) {
+            console.error(e);
+        }
+    }
+    
+    async function rejectSuggestion(id) {
+        try {
+            const res = await fetch("/api/proposals/reject", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ proposal_id: id })
+            });
+            const data = await res.json();
+            if (res.ok) {
+                await loadSuggestions();
+            } else {
+                console.error("Failed to reject suggestion:", data);
+            }
+        } catch (e) {
+            console.error(e);
+        }
+    }
+
+    // Initialize suggestions
+    document.addEventListener("DOMContentLoaded", () => {
+        const toggle = document.getElementById("suggestions-toggle");
+        if (toggle) toggle.onclick = toggleSuggestions;
+        
+        const genBtn = document.getElementById("generate-suggestions-btn");
+        if (genBtn) genBtn.onclick = generateSuggestions;
+    });
+
     async function loadTodayPlanner() {
       if (BOOT_DEBUG) console.log("[Today Planner] loadTodayPlanner invoked", {
         view: othelloState.currentView,
         ts: new Date().toISOString(),
+        dayViewDateYmd
       });
       clearPlannerError();
       plannerHeadline.textContent = "Loading...";
       plannerEnergy.textContent = "";
       plannerRoutinesList.innerHTML = "";
       plannerGoalsList.innerHTML = "";
+      
+      // Suggestions button state
+      const suggBtn = document.getElementById("suggestions-toggle");
+      if (suggBtn) {
+          const isRO = isReadOnlyDayView();
+          suggBtn.disabled = isRO;
+          suggBtn.style.opacity = isRO ? "0.5" : "1";
+          if (isRO) {
+              const panel = document.getElementById("planner-suggestions-panel");
+              if (panel) panel.style.display = "none";
+          }
+      }
+
+      // Read-only banner
+      const existingBanner = document.getElementById("planner-readonly-banner");
+      if (existingBanner) existingBanner.remove();
+      
+      if (isReadOnlyDayView()) {
+          const banner = document.createElement("div");
+          banner.id = "planner-readonly-banner";
+          banner.style.background = "rgba(252, 165, 165, 0.15)";
+          banner.style.border = "1px solid #fca5a5";
+          banner.style.color = "#fca5a5";
+          banner.style.padding = "0.5rem";
+          banner.style.marginBottom = "1rem";
+          banner.style.borderRadius = "8px";
+          banner.style.textAlign = "center";
+          banner.style.fontSize = "0.9rem";
+          banner.innerHTML = `
+            Viewing <strong>${dayViewDateYmd}</strong> (read-only) · 
+            <span style="text-decoration:underline; cursor:pointer;" id="readonly-back-btn">Back to Today</span>
+          `;
+          const shell = document.getElementById("planner-shell");
+          if (shell) shell.prepend(banner);
+          
+          document.getElementById("readonly-back-btn").onclick = () => {
+              dayViewDateYmd = null;
+              loadTodayPlanner();
+          };
+      }
+
       try {
-        const [brief, plan] = await Promise.all([fetchTodayBrief(), fetchTodayPlan()]);
+        const planUrl = dayViewDateYmd 
+            ? `/api/today-plan?plan_date=${dayViewDateYmd}` 
+            : `/api/today-plan?ts=${Date.now()}`;
+            
+        const [brief, planResp] = await Promise.all([
+            dayViewDateYmd ? Promise.resolve({}) : fetchTodayBrief(), // No brief for past days
+            fetch(planUrl, { cache: "no-store", credentials: "include" }).then(r => r.json())
+        ]);
+        
+        const plan = planResp.plan || {};
         const goalTasks = (plan.sections?.goal_tasks || []);
         if (BOOT_DEBUG) console.log("[Today Planner] goalTasks count", goalTasks.length, { source: "ui", planSource: plan._plan_source });
-        renderTodayBrief(plan, brief);
+        
+        if (!dayViewDateYmd) renderTodayBrief(plan, brief);
+        else {
+            plannerHeadline.textContent = `Plan for ${dayViewDateYmd}`;
+            plannerEnergy.textContent = "Read-only view";
+        }
+        
         renderPlannerSections(plan, goalTasks);
         const currentItem = renderCurrentFocus(plan);
         renderNextAction(plan, currentItem ? [currentItem.item_id || currentItem.id] : []);

@@ -24,6 +24,10 @@ import uuid
 from werkzeug.exceptions import HTTPException
 from werkzeug.middleware.proxy_fix import ProxyFix
 from db import routines_repository
+from db import suggestions_repository
+from db.database import get_connection
+import hashlib
+import json
 
 # NOTE: Keep import-time work minimal! Do not import LLM/agent modules or connect to DB at module scope unless required for health endpoints.
 from dotenv import load_dotenv
@@ -4546,11 +4550,20 @@ def get_today_plan():
         "fatigue": args.get("fatigue"),
         "time_pressure": args.get("time_pressure") in ("1", "true", "True", "yes"),
     }
+    
+    plan_date = None
+    if args.get("plan_date"):
+        try:
+            plan_date = date.fromisoformat(args.get("plan_date"))
+        except ValueError:
+            return api_error("VALIDATION_ERROR", "Invalid plan_date format (expected YYYY-MM-DD)", 400)
+
     try:
         plan = othello_engine.day_planner.get_today_plan(
             user_id,
             mood_context=mood_context,
             force_regen=False,
+            plan_date=plan_date,
         )
         sections = plan.get("sections", {}) if isinstance(plan, dict) else {}
         goal_tasks_count = len(sections.get("goal_tasks", []) or [])
@@ -4600,6 +4613,317 @@ def get_today_brief():
             500,
             details=type(exc).__name__,
         )
+
+
+# ---------------------------------------------------------------------------
+# PROPOSALS (Confirm-gated suggestions)
+# ---------------------------------------------------------------------------
+
+@app.route("/api/proposals", methods=["GET"])
+@require_auth
+def list_proposals():
+    user_id, error = _get_user_id_or_error()
+    if error: return error
+    
+    plan_date_str = request.args.get("plan_date")
+    if not plan_date_str:
+        return api_error("VALIDATION_ERROR", "plan_date is required", 400)
+        
+    # Filter by plan_date in payload
+    suggestions = suggestions_repository.list_suggestions(
+        user_id=user_id,
+        status="pending",
+        kind="plan_proposal",
+        limit=100
+    )
+    
+    # Filter in memory for now (low volume expected)
+    filtered = []
+    for s in suggestions:
+        payload = s.get("payload") or {}
+        if payload.get("plan_date") == plan_date_str:
+            # Flatten for UI
+            filtered.append({
+                "proposal_id": s["id"],
+                "created_at": s["created_at"],
+                "title": payload.get("title"),
+                "summary": payload.get("summary"),
+                "ops": payload.get("ops", []),
+                "plan_date": payload.get("plan_date")
+            })
+            
+    return jsonify({"proposals": filtered})
+
+
+@app.route("/api/proposals/generate", methods=["POST"])
+@require_auth
+def generate_proposals():
+    user_id, error = _get_user_id_or_error()
+    if error: return error
+    
+    data = request.json or {}
+    plan_date_str = data.get("plan_date") or date.today().isoformat()
+    try:
+        plan_date = date.fromisoformat(plan_date_str)
+    except ValueError:
+        return api_error("VALIDATION_ERROR", "Invalid plan_date", 400)
+
+    # 1. Read-only Guard
+    if plan_date != date.today():
+        return api_error("READ_ONLY_MODE", "Cannot generate proposals for past/future dates", 403)
+
+    comps = get_agent_components()
+    othello_engine = comps["othello_engine"]
+    
+    # 2. Load plan (read-only)
+    plan = othello_engine.day_planner.get_today_plan(
+        user_id,
+        plan_date=plan_date,
+        force_regen=False
+    )
+    if not plan:
+        return jsonify({"proposals": []})
+        
+    # 3. Generate proposals (pure logic, no mutation)
+    new_proposals = []
+    
+    # Proposal A: Start next action
+    # Find first item that is planned
+    sections = plan.get("sections", {})
+    all_items = []
+    for k, items in sections.items():
+        if isinstance(items, list):
+            all_items.extend(items)
+            
+    # Sort by order/time if possible, but for now just take first 'planned'
+    next_action = None
+    for item in all_items:
+        if item.get("status") == "planned":
+            next_action = item
+            break
+            
+    if next_action:
+        new_proposals.append({
+            "plan_date": plan_date_str,
+            "title": "Start Next Action",
+            "summary": f"Mark '{next_action.get('title') or 'Next Item'}' as in progress",
+            "ops": [
+                {"op": "set_status", "item_id": next_action["id"], "status": "in_progress"}
+            ]
+        })
+
+    # Proposal B: Normalize overdue
+    # Find items with reschedule_to < plan_date
+    overdue_ops = []
+    for item in all_items:
+        reschedule_to = item.get("reschedule_to")
+        if reschedule_to and reschedule_to < plan_date_str and item.get("status") == "planned":
+            overdue_ops.append({
+                "op": "reschedule", 
+                "item_id": item["id"], 
+                "reschedule_to": None, # Clear it
+                "status": "planned"
+            })
+            if len(overdue_ops) >= 3: break
+            
+    if overdue_ops:
+        new_proposals.append({
+            "plan_date": plan_date_str,
+            "title": "Normalize Overdue",
+            "summary": f"Clear overdue flags for {len(overdue_ops)} items",
+            "ops": overdue_ops
+        })
+
+    # 4. Dedupe & Persist
+    # Fetch existing pending proposals to check against
+    existing = suggestions_repository.list_suggestions(
+        user_id=user_id,
+        status="pending",
+        kind="plan_proposal",
+        limit=50
+    )
+    
+    def _compute_hash(p_payload):
+        # Stable hash of relevant fields
+        canonical = {
+            "plan_date": p_payload.get("plan_date"),
+            "ops": p_payload.get("ops", [])
+        }
+        s = json.dumps(canonical, sort_keys=True)
+        return hashlib.sha256(s.encode("utf-8")).hexdigest()
+
+    existing_hashes = set()
+    for e in existing:
+        existing_hashes.add(_compute_hash(e.get("payload") or {}))
+
+    created = []
+    for p in new_proposals:
+        p_hash = _compute_hash(p)
+        if p_hash in existing_hashes:
+            continue
+            
+        res = suggestions_repository.create_suggestion(
+            user_id=user_id,
+            kind="plan_proposal",
+            payload=p,
+            provenance={"generated_by": "rule_engine"},
+            status="pending"
+        )
+        created.append({
+            "proposal_id": res["id"],
+            "created_at": res["created_at"],
+            "title": p["title"],
+            "summary": p["summary"],
+            "ops": p["ops"],
+            "plan_date": p["plan_date"]
+        })
+        
+    return jsonify({"proposals": created})
+
+
+@app.route("/api/proposals/apply", methods=["POST"])
+@require_auth
+def apply_proposal():
+    user_id, error = _get_user_id_or_error()
+    if error: return error
+    
+    data = request.json or {}
+    proposal_id = data.get("proposal_id")
+    if not proposal_id:
+        return api_error("VALIDATION_ERROR", "proposal_id required", 400)
+        
+    comps = get_agent_components()
+    othello_engine = comps["othello_engine"]
+
+    # Transactional Apply
+    # Note: Plan updates happen in separate transactions (via day_planner), 
+    # so we use this transaction to lock the suggestion and ensure idempotency.
+    with get_connection() as conn:
+        try:
+            with conn.cursor() as cursor:
+                # 1. Lock & Check
+                cursor.execute(
+                    "SELECT id, status, payload FROM suggestions WHERE id = %s AND user_id = %s FOR UPDATE",
+                    (proposal_id, user_id)
+                )
+                row = cursor.fetchone()
+                if not row:
+                    return api_error("NOT_FOUND", "Proposal not found", 404)
+                
+                s_id, status, payload = row
+                if status != "pending":
+                    return jsonify({"ok": True, "status": status, "message": "Already decided"})
+                
+                # 2. Read-only Guard
+                plan_date_str = payload.get("plan_date")
+                if not plan_date_str or plan_date_str != date.today().isoformat():
+                    return api_error("READ_ONLY_MODE", "Cannot apply proposals for past/future dates", 403)
+
+                # 3. Validate Ops (Allowlist)
+                ops = payload.get("ops", [])
+                allowed_ops = {"set_status", "reschedule"}
+                allowed_statuses = {"planned", "in_progress", "complete", "skipped", "rescheduled"}
+                
+                # Pre-fetch plan items to validate existence
+                plan = othello_engine.day_planner.get_today_plan(user_id, force_regen=False)
+                plan_item_ids = set()
+                if plan and "sections" in plan:
+                    for items in plan["sections"].values():
+                        if isinstance(items, list):
+                            for it in items:
+                                plan_item_ids.add(it.get("id"))
+
+                for op in ops:
+                    op_type = op.get("op")
+                    if op_type not in allowed_ops:
+                        return api_error("INVALID_OP", f"Unknown op type: {op_type}", 400)
+                    
+                    item_id = op.get("item_id")
+                    if item_id not in plan_item_ids:
+                        return api_error("INVALID_OP", f"Item {item_id} not found in today's plan", 400)
+                        
+                    target_status = op.get("status")
+                    if target_status and target_status not in allowed_statuses:
+                        return api_error("INVALID_OP", f"Invalid status: {target_status}", 400)
+
+                # 4. Apply Ops (External Commits)
+                # If this fails, we rollback the suggestion transaction so it stays pending.
+                for op in ops:
+                    op_type = op.get("op")
+                    item_id = op.get("item_id")
+                    if op_type == "set_status":
+                        othello_engine.day_planner.update_plan_item_status(
+                            user_id, 
+                            item_id, 
+                            op["status"], 
+                            plan_date=plan_date_str
+                        )
+                    elif op_type == "reschedule":
+                        othello_engine.day_planner.update_plan_item_status(
+                            user_id,
+                            item_id,
+                            op.get("status", "rescheduled"),
+                            plan_date=plan_date_str,
+                            reschedule_to=op.get("reschedule_to")
+                        )
+
+                # 5. Mark Accepted
+                cursor.execute(
+                    "UPDATE suggestions SET status = 'accepted', decided_at = NOW() WHERE id = %s",
+                    (s_id,)
+                )
+                conn.commit()
+                
+        except Exception as e:
+            conn.rollback()
+            logging.getLogger("API").error(f"Failed to apply proposal {proposal_id}: {e}", exc_info=True)
+            return api_error("APPLY_FAILED", str(e), 500)
+    
+    return jsonify({"ok": True})
+
+
+@app.route("/api/proposals/reject", methods=["POST"])
+@require_auth
+def reject_proposal():
+    user_id, error = _get_user_id_or_error()
+    if error: return error
+    
+    data = request.json or {}
+    proposal_id = data.get("proposal_id")
+    if not proposal_id:
+        return api_error("VALIDATION_ERROR", "proposal_id required", 400)
+        
+    with get_connection() as conn:
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT id, status, payload FROM suggestions WHERE id = %s AND user_id = %s FOR UPDATE",
+                    (proposal_id, user_id)
+                )
+                row = cursor.fetchone()
+                if not row:
+                    return api_error("NOT_FOUND", "Proposal not found", 404)
+                
+                s_id, status, payload = row
+                if status != "pending":
+                    return jsonify({"ok": True, "status": status, "message": "Already decided"})
+                
+                # Read-only Guard
+                plan_date_str = payload.get("plan_date")
+                if not plan_date_str or plan_date_str != date.today().isoformat():
+                    return api_error("READ_ONLY_MODE", "Cannot reject proposals for past/future dates", 403)
+
+                cursor.execute(
+                    "UPDATE suggestions SET status = 'rejected', decided_at = NOW() WHERE id = %s",
+                    (s_id,)
+                )
+                conn.commit()
+        except Exception as e:
+            conn.rollback()
+            logging.getLogger("API").error(f"Failed to reject proposal {proposal_id}: {e}", exc_info=True)
+            return api_error("REJECT_FAILED", str(e), 500)
+
+    return jsonify({"ok": True})
 
 
 # ---------------------------------------------------------------------------

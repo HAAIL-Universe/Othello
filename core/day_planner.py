@@ -478,9 +478,10 @@ class DayPlanner:
         user_id: str,
         mood_context: Optional[Dict[str, Any]] = None,
         force_regen: bool = False,
+        plan_date: Optional[date] = None,
     ) -> Dict[str, Any]:
         uid = self._normalize_user_id(user_id)
-        today = date.today()
+        today = plan_date or date.today()
         plan = None
         
         if not force_regen:
