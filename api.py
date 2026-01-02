@@ -3500,14 +3500,17 @@ def handle_message():
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
                 plan_reply, _agent_status = loop.run_until_complete(
-                    architect_agent.plan_and_execute(
-                        instruction,
-                        context={
-                            "goal_context": goal_context,
-                            "active_goal": active_goal,
-                        } if goal_context else None,
-                        user_id=user_id,
-                        recent_messages=companion_context,
+                    asyncio.wait_for(
+                        architect_agent.plan_and_execute(
+                            instruction,
+                            context={
+                                "goal_context": goal_context,
+                                "active_goal": active_goal,
+                            } if goal_context else None,
+                            user_id=user_id,
+                            recent_messages=companion_context,
+                        ),
+                        timeout=30.0
                     )
                 )
             except Exception as exc:
@@ -5438,10 +5441,13 @@ def trigger_goal_planning(goal_id):
             }
         
             agentic_reply, agent_status = loop.run_until_complete(
-                architect_agent.plan_and_execute(
-                    instruction,
-                    context=context,
-                    user_id=user_id,
+                asyncio.wait_for(
+                    architect_agent.plan_and_execute(
+                        instruction,
+                        context=context,
+                        user_id=user_id,
+                    ),
+                    timeout=30.0
                 )
             )
         finally:
