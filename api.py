@@ -173,10 +173,10 @@ def handle_llm_error(e: Exception, logger: logging.Logger):
 
 
 def _unwrap_llm_exception(exc: Exception) -> Optional[Exception]:
-    if isinstance(exc, (openai.OpenAIError, httpx.TimeoutException)):
+    if isinstance(exc, (openai.OpenAIError, httpx.TimeoutException, asyncio.TimeoutError)):
         return exc
     cause = getattr(exc, "__cause__", None)
-    if isinstance(cause, (openai.OpenAIError, httpx.TimeoutException)):
+    if isinstance(cause, (openai.OpenAIError, httpx.TimeoutException, asyncio.TimeoutError)):
         return cause
     return None
 
@@ -3005,10 +3005,13 @@ def handle_message():
                     loop = asyncio.new_event_loop()
                     asyncio.set_event_loop(loop)
                     reply_text, _agent_status = loop.run_until_complete(
-                        architect.plan_and_execute(
-                            prompt,
-                            user_id=user_id,
-                            recent_messages=companion_context,
+                        asyncio.wait_for(
+                            architect.plan_and_execute(
+                                prompt,
+                                user_id=user_id,
+                                recent_messages=companion_context,
+                            ),
+                            timeout=30.0
                         )
                     )
                 except Exception as exc:
@@ -4192,14 +4195,17 @@ def handle_message():
                     loop = asyncio.new_event_loop()
                     asyncio.set_event_loop(loop)
                     agentic_reply, agent_status = loop.run_until_complete(
-                        architect_agent.plan_and_execute(
-                            user_input,
-                            context={
-                                "goal_context": goal_context,
-                                "active_goal": active_goal,
-                            } if goal_context else None,
-                            user_id=user_id,
-                            recent_messages=companion_context,
+                        asyncio.wait_for(
+                            architect_agent.plan_and_execute(
+                                user_input,
+                                context={
+                                    "goal_context": goal_context,
+                                    "active_goal": active_goal,
+                                } if goal_context else None,
+                                user_id=user_id,
+                                recent_messages=companion_context,
+                            ),
+                            timeout=30.0
                         )
                     )
                 
@@ -4262,11 +4268,14 @@ def handle_message():
                 try:
                     asyncio.set_event_loop(loop)
                     agentic_reply, agent_status = loop.run_until_complete(
-                        architect_agent.plan_and_execute(
-                            user_input,
-                            context=None,
-                            user_id=user_id,
-                            recent_messages=companion_context,
+                        asyncio.wait_for(
+                            architect_agent.plan_and_execute(
+                                user_input,
+                                context=None,
+                                user_id=user_id,
+                                recent_messages=companion_context,
+                            ),
+                            timeout=30.0
                         )
                     )
                 finally:
