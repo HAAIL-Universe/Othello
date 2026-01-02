@@ -183,8 +183,8 @@ def update_plan_item_status(
     query = """
         UPDATE plan_items
         SET status = %s,
-            skip_reason = COALESCE(%s, skip_reason),
-            reschedule_to = COALESCE(%s, reschedule_to),
+            skip_reason = %s,
+            reschedule_to = %s,
             metadata = COALESCE(%s, metadata),
             updated_at = NOW()
         WHERE plan_id = %s AND item_id = %s

@@ -5928,9 +5928,9 @@
       
       // Steps
       const stepsContainer = document.getElementById("routine-steps");
-      stepsCondebouncedUpdateStep = debounce((patch) => updateStep(step.id, patch), 500);
-        const tainer.innerHTML = "";
+      stepsContainer.innerHTML = "";
       (routine.steps || []).forEach((step, idx) => {
+        const debouncedUpdateStep = debounce((patch) => updateStep(step.id, patch), 500);
         const row = document.createElement("div");
         row.style.display = "flex";
         row.style.gap = "0.5rem";
@@ -5976,7 +5976,8 @@
         sTitle.className = "login-input";
         sTitle.style.flex = "1";
         sTitle.style.padding = "0.3rem 0.5rem";
-        sTitle.stinput = (e) => debouncedUpdateStep({ title: e.target.value });
+        sTitle.style.fontSize = "0.9rem";
+        sTitle.oninput = (e) => debouncedUpdateStep({ title: e.target.value });
         row.appendChild(sTitle);
         
         // Duration
@@ -5988,8 +5989,7 @@
         sDur.style.width = "60px";
         sDur.style.padding = "0.3rem 0.5rem";
         sDur.style.fontSize = "0.9rem";
-        sDur.oninput = (e) => debouncedUpdateStep(
-        sDur.onchange = (e) => updateStep(step.id, { est_minutes: parseInt(e.target.value) || 0 });
+        sDur.oninput = (e) => debouncedUpdateStep({ est_minutes: parseInt(e.target.value) || 0 });
         row.appendChild(sDur);
         
         // Energy

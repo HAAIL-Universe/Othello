@@ -588,7 +588,7 @@ class DayPlanner:
                 entry["id"] = row.get("item_id")
                 entry["item_id"] = row.get("item_id")
                 entry["status"] = row.get("status", entry.get("status", "planned"))
-                entry["type"] = item_typeuser_id,  or entry.get("type") or "goal_task"
+                entry["type"] = item_type or entry.get("type") or "goal_task"
                 entry["section_hint"] = row.get("section") or entry.get("section_hint")
                 entry["reschedule_to"] = row.get("reschedule_to") or entry.get("reschedule_to")
                 entry["reason"] = row.get("skip_reason") or entry.get("reason")
@@ -604,8 +604,11 @@ class DayPlanner:
                 else:
                     goal_tasks.append(entry)
 
-        for routine_id, routine in routines.items():(s.get("order_index", 0), s.get("id", "")
-            routine["steps"] = sorted(steps_by_parent.get(routine_id, []), key=lambda s: s.get("id", ""))
+        for routine_id, routine in routines.items():
+            routine["steps"] = sorted(
+                steps_by_parent.get(routine_id, []),
+                key=lambda s: (s.get("order_index", 0), s.get("id", "")),
+            )
 
         generation_context = plan_row.get("generation_context") or {}
         mood_context = {k: v for k, v in generation_context.items() if k != "capacity_model"}
