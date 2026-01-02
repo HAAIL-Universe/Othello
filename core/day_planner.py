@@ -271,8 +271,11 @@ class RoutineStore:
                 # Check schedule rule
                 schedule = r.get("schedule_rule") or {}
                 days = schedule.get("days")
-                if days and isinstance(days, list) and day_tag not in days:
-                    continue
+                if isinstance(days, list):
+                    if len(days) == 0:
+                        continue
+                    if day_tag not in days:
+                        continue
                 
                 # Convert to bundle shape
                 steps = []
@@ -972,16 +975,16 @@ class DayPlanner:
             raise ValueError(f"No plan stored for {target_date}")
 
         existing_item = plan_repository.get_plan_item(plan_row["id"], item_id)
-        if not existing_item:
-            raise ValueError(f"Item {item_id} not found in plan for {target_date}")
-
-        snooze_until = datetime.utcnow() + timedelta(minutes=snooze_minutes)
+        if snooze_minutes <= 0:
+            snooze_until = None
+        else:
+            snooze_until = (datetime.utcnow() + timedelta(minutes=snooze_minutes)).isoformat()
         
         # Update metadata
         plan_repository.update_plan_item_metadata(
             plan_row["id"], 
             item_id, 
-            {"snoozed_until": snooze_until.isoformat()}
+            {"snoozed_until": snooze_until}
         )
         
         return self.get_day_plan(user_id, target_date.isoformat())
@@ -1040,7 +1043,6 @@ class DayPlanner:
             skip_reason=reason,
             reschedule_to=reschedule_to,
             metadata=metadata_update if metadata_update else None
-        )
         )
         if not updated_row:
             raise ValueError(f"Failed to update item {item_id} for {target_date}")

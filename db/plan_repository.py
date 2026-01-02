@@ -31,7 +31,7 @@ def upsert_plan(
             updated_at = NOW()
         RETURNING id, user_id, plan_date, generation_context, behavior_snapshot, created_at, updated_at;
     """
-    return execute_and_fetch_one(query, (user_id, plan_date, generation_context or {}, behavior_snapshot or {}))
+    return execute_and_fetch_one(query, (user_id, plan_date, Json(generation_context or {}), Json(behavior_snapshot or {})))
 
 
 def get_plan_by_date(user_id: str, plan_date: date) -> Optional[Dict[str, Any]]:
@@ -185,13 +185,13 @@ def update_plan_item_status(
         SET status = %s,
             skip_reason = %s,
             reschedule_to = %s,
-            metadata = COALESCE(%s, metadata),
+            metadata = COALESCE(metadata || %s::jsonb, metadata),
             updated_at = NOW()
         WHERE plan_id = %s AND item_id = %s
         RETURNING id, plan_id, item_id, type, section, status, reschedule_to, skip_reason,
                   priority, effort, energy, metadata, created_at, updated_at;
     """
-    return execute_and_fetch_one(query, (status, skip_reason, reschedule_to, metadata, plan_id, item_id))
+    return execute_and_fetch_one(query, (status, skip_reason, reschedule_to, Json(metadata) if metadata else None, plan_id, item_id))
 
 
 def update_plan_item_metadata(
@@ -201,13 +201,13 @@ def update_plan_item_metadata(
 ) -> Optional[Dict[str, Any]]:
     query = """
         UPDATE plan_items
-        SET metadata = metadata || %s,
+        SET metadata = metadata || %s::jsonb,
             updated_at = NOW()
         WHERE plan_id = %s AND item_id = %s
         RETURNING id, plan_id, item_id, type, section, status, reschedule_to, skip_reason,
                   priority, effort, energy, metadata, created_at, updated_at;
     """
-    return execute_and_fetch_one(query, (json.dumps(metadata), plan_id, item_id))
+    return execute_and_fetch_one(query, (Json(metadata), plan_id, item_id))
 
 
 def get_plan_item(plan_id: int, item_id: str) -> Optional[Dict[str, Any]]:

@@ -4754,19 +4754,26 @@ def update_plan_item():
     othello_engine = comps["othello_engine"]
     user_id, error = _get_user_id_or_error()
     if error:
+        return error
+
+    data = request.get_json(silent=True) or {}
+    item_id = data.get("item_id")
+    status = data.get("status")
+    plan_date = data.get("plan_date")
+    reason = data.get("reason")
+    reschedule_to = data.get("reschedule_to")
     snooze_minutes = data.get("snooze_minutes")
 
     if not item_id:
         return api_error("VALIDATION_ERROR", "item_id is required", 400)
-        
-    # Handle snooze request (metadata update only)
+
     if snooze_minutes is not None:
         try:
             plan = othello_engine.day_planner.snooze_plan_item(
                 user_id,
                 item_id=item_id,
                 snooze_minutes=int(snooze_minutes),
-                plan_date=data.get("plan_date")
+                plan_date=plan_date
             )
             return jsonify({"plan": plan})
         except Exception as exc:
@@ -4781,16 +4788,14 @@ def update_plan_item():
             user_id,
             item_id=item_id,
             status=status,
-            plan_date=data.get("plan_date"),
-            reason=data.get("reason"),
-            reschedule_to=data.get("reschedule_to")
-            status=status,
             plan_date=plan_date,
             reason=reason,
             reschedule_to=reschedule_to,
         )
         logger.info(f"API: Updated plan item {item_id} -> {status}")
         return jsonify({"plan": plan})
+    except ValueError as ve:
+        return api_error("INVALID_STATUS", str(ve), 400)
     except Exception as exc:
         logger.error(f"API: Failed to update plan item {item_id}: {exc}", exc_info=True)
         return api_error(
