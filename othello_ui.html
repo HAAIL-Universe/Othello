@@ -4425,30 +4425,6 @@
         return true;
       }
 
-      if (decision === "steps") {
-        await createGoalFromSuggestion({
-          title,
-          description,
-          clientMessageId,
-          statusEl,
-          panelEl,
-          onSuccess: async (goalId) => {
-            if (statusEl) statusEl.textContent = "Drafting steps...";
-            const intentItems = parseIntentItems(description || title);
-            const intentIndex = intentItems.length ? (intentItems[0].index || 1) : 1;
-            const intentText = intentItems.length ? intentItems[0].text : (description || title);
-            try {
-              await postPlanFromIntent(goalId, intentIndex, intentText);
-              showToast("Drafted steps for confirmation");
-            } catch (err) {
-              console.error("[Othello UI] plan from intent failed:", err);
-              if (statusEl) statusEl.textContent = "Could not draft steps.";
-            }
-          }
-        });
-        return true;
-      }
-
       return false;
     }
 
@@ -4507,6 +4483,7 @@
         const mode = (othelloState.currentMode || "companion").toLowerCase();
         const channel = mode === "companion" ? "companion" : "planner";
         console.debug(`[Othello UI] sendMessage mode=${mode} channel=${channel} view=${othelloState.currentView}`);
+        console.log("[Othello UI] Sending plain-message payload:", text);
         const res = await fetch(API, {
           method: "POST",
           headers: {"Content-Type": "application/json"},
@@ -4798,6 +4775,7 @@
 
     async function postPlanFromIntent(goalId, intentIndex, intentText) {
       if (goalId == null) throw new Error("No focused goal.");
+      console.log("[Othello UI] Sending ui_action=plan_from_intent payload");
       const res = await fetch(API, {
         method: "POST",
         credentials: "include",
