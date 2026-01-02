@@ -23,6 +23,7 @@ import httpx
 import uuid
 from werkzeug.exceptions import HTTPException
 from werkzeug.middleware.proxy_fix import ProxyFix
+from db import routines_repository
 
 # NOTE: Keep import-time work minimal! Do not import LLM/agent modules or connect to DB at module scope unless required for health endpoints.
 from dotenv import load_dotenv
@@ -4599,6 +4600,128 @@ def get_today_brief():
             500,
             details=type(exc).__name__,
         )
+
+
+# ---------------------------------------------------------------------------
+# Routines CRUD
+# ---------------------------------------------------------------------------
+
+@app.route("/api/routines", methods=["GET"])
+@require_auth
+def list_routines():
+    user_id, error = _get_user_id_or_error()
+    if error: return error
+    try:
+        routines = routines_repository.list_routines_with_steps(user_id)
+        return jsonify({"ok": True, "routines": routines})
+    except Exception as e:
+        logging.getLogger("API").error(f"Failed to list routines: {e}", exc_info=True)
+        return api_error("ROUTINE_LIST_FAILED", str(e), 500)
+
+@app.route("/api/routines", methods=["POST"])
+@require_auth
+def create_routine():
+    user_id, error = _get_user_id_or_error()
+    if error: return error
+    data = request.json or {}
+    title = data.get("title")
+    if not title:
+        return api_error("INVALID_INPUT", "Title is required", 400)
+    
+    try:
+        routine = routines_repository.create_routine(
+            user_id, 
+            title, 
+            data.get("schedule_rule", {}), 
+            data.get("enabled", True)
+        )
+        return jsonify({"ok": True, "routine": routine})
+    except Exception as e:
+        logging.getLogger("API").error(f"Failed to create routine: {e}", exc_info=True)
+        return api_error("ROUTINE_CREATE_FAILED", str(e), 500)
+
+@app.route("/api/routines/<routine_id>", methods=["PATCH"])
+@require_auth
+def update_routine(routine_id):
+    user_id, error = _get_user_id_or_error()
+    if error: return error
+    try:
+        routine = routines_repository.update_routine(user_id, routine_id, request.json or {})
+        if not routine:
+            return api_error("NOT_FOUND", "Routine not found", 404)
+        return jsonify({"ok": True, "routine": routine})
+    except Exception as e:
+        logging.getLogger("API").error(f"Failed to update routine: {e}", exc_info=True)
+        return api_error("ROUTINE_UPDATE_FAILED", str(e), 500)
+
+@app.route("/api/routines/<routine_id>", methods=["DELETE"])
+@require_auth
+def delete_routine(routine_id):
+    user_id, error = _get_user_id_or_error()
+    if error: return error
+    try:
+        success = routines_repository.delete_routine(user_id, routine_id)
+        if not success:
+            return api_error("NOT_FOUND", "Routine not found", 404)
+        return jsonify({"ok": True})
+    except Exception as e:
+        logging.getLogger("API").error(f"Failed to delete routine: {e}", exc_info=True)
+        return api_error("ROUTINE_DELETE_FAILED", str(e), 500)
+
+@app.route("/api/routines/<routine_id>/steps", methods=["POST"])
+@require_auth
+def create_routine_step(routine_id):
+    user_id, error = _get_user_id_or_error()
+    if error: return error
+    data = request.json or {}
+    title = data.get("title")
+    if not title:
+        return api_error("INVALID_INPUT", "Title is required", 400)
+        
+    try:
+        step = routines_repository.create_step(
+            user_id,
+            routine_id,
+            title,
+            est_minutes=data.get("est_minutes"),
+            energy=data.get("energy"),
+            tags=data.get("tags"),
+            order_index=data.get("order_index")
+        )
+        return jsonify({"ok": True, "step": step})
+    except ValueError as ve:
+        return api_error("INVALID_INPUT", str(ve), 400)
+    except Exception as e:
+        logging.getLogger("API").error(f"Failed to create step: {e}", exc_info=True)
+        return api_error("STEP_CREATE_FAILED", str(e), 500)
+
+@app.route("/api/steps/<step_id>", methods=["PATCH"])
+@require_auth
+def update_routine_step(step_id):
+    user_id, error = _get_user_id_or_error()
+    if error: return error
+    try:
+        step = routines_repository.update_step(user_id, step_id, request.json or {})
+        if not step:
+            return api_error("NOT_FOUND", "Step not found", 404)
+        return jsonify({"ok": True, "step": step})
+    except Exception as e:
+        logging.getLogger("API").error(f"Failed to update step: {e}", exc_info=True)
+        return api_error("STEP_UPDATE_FAILED", str(e), 500)
+
+@app.route("/api/steps/<step_id>", methods=["DELETE"])
+@require_auth
+def delete_routine_step(step_id):
+    user_id, error = _get_user_id_or_error()
+    if error: return error
+    try:
+        success = routines_repository.delete_step(user_id, step_id)
+        if not success:
+            return api_error("NOT_FOUND", "Step not found", 404)
+        return jsonify({"ok": True})
+    except Exception as e:
+        logging.getLogger("API").error(f"Failed to delete step: {e}", exc_info=True)
+        return api_error("STEP_DELETE_FAILED", str(e), 500)
 
 
 @app.route("/api/plan/update", methods=["POST"])

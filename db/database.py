@@ -381,6 +381,39 @@ def ensure_core_schema() -> None:
         "CREATE INDEX IF NOT EXISTS idx_goal_task_history_user_date ON goal_task_history(user_id, plan_date);",
         "CREATE INDEX IF NOT EXISTS idx_goal_task_history_insight ON goal_task_history(source_insight_id);",
         "CREATE INDEX IF NOT EXISTS idx_goal_task_history_status ON goal_task_history(status);",
+
+        # Routines (template header)
+        """
+        CREATE TABLE IF NOT EXISTS routines (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            title TEXT NOT NULL,
+            schedule_rule JSONB DEFAULT '{}'::jsonb,
+            enabled BOOLEAN DEFAULT TRUE,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_routines_user_id ON routines(user_id);",
+        "CREATE INDEX IF NOT EXISTS idx_routines_enabled ON routines(enabled);",
+
+        # Routine steps (template steps)
+        """
+        CREATE TABLE IF NOT EXISTS routine_steps (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            routine_id TEXT NOT NULL REFERENCES routines(id) ON DELETE CASCADE,
+            order_index INTEGER DEFAULT 0,
+            title TEXT NOT NULL,
+            est_minutes INTEGER,
+            energy TEXT,
+            tags JSONB DEFAULT '[]'::jsonb,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_routine_steps_routine_id ON routine_steps(routine_id);",
+        "CREATE INDEX IF NOT EXISTS idx_routine_steps_routine_order ON routine_steps(routine_id, order_index);",
     ]
 
     with get_connection() as conn:

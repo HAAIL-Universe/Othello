@@ -11,6 +11,7 @@ from core.memory_manager import MemoryManager
 from core.behavior_profile import BehaviorProfile
 from db.db_goal_manager import DbGoalManager
 from db import plan_repository
+from db import routines_repository
 
 
 DAY_TAGS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
@@ -67,8 +68,10 @@ class RoutineStore:
     def _load_or_seed(self) -> List[Dict[str, Any]]:
         global _ROUTINES_DB_ONLY_WARNED
         if _PHASE1_DB_ONLY:
+            # In DB-only mode, we don't load JSON routines.
+            # Active routines are fetched per-user in get_active_routines.
             if not _ROUTINES_DB_ONLY_WARNED:
-                self.logger.warning("RoutineStore: JSON routines disabled in Phase-1 DB-only mode")
+                self.logger.info("RoutineStore: JSON routines disabled in Phase-1 DB-only mode (using DB)")
                 _ROUTINES_DB_ONLY_WARNED = True
             return []
         if self.store_path.exists():
@@ -249,12 +252,61 @@ class RoutineStore:
         mood: Dict[str, Any],
         routine_stats: Optional[Dict[str, Any]] = None,
         section_stats: Optional[Dict[str, Any]] = None,
+        user_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         day_tag = DAY_TAGS[target_date.weekday()]
         tags = mood.get("day_tags") if isinstance(mood.get("day_tags"), list) else None
         active = []
-        for routine in self.routines:
-            if not self._is_active_today(routine, day_tag, tags):
+
+        source_routines = self.routines
+        if _PHASE1_DB_ONLY:
+            if not user_id:
+                raise ValueError("user_id required for routines in Phase1 DB-only mode")
+            db_routines = routines_repository.list_routines_with_steps(user_id)
+            source_routines = []
+            for r in db_routines:
+                if not r.get("enabled", True):
+                    continue
+                
+                # Check schedule rule
+                schedule = r.get("schedule_rule") or {}
+                days = schedule.get("days")
+                if days and isinstance(days, list) and day_tag not in days:
+                    continue
+                
+                # Convert to bundle shape
+                steps = []
+                total_duration = 0
+                for s in r.get("steps", []):
+                    dur = s.get("est_minutes") or 0
+                    total_duration += dur
+                    steps.append({
+                        "id": s["id"],
+                        "label": s["title"],
+                        "approx_duration_min": dur,
+                        "energy_cost": s.get("energy") or "low",
+                        "friction": "low"
+                    })
+                
+                source_routines.append({
+                    "id": r["id"],
+                    "name": r["title"],
+                    "active": True,
+                    "tags": [], # Could map from DB if we had tags on routine
+                    "days": days or [],
+                    "variants": [{
+                        "id": "default",
+                        "label": "default",
+                        "approx_duration_min": total_duration,
+                        "energy_profile": "medium", # Default
+                        "dependency_level": "low",
+                        "tags": [],
+                        "steps": steps
+                    }]
+                })
+
+        for routine in source_routines:
+            if not _PHASE1_DB_ONLY and not self._is_active_today(routine, day_tag, tags):
                 continue
             routine_id = routine.get("id")
             history = routine_stats.get(routine_id) if (routine_stats and routine_id) else None
@@ -411,7 +463,32 @@ class DayPlanner:
                 behavior_snapshot=behavior_snapshot,
             )
             if plan_row and plan_row.get("id"):
+                # Preserve existing statuses
+                existing_items = plan_repository.get_plan_items(plan_row["id"])
+                status_map = {}
+                for item in existing_items:
+                    iid = item.get("item_id")
+                    if iid:
+                        status_map[iid] = {
+                            "status": item.get("status"),
+                            "reschedule_to": item.get("reschedule_to"),
+                            "skip_reason": item.get("skip_reason")
+                        }
+
                 items = self._flatten_plan_items(plan)
+                
+                # Apply preserved statuses
+                for item in items:
+                    iid = item.get("id")
+                    if iid and iid in status_map:
+                        prev = status_map[iid]
+                        if prev["status"] != "planned":
+                            item["status"] = prev["status"]
+                        if prev["reschedule_to"]:
+                            item["reschedule_to"] = prev["reschedule_to"]
+                        if prev["skip_reason"]:
+                            item["reason"] = prev["skip_reason"]
+
                 plan_repository.replace_plan_items(plan_row["id"], items)
         except Exception as exc:
             self.logger.error(f"DayPlanner: failed to persist plan to DB for {target_date}: {exc}")
@@ -487,6 +564,7 @@ class DayPlanner:
             if item_type in ("routine", "routine_block"):
                 routine = {**metadata}
                 routine["id"] = row.get("item_id")
+                routine["item_id"] = row.get("item_id")
                 routine["status"] = row.get("status", routine.get("status", "planned"))
                 routine["type"] = routine.get("type") or item_type or "routine"
                 routine["section_hint"] = row.get("section") or metadata.get("section_hint", "any")
@@ -496,6 +574,7 @@ class DayPlanner:
                 parent_id = metadata.get("parent_id") or metadata.get("parent_item_id") or metadata.get("routine_id")
                 step = {**metadata}
                 step["id"] = row.get("item_id")
+                step["item_id"] = row.get("item_id")
                 step["status"] = row.get("status", step.get("status", "planned"))
                 step["type"] = "routine_step"
                 step["section_hint"] = row.get("section") or step.get("section_hint")
@@ -505,8 +584,9 @@ class DayPlanner:
             else:
                 entry = {**metadata}
                 entry["id"] = row.get("item_id")
+                entry["item_id"] = row.get("item_id")
                 entry["status"] = row.get("status", entry.get("status", "planned"))
-                entry["type"] = item_type or entry.get("type") or "goal_task"
+                entry["type"] = item_typeuser_id,  or entry.get("type") or "goal_task"
                 entry["section_hint"] = row.get("section") or entry.get("section_hint")
                 entry["reschedule_to"] = row.get("reschedule_to") or entry.get("reschedule_to")
                 entry["reason"] = row.get("skip_reason") or entry.get("reason")
@@ -741,17 +821,20 @@ class DayPlanner:
             capacity["light"] = max(1, capacity.get("light", 2))
         return capacity
 
-    def _select_routines(self, target_date: date, mood: Dict[str, Any], behavior_snapshot: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def _select_routines(self, user_id: str, target_date: date, mood: Dict[str, Any], behavior_snapshot: Dict[str, Any]) -> List[Dict[str, Any]]:
         selected = []
         routine_stats = (behavior_snapshot or {}).get("routine_stats", {})
         section_stats = (behavior_snapshot or {}).get("section_density", {})
-        active = self.routine_store.get_active_routines(target_date, mood, routine_stats, section_stats)
+        active = self.routine_store.get_active_routines(target_date, mood, routine_stats, section_stats, user_id=user_id)
         for idx, bundle in enumerate(active):
             variant = bundle["variant"]
             steps = []
             for step in variant.get("steps", []):
+                # Ensure step has item_id equal to id for UI actions
+                sid = f"routine-{bundle['routine_id']}-variant-{variant.get('id')}-step-{step.get('id')}"
                 steps.append({
-                    "id": f"routine-{bundle['routine_id']}-variant-{variant.get('id')}-step-{step.get('id')}",
+                    "id": sid,
+                    "item_id": sid,
                     "label": step.get("label"),
                     "status": "planned",
                     "type": "routine_step",
@@ -759,8 +842,11 @@ class DayPlanner:
                     "friction": step.get("friction", "low"),
                     "approx_duration_min": step.get("approx_duration_min"),
                 })
+            
+            rid = f"routine-{bundle['routine_id']}-variant-{variant.get('id')}"
             selected.append({
-                "id": f"routine-{bundle['routine_id']}-variant-{variant.get('id')}",
+                "id": rid,
+                "item_id": rid,
                 "routine_id": bundle.get("routine_id"),
                 "name": bundle.get("name"),
                 "variant": variant.get("label"),
@@ -872,7 +958,7 @@ class DayPlanner:
         reason: Optional[str] = None,
         reschedule_to: Optional[str] = None,
     ) -> Dict[str, Any]:
-        allowed_statuses = {"planned", "complete", "skipped", "rescheduled"}
+        allowed_statuses = {"planned", "in_progress", "complete", "skipped", "rescheduled"}
         if status not in allowed_statuses:
             raise ValueError(f"Invalid status '{status}'. Allowed: {sorted(allowed_statuses)}")
         target_date = date.fromisoformat(plan_date) if plan_date else date.today()

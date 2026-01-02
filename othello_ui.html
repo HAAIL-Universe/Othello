@@ -1824,14 +1824,61 @@
         </div>
       </div>
 
-      <!-- ROUTINE PLANNER PLACEHOLDER -->
+      <!-- ROUTINE PLANNER VIEW -->
       <div id="routine-planner-view" class="view">
-        <div class="placeholder-panel">
-          <div class="placeholder-card">
-            <div class="placeholder-title">Routine Planner</div>
-            <div class="placeholder-text">
-              This view will surface adaptive routines and variants. (Placeholder)
+        <div class="view-header">
+          <h2 class="view-title">Routine Planner</h2>
+        </div>
+        <div class="routine-planner-layout" style="display: grid; grid-template-columns: 300px 1fr; gap: 1.5rem; height: calc(100vh - 140px);">
+          <!-- Left: List -->
+          <div class="routine-list-panel" style="background: var(--bg-2); border: 1px solid var(--border); border-radius: 12px; display: flex; flex-direction: column;">
+            <div style="padding: 1rem; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center;">
+              <span style="font-weight: 600; color: var(--text-main);">Routines</span>
+              <button id="routine-add-btn" class="icon-button" title="New Routine">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg>
+              </button>
             </div>
+            <div id="routine-list" style="flex: 1; overflow-y: auto; padding: 0.5rem;">
+              <!-- Routine items injected here -->
+            </div>
+          </div>
+
+          <!-- Right: Editor -->
+          <div id="routine-editor" class="routine-editor-panel" style="background: var(--bg-2); border: 1px solid var(--border); border-radius: 12px; padding: 1.5rem; display: none; flex-direction: column; overflow-y: auto;">
+            <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 1.5rem;">
+              <div style="flex: 1; margin-right: 1rem;">
+                <label style="display: block; font-size: 0.85rem; color: var(--text-soft); margin-bottom: 0.4rem;">Routine Name</label>
+                <input type="text" id="routine-title-input" class="login-input" style="width: 100%; font-size: 1.1rem; font-weight: 600;">
+              </div>
+              <div style="display: flex; flex-direction: column; align-items: flex-end;">
+                <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; margin-bottom: 0.5rem;">
+                  <input type="checkbox" id="routine-enabled-toggle">
+                  <span style="font-size: 0.9rem; color: var(--text-main);">Active</span>
+                </label>
+                <button id="routine-delete-btn" style="color: #fca5a5; background: none; border: none; font-size: 0.85rem; cursor: pointer; text-decoration: underline;">Delete Routine</button>
+              </div>
+            </div>
+
+            <div style="margin-bottom: 1.5rem;">
+              <label style="display: block; font-size: 0.85rem; color: var(--text-soft); margin-bottom: 0.4rem;">Schedule (Days)</label>
+              <div id="routine-days" style="display: flex; gap: 0.5rem; flex-wrap: wrap;">
+                <!-- Checkboxes for mon..sun -->
+              </div>
+            </div>
+
+            <div style="flex: 1; display: flex; flex-direction: column;">
+              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.8rem;">
+                <span style="font-size: 0.95rem; font-weight: 600; color: var(--text-main);">Steps</span>
+                <button id="routine-add-step-btn" class="login-button" style="padding: 0.4rem 0.8rem; font-size: 0.85rem;">+ Add Step</button>
+              </div>
+              <div id="routine-steps" style="display: flex; flex-direction: column; gap: 0.5rem;">
+                <!-- Steps injected here -->
+              </div>
+            </div>
+          </div>
+          
+          <div id="routine-empty-state" style="display: flex; align-items: center; justify-content: center; color: var(--text-soft); background: var(--bg-2); border: 1px solid var(--border); border-radius: 12px;">
+            Select a routine to edit
           </div>
         </div>
       </div>
@@ -3165,33 +3212,64 @@
 
 
 
-    function createStatusChip(status) {
+    function createStatusChip(status, item = null) {
       const chip = document.createElement("div");
       chip.className = "planner-status";
       chip.textContent = status || "planned";
+      
+      if (item) {
+        const iid = item.item_id || item.id;
+        if (iid && (status === "planned" || status === "in_progress")) {
+          chip.style.cursor = "pointer";
+          chip.title = status === "planned" ? "Click to Start" : "Click to Complete";
+          chip.onclick = async (e) => {
+            e.stopPropagation();
+            const nextStatus = status === "planned" ? "in_progress" : "complete";
+            try {
+              const resp = await fetch(PLAN_UPDATE_API, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                credentials: "include",
+                body: JSON.stringify({ item_id: iid, status: nextStatus }),
+              });
+              if (resp.ok) await loadTodayPlanner();
+            } catch (err) { console.error(err); }
+          };
+        }
+      }
       return chip;
     }
 
     function buildPlannerActions(item) {
       const container = document.createElement("div");
       container.className = "planner-actions";
+      
+      const iid = item?.item_id || item?.id;
+      if (!iid) return container;
 
-      const actions = [
-        { label: "Done", status: "complete" },
-        { label: "Skip", status: "skipped" },
-        { label: "Move to Tomorrow", status: "rescheduled" },
-      ];
+      const status = item.status || "planned";
+      const actions = [];
+      
+      if (status === "planned") {
+        actions.push({ label: "Start", status: "in_progress" });
+        actions.push({ label: "Done", status: "complete" });
+        actions.push({ label: "Skip", status: "skipped" });
+        actions.push({ label: "Move to Tomorrow", status: "rescheduled" });
+      } else if (status === "in_progress") {
+        actions.push({ label: "Done", status: "complete" });
+        actions.push({ label: "Skip", status: "skipped" });
+        actions.push({ label: "Move to Tomorrow", status: "rescheduled" });
+      }
 
       actions.forEach(action => {
         const btn = document.createElement("button");
         btn.className = "planner-action-btn";
         btn.textContent = action.label;
         btn.addEventListener("click", async () => {
-          if (!item || !item.item_id) return;
           btn.disabled = true;
           try {
             const payload = {
-              item_id: item.item_id,
+              item_id: iid,
               status: action.status,
             };
             if (action.status === "rescheduled") {
@@ -3251,7 +3329,7 @@
 
           const taskRight = document.createElement("div");
           taskRight.className = "planner-block__right";
-          taskRight.appendChild(createStatusChip(item.status));
+          taskRight.appendChild(createStatusChip(item.status, item));
           if (item.item_id) {
             taskRight.appendChild(buildPlannerActions(item));
           }
@@ -3296,7 +3374,7 @@
 
           const headerRight = document.createElement("div");
           headerRight.className = "planner-block__right";
-          headerRight.appendChild(createStatusChip(item.status));
+          headerRight.appendChild(createStatusChip(item.status, item));
           if (item.item_id) {
             headerRight.appendChild(buildPlannerActions(item));
           }
@@ -3322,7 +3400,7 @@
 
               const stepRight = document.createElement("div");
               stepRight.className = "planner-block__right";
-              stepRight.appendChild(createStatusChip(step.status));
+              stepRight.appendChild(createStatusChip(step.status, step));
               if (step.item_id) {
                 stepRight.appendChild(buildPlannerActions(step));
               }
@@ -3601,6 +3679,8 @@
         loadTodayPlanner();
       } else if (viewName === "insights") {
         loadInsightsInbox();
+      } else if (viewName === "routine-planner") {
+        loadRoutinePlanner();
       }
     }
 
@@ -5713,6 +5793,332 @@
         if (goalId == null) return;
         archiveGoal(goalId);
       });
+    }
+
+    // ===== ROUTINE PLANNER LOGIC =====
+    const ROUTINES_API = "/api/routines";
+    othelloState.routines = [];
+    othelloState.activeRoutineId = null;
+
+    async function fetchRoutines() {
+      try {
+        const resp = await fetch(ROUTINES_API, { credentials: "include" });
+        if (!resp.ok) throw new Error("Failed to fetch routines");
+        const data = await resp.json();
+        if (data.ok) {
+          othelloState.routines = data.routines || [];
+        }
+      } catch (err) {
+        console.error("fetchRoutines error:", err);
+      }
+    }
+
+    async function loadRoutinePlanner() {
+      await fetchRoutines();
+      renderRoutineList(othelloState.routines);
+      if (othelloState.routines.length > 0 && !othelloState.activeRoutineId) {
+        selectRoutine(othelloState.routines[0].id);
+      } else if (othelloState.activeRoutineId) {
+        selectRoutine(othelloState.activeRoutineId);
+      } else {
+        document.getElementById("routine-editor").style.display = "none";
+        document.getElementById("routine-empty-state").style.display = "flex";
+      }
+    }
+
+    function renderRoutineList(routines) {
+      const listEl = document.getElementById("routine-list");
+      listEl.innerHTML = "";
+      routines.forEach(r => {
+        const item = document.createElement("div");
+        item.className = "routine-list-item";
+        item.style.padding = "0.8rem";
+        item.style.borderBottom = "1px solid var(--border)";
+        item.style.cursor = "pointer";
+        item.style.background = r.id === othelloState.activeRoutineId ? "var(--card-bg)" : "transparent";
+        item.style.borderLeft = r.id === othelloState.activeRoutineId ? "3px solid var(--accent)" : "3px solid transparent";
+        
+        const title = document.createElement("div");
+        title.style.fontWeight = "600";
+        title.style.color = r.enabled ? "var(--text-main)" : "var(--text-soft)";
+        title.textContent = r.title;
+        
+        const meta = document.createElement("div");
+        meta.style.fontSize = "0.8rem";
+        meta.style.color = "var(--text-soft)";
+        const stepCount = (r.steps || []).length;
+        meta.textContent = `${stepCount} step${stepCount !== 1 ? 's' : ''}`;
+        
+        item.appendChild(title);
+        item.appendChild(meta);
+        item.onclick = () => selectRoutine(r.id);
+        listEl.appendChild(item);
+      });
+    }
+
+    function selectRoutine(routineId) {
+      othelloState.activeRoutineId = routineId;
+      const routine = othelloState.routines.find(r => r.id === routineId);
+      renderRoutineList(othelloState.routines); // update selection style
+      
+      if (routine) {
+        document.getElementById("routine-empty-state").style.display = "none";
+        document.getElementById("routine-editor").style.display = "flex";
+        renderRoutineEditor(routine);
+      } else {
+        document.getElementById("routine-editor").style.display = "none";
+        document.getElementById("routine-empty-state").style.display = "flex";
+      }
+    }
+
+    function renderRoutineEditor(routine) {
+      const titleInput = document.getElementById("routine-title-input");
+      titleInput.value = routine.title;
+      titleInput.onchange = (e) => updateRoutine(routine.id, { title: e.target.value });
+      
+      const enabledToggle = document.getElementById("routine-enabled-toggle");
+      enabledToggle.checked = routine.enabled;
+      enabledToggle.onchange = (e) => updateRoutine(routine.id, { enabled: e.target.checked });
+      
+      document.getElementById("routine-delete-btn").onclick = () => deleteRoutine(routine.id);
+      
+      // Schedule days
+      const daysContainer = document.getElementById("routine-days");
+      daysContainer.innerHTML = "";
+      const days = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+      const currentDays = (routine.schedule_rule || {}).days || [];
+      
+      days.forEach(day => {
+        const label = document.createElement("label");
+        label.style.display = "flex";
+        label.style.alignItems = "center";
+        label.style.gap = "0.3rem";
+        label.style.fontSize = "0.85rem";
+        label.style.cursor = "pointer";
+        label.style.padding = "0.3rem 0.6rem";
+        label.style.borderRadius = "4px";
+        label.style.background = "var(--card-bg)";
+        label.style.border = "1px solid var(--border)";
+        
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.checked = currentDays.includes(day);
+        cb.onchange = () => {
+          const newDays = days.filter(d => {
+            if (d === day) return cb.checked;
+            return currentDays.includes(d);
+          });
+          updateRoutine(routine.id, { schedule_rule: { days: newDays } });
+        };
+        
+        label.appendChild(cb);
+        label.appendChild(document.createTextNode(day.toUpperCase()));
+        daysContainer.appendChild(label);
+      });
+      
+      // Steps
+      const stepsContainer = document.getElementById("routine-steps");
+      stepsContainer.innerHTML = "";
+      (routine.steps || []).forEach((step, idx) => {
+        const row = document.createElement("div");
+        row.style.display = "flex";
+        row.style.gap = "0.5rem";
+        row.style.alignItems = "center";
+        row.style.padding = "0.5rem";
+        row.style.background = "var(--card-bg)";
+        row.style.borderRadius = "6px";
+        row.style.border = "1px solid var(--border)";
+        
+        // Order buttons
+        const orderCol = document.createElement("div");
+        orderCol.style.display = "flex";
+        orderCol.style.flexDirection = "column";
+        
+        const upBtn = document.createElement("button");
+        upBtn.innerHTML = "▲";
+        upBtn.style.fontSize = "0.6rem";
+        upBtn.style.background = "none";
+        upBtn.style.border = "none";
+        upBtn.style.color = "var(--text-soft)";
+        upBtn.style.cursor = "pointer";
+        upBtn.disabled = idx === 0;
+        upBtn.onclick = () => reorderStep(routine, step.id, -1);
+        
+        const downBtn = document.createElement("button");
+        downBtn.innerHTML = "▼";
+        downBtn.style.fontSize = "0.6rem";
+        downBtn.style.background = "none";
+        downBtn.style.border = "none";
+        downBtn.style.color = "var(--text-soft)";
+        downBtn.style.cursor = "pointer";
+        downBtn.disabled = idx === (routine.steps.length - 1);
+        downBtn.onclick = () => reorderStep(routine, step.id, 1);
+        
+        orderCol.appendChild(upBtn);
+        orderCol.appendChild(downBtn);
+        row.appendChild(orderCol);
+        
+        // Title
+        const sTitle = document.createElement("input");
+        sTitle.type = "text";
+        sTitle.value = step.title;
+        sTitle.className = "login-input";
+        sTitle.style.flex = "1";
+        sTitle.style.padding = "0.3rem 0.5rem";
+        sTitle.style.fontSize = "0.9rem";
+        sTitle.onchange = (e) => updateStep(step.id, { title: e.target.value });
+        row.appendChild(sTitle);
+        
+        // Duration
+        const sDur = document.createElement("input");
+        sDur.type = "number";
+        sDur.value = step.est_minutes || "";
+        sDur.placeholder = "min";
+        sDur.className = "login-input";
+        sDur.style.width = "60px";
+        sDur.style.padding = "0.3rem 0.5rem";
+        sDur.style.fontSize = "0.9rem";
+        sDur.onchange = (e) => updateStep(step.id, { est_minutes: parseInt(e.target.value) || 0 });
+        row.appendChild(sDur);
+        
+        // Energy
+        const sEnergy = document.createElement("select");
+        sEnergy.className = "login-input";
+        sEnergy.style.width = "80px";
+        sEnergy.style.padding = "0.3rem 0.5rem";
+        sEnergy.style.fontSize = "0.9rem";
+        ["low", "medium", "high"].forEach(e => {
+          const opt = document.createElement("option");
+          opt.value = e;
+          opt.text = e;
+          opt.selected = step.energy === e;
+          sEnergy.appendChild(opt);
+        });
+        sEnergy.onchange = (e) => updateStep(step.id, { energy: e.target.value });
+        row.appendChild(sEnergy);
+        
+        // Delete
+        const delBtn = document.createElement("button");
+        delBtn.innerHTML = "×";
+        delBtn.style.background = "none";
+        delBtn.style.border = "none";
+        delBtn.style.color = "#fca5a5";
+        delBtn.style.fontSize = "1.2rem";
+        delBtn.style.cursor = "pointer";
+        delBtn.onclick = () => deleteStep(step.id);
+        row.appendChild(delBtn);
+        
+        stepsContainer.appendChild(row);
+      });
+      
+      document.getElementById("routine-add-step-btn").onclick = () => addStep(routine.id);
+    }
+
+    async function updateRoutine(id, patch) {
+      try {
+        const resp = await fetch(`${ROUTINES_API}/${id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(patch),
+          credentials: "include"
+        });
+        if (resp.ok) {
+          await fetchRoutines();
+          selectRoutine(id); // refresh view
+        }
+      } catch (err) { console.error(err); }
+    }
+
+    async function deleteRoutine(id) {
+      if (!confirm("Delete this routine?")) return;
+      try {
+        const resp = await fetch(`${ROUTINES_API}/${id}`, { method: "DELETE", credentials: "include" });
+        if (resp.ok) {
+          othelloState.activeRoutineId = null;
+          await loadRoutinePlanner();
+        }
+      } catch (err) { console.error(err); }
+    }
+
+    async function addRoutine() {
+      const title = prompt("Routine Name:");
+      if (!title) return;
+      try {
+        const resp = await fetch(ROUTINES_API, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ title, enabled: true }),
+          credentials: "include"
+        });
+        if (resp.ok) {
+          const data = await resp.json();
+          othelloState.activeRoutineId = data.routine.id;
+          await loadRoutinePlanner();
+        }
+      } catch (err) { console.error(err); }
+    }
+    document.getElementById("routine-add-btn").onclick = addRoutine;
+
+    async function addStep(routineId) {
+      try {
+        const resp = await fetch(`${ROUTINES_API}/${routineId}/steps`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ title: "New Step", est_minutes: 5, energy: "low" }),
+          credentials: "include"
+        });
+        if (resp.ok) {
+          await fetchRoutines();
+          selectRoutine(routineId);
+        }
+      } catch (err) { console.error(err); }
+    }
+
+    async function updateStep(stepId, patch) {
+      try {
+        const resp = await fetch(`/api/steps/${stepId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(patch),
+          credentials: "include"
+        });
+        if (resp.ok) {
+          await fetchRoutines();
+        }
+      } catch (err) { console.error(err); }
+    }
+
+    async function deleteStep(stepId) {
+      if (!confirm("Delete step?")) return;
+      try {
+        const resp = await fetch(`/api/steps/${stepId}`, { method: "DELETE", credentials: "include" });
+        if (resp.ok) {
+          await fetchRoutines();
+          selectRoutine(othelloState.activeRoutineId);
+        }
+      } catch (err) { console.error(err); }
+    }
+
+    async function reorderStep(routine, stepId, direction) {
+      const steps = [...routine.steps];
+      const idx = steps.findIndex(s => s.id === stepId);
+      if (idx === -1) return;
+      const newIdx = idx + direction;
+      if (newIdx < 0 || newIdx >= steps.length) return;
+      
+      const item = steps.splice(idx, 1)[0];
+      steps.splice(newIdx, 0, item);
+      
+      const updates = steps.map((s, i) => {
+        if (s.order_index !== i) {
+          return updateStep(s.id, { order_index: i });
+        }
+        return Promise.resolve();
+      });
+      
+      await Promise.all(updates);
+      await fetchRoutines();
+      selectRoutine(routine.id);
     }
 
     // ===== INITIALIZATION =====
