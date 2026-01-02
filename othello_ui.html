@@ -3320,7 +3320,20 @@
       return container;
     }
 
-    function renderGoalTasks(goalTasks) {
+    function isSnoozedNow(metadata) {
+      if (!metadata || !metadata.snoozed_until) return false;
+      let ts = metadata.snoozed_until;
+      // Treat strings without timezone as UTC by appending 'Z' only if needed
+      // Check for Z, +HH:MM, or -HH:MM at the end
+      if (!/Z|[+-]\d{2}:?\d{2}$/.test(ts)) {
+        ts += "Z";
+      }
+      const snoozeDate = new Date(ts);
+      const now = new Date();
+      return !isNaN(snoozeDate.getTime()) && snoozeDate > now;
+    }
+
+    function renderGoalTasks(goalTasks, snoozedCollector = null) {
       const goalCount = Array.isArray(goalTasks) ? goalTasks.length : 0;
       othelloState.todayPlannerGoalTasks = Array.isArray(goalTasks) ? goalTasks : [];
       if (plannerGoalsList) {
@@ -3337,7 +3350,13 @@
       if (!goalCount) {
         plannerGoalsList.innerHTML = `<div class="planner-empty">No goal tasks scheduled.</div>`;
       } else {
+        let visibleCount = 0;
         goalTasks.forEach(item => {
+          if (isSnoozedNow(item.metadata)) {
+            if (snoozedCollector) snoozedCollector.push(item);
+            return;
+          }
+          visibleCount++;
           const task = document.createElement("div");
           task.className = "planner-task";
 
@@ -3360,6 +3379,9 @@
           task.appendChild(taskRight);
           plannerGoalsList.appendChild(task);
         });
+        if (visibleCount === 0 && goalCount > 0) {
+           plannerGoalsList.innerHTML = `<div class="planner-empty">All goal tasks snoozed.</div>`;
+        }
       }
 
       console.log("[Today Planner] renderGoalTasks", {
@@ -3375,22 +3397,48 @@
       const sections = (plan.sections || {});
       const routines = sections.routines || [];
       const goalTasks = goalTasksOverride !== null ? goalTasksOverride : (sections.goal_tasks || []);
+      const snoozedItems = [];
 
       plannerRoutinesList.innerHTML = "";
       if (!routines.length) {
         plannerRoutinesCount.textContent = "0 items";
         plannerRoutinesList.innerHTML = `<div class="planner-empty">No routines planned yet.</div>`;
       } else {
-        plannerRoutinesCount.textContent = `${routines.length} item${routines.length === 1 ? "" : "s"}`;
+        let visibleRoutines = 0;
         routines.forEach(item => {
+          if (isSnoozedNow(item.metadata)) {
+            snoozedItems.push(item);
+            return;
+          }
+          visibleRoutines++;
           const block = document.createElement("div");
           block.className = "planner-block";
           const header = document.createElement("div");
           header.className = "planner-block__header";
 
           const headerLeft = document.createElement("div");
+          
+          // Schedule badge
+          let scheduleBadge = "";
+          const sched = item.schedule_rule || (item.metadata && item.metadata.schedule_rule);
+          if (sched) {
+             const parts = [];
+             if (sched.days && sched.days.length > 0 && sched.days.length < 7) {
+                parts.push(sched.days.map(d => d.slice(0,3)).join(","));
+             }
+             if (sched.part_of_day && sched.part_of_day !== "any") {
+                parts.push(sched.part_of_day);
+             }
+             if (sched.time_window && sched.time_window.start) {
+                parts.push(`${sched.time_window.start}-${sched.time_window.end || ""}`);
+             }
+             if (parts.length > 0) {
+                scheduleBadge = `<span style="font-size:0.7rem; color:var(--accent); border:1px solid var(--accent-soft); padding:0.1rem 0.3rem; border-radius:4px; margin-left:0.5rem;">${parts.join(" · ")}</span>`;
+             }
+          }
+
           headerLeft.innerHTML = `
-            <div class="planner-block__title">${item.name || item.label || "Routine"}</div>
+            <div class="planner-block__title">${item.name || item.label || "Routine"}${scheduleBadge}</div>
             <div class="planner-block__meta">${item.section_hint || item.section || "any"} · ${item.variant || item.type || "routine"}</div>
           `;
 
@@ -3407,10 +3455,17 @@
 
           const stepsWrap = document.createElement("div");
           stepsWrap.className = "planner-steps";
-          if ((item.steps || []).length === 0) {
+          const steps = item.steps || [];
+          if (steps.length === 0) {
             stepsWrap.innerHTML = `<div class="planner-empty">No steps listed.</div>`;
           } else {
-            (item.steps || []).forEach(step => {
+            let visibleSteps = 0;
+            steps.forEach(step => {
+              if (isSnoozedNow(step.metadata)) {
+                snoozedItems.push(step);
+                return;
+              }
+              visibleSteps++;
               const stepRow = document.createElement("div");
               stepRow.className = "planner-step";
 
@@ -3431,20 +3486,210 @@
               stepRow.appendChild(stepRight);
               stepsWrap.appendChild(stepRow);
             });
+            if (visibleSteps === 0 && steps.length > 0) {
+               stepsWrap.innerHTML = `<div class="planner-empty">All steps snoozed.</div>`;
+            }
           }
 
           block.appendChild(stepsWrap);
           plannerRoutinesList.appendChild(block);
         });
+        plannerRoutinesCount.textContent = `${visibleRoutines} item${visibleRoutines === 1 ? "" : "s"}`;
+        if (visibleRoutines === 0 && routines.length > 0) {
+           plannerRoutinesList.innerHTML = `<div class="planner-empty">All routines snoozed.</div>`;
+        }
       }
-      renderGoalTasks(goalTasks);
+      renderGoalTasks(goalTasks, snoozedItems);
+
+      // Render Snoozed Section
+      const existingSnoozed = document.getElementById("planner-snoozed-section");
+      if (existingSnoozed) existingSnoozed.remove();
+
+      if (snoozedItems.length > 0) {
+        const snoozedSection = document.createElement("div");
+        snoozedSection.id = "planner-snoozed-section";
+        snoozedSection.className = "planner-card";
+        snoozedSection.style.marginTop = "1rem";
+        snoozedSection.style.opacity = "0.7";
+        
+        const header = document.createElement("div");
+        header.className = "planner-card__header";
+        header.innerHTML = `
+          <div>
+            <div class="planner-section__title">Snoozed</div>
+            <div class="planner-section__count">${snoozedItems.length} item${snoozedItems.length === 1 ? "" : "s"}</div>
+          </div>
+        `;
+        snoozedSection.appendChild(header);
+
+        const list = document.createElement("div");
+        list.className = "planner-blocks";
+        
+        snoozedItems.forEach(item => {
+          const row = document.createElement("div");
+          row.className = "planner-task"; // Reuse task style
+          
+          const label = (item.metadata && item.metadata.label) || item.label || item.name || item.description || "(unnamed)";
+          const until = item.metadata && item.metadata.snoozed_until ? new Date(item.metadata.snoozed_until).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : "later";
+
+          const left = document.createElement("div");
+          left.innerHTML = `
+            <div class="planner-task__label">${label}</div>
+            <div class="planner-task__meta">Snoozed until ${until}</div>
+          `;
+          
+          const right = document.createElement("div");
+          right.className = "planner-block__right";
+          
+          const wakeBtn = document.createElement("button");
+          wakeBtn.className = "planner-action-btn";
+          wakeBtn.textContent = "Wake";
+          wakeBtn.onclick = async () => {
+             wakeBtn.textContent = "...";
+             wakeBtn.disabled = true;
+             try {
+               const payload = {
+                 status: item.status || "planned",
+                 item_id: item.item_id || item.id,
+                 snooze_minutes: 0 // Explicitly clear snooze
+               };
+               const resp = await fetch(PLAN_UPDATE_API, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  credentials: "include",
+                  body: JSON.stringify(payload),
+               });
+               if (!resp.ok) {
+                 throw new Error("Wake failed");
+               }
+               await loadTodayPlanner();
+             } catch (e) {
+               console.error("Wake failed", e);
+               wakeBtn.textContent = "Error";
+             }
+          };
+          
+          right.appendChild(wakeBtn);
+          row.appendChild(left);
+          row.appendChild(right);
+          list.appendChild(row);
+        });
+        
+        snoozedSection.appendChild(list);
+        // Append to planner shell
+        const shell = document.querySelector(".planner-shell");
+        if (shell) shell.appendChild(snoozedSection);
+      }
 
       console.log("[Today Planner] renderPlannerSections", {
         goalCount: goalTasks.length,
+        snoozedCount: snoozedItems.length,
         headerText: plannerGoalsCount ? plannerGoalsCount.textContent : null,
         listChildren: plannerGoalsList ? plannerGoalsList.children.length : null,
       });
     }
+
+    function renderNextAction(plan) {
+      let nextAction = plan.next_action;
+      
+      // Fallback to client-side if server didn't provide it (legacy support)
+      if (!nextAction) {
+        // Compute client-side
+        const allItems = [];
+        const sections = plan.sections || {};
+        (sections.routines || []).forEach(r => {
+           if (r.steps && r.steps.length) {
+             r.steps.forEach(s => allItems.push(s));
+           } else {
+             allItems.push(r);
+           }
+        });
+        (sections.goal_tasks || []).forEach(t => allItems.push(t));
+        
+        // Filter
+        const candidates = allItems.filter(item => {
+           if (isSnoozedNow(item.metadata)) return false;
+           const s = (item.status || "planned").toLowerCase();
+           return s === "planned" || s === "in_progress";
+        });
+        
+        // Sort: in_progress first, then by order/priority (implicit in list order)
+        candidates.sort((a, b) => {
+           const aStatus = (a.status || "").toLowerCase();
+           const bStatus = (b.status || "").toLowerCase();
+           if (aStatus === "in_progress" && bStatus !== "in_progress") return -1;
+           if (bStatus === "in_progress" && aStatus !== "in_progress") return 1;
+           return 0;
+        });
+        
+        if (candidates.length > 0) {
+           nextAction = candidates[0];
+        }
+      }
+      
+      const existingCard = document.getElementById("next-action-card");
+      if (existingCard) existingCard.remove();
+
+      if (!nextAction) return; // Nothing to do
+      
+      // Render card
+      const container = document.querySelector(".planner-shell");
+      
+      const card = document.createElement("div");
+      card.id = "next-action-card";
+      card.className = "planner-card";
+      card.style.marginBottom = "0"; // Let gap handle it
+      card.style.border = "1px solid var(--accent)";
+      card.style.background = "rgba(125, 211, 252, 0.05)";
+      
+      const label = (nextAction.metadata && nextAction.metadata.label) || nextAction.label || nextAction.name || "Next Action";
+      const status = nextAction.status || "planned";
+      const itemId = nextAction.item_id || nextAction.id;
+      
+      card.innerHTML = `
+        <div class="planner-headline" style="font-size: 0.9rem; color: var(--accent); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.5rem;">
+           ${status === "in_progress" ? "Current Focus" : "Up Next"}
+        </div>
+        <div class="planner-headline" style="font-size: 1.2rem; margin-bottom: 1rem;">${label}</div>
+        <div class="planner-actions" style="gap: 0.5rem;">
+           ${status !== "in_progress" ? `<button class="planner-action-btn" style="border-color: var(--accent); color: var(--accent);" onclick="updateItemStatus('${itemId}', 'in_progress')">Start</button>` : ""}
+           <button class="planner-action-btn" onclick="updateItemStatus('${itemId}', 'complete')">Done</button>
+           <button class="planner-action-btn" onclick="snoozeItem('${itemId}', 15)">+15m</button>
+           <button class="planner-action-btn" onclick="snoozeItem('${itemId}', 60)">+1h</button>
+        </div>
+      `;
+      
+      // Insert after brief card (first child of shell usually)
+      if (container && container.children.length > 0) {
+         container.insertBefore(card, container.children[1] || null);
+      } else if (container) {
+         container.appendChild(card);
+      }
+    }
+    
+    window.updateItemStatus = async (itemId, status) => {
+       try {
+         const resp = await fetch(PLAN_UPDATE_API, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "include",
+            body: JSON.stringify({ item_id: itemId, status }),
+         });
+         if (resp.ok) await loadTodayPlanner();
+       } catch(e) { console.error(e); }
+    };
+    
+    window.snoozeItem = async (itemId, minutes) => {
+       try {
+         const resp = await fetch(PLAN_UPDATE_API, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "include",
+            body: JSON.stringify({ item_id: itemId, snooze_minutes: minutes }),
+         });
+         if (resp.ok) await loadTodayPlanner();
+       } catch(e) { console.error(e); }
+    };
 
     async function loadTodayPlanner() {
       if (BOOT_DEBUG) console.log("[Today Planner] loadTodayPlanner invoked", {
@@ -3462,6 +3707,7 @@
         if (BOOT_DEBUG) console.log("[Today Planner] goalTasks count", goalTasks.length, { source: "ui", planSource: plan._plan_source });
         renderTodayBrief(plan, brief);
         renderPlannerSections(plan, goalTasks);
+        renderNextAction(plan);
         await loadTodayPlanPanel();
       } catch (e) {
         let httpStatus = null;
@@ -5871,7 +6117,25 @@
         const title = document.createElement("div");
         title.style.fontWeight = "600";
         title.style.color = r.enabled ? "var(--text-main)" : "var(--text-soft)";
-        title.textContent = r.title;
+        title.style.display = "flex";
+        title.style.justifyContent = "space-between";
+        title.style.alignItems = "center";
+        
+        const nameSpan = document.createElement("span");
+        nameSpan.textContent = r.title;
+        title.appendChild(nameSpan);
+
+        // Disabled badge if days=[]
+        const sched = r.schedule_rule || {};
+        if (sched.days && Array.isArray(sched.days) && sched.days.length === 0) {
+           const badge = document.createElement("span");
+           badge.textContent = "Disabled";
+           badge.style.fontSize = "0.7rem";
+           badge.style.background = "rgba(255,255,255,0.1)";
+           badge.style.padding = "0.1rem 0.3rem";
+           badge.style.borderRadius = "4px";
+           title.appendChild(badge);
+        }
         
         const meta = document.createElement("div");
         meta.style.fontSize = "0.8rem";
@@ -5947,6 +6211,93 @@
         label.appendChild(document.createTextNode(day.toUpperCase()));
         daysContainer.appendChild(label);
       });
+      
+      // Part of Day & Time Window
+      const scheduleRule = routine.schedule_rule || {};
+      const existingExtra = document.getElementById("routine-schedule-extra");
+      if (existingExtra) existingExtra.remove();
+      
+      const extraContainer = document.createElement("div");
+      extraContainer.id = "routine-schedule-extra";
+      extraContainer.style.display = "flex";
+      extraContainer.style.gap = "1rem";
+      extraContainer.style.marginTop = "0.8rem";
+      extraContainer.style.flexWrap = "wrap";
+      
+      // Part of Day
+      const podWrap = document.createElement("div");
+      podWrap.style.display = "flex";
+      podWrap.style.flexDirection = "column";
+      podWrap.style.gap = "0.3rem";
+      const podLabel = document.createElement("label");
+      podLabel.textContent = "Part of Day";
+      podLabel.style.fontSize = "0.8rem";
+      podLabel.style.color = "var(--text-soft)";
+      const podSelect = document.createElement("select");
+      podSelect.className = "login-input";
+      podSelect.style.padding = "0.4rem";
+      podSelect.style.fontSize = "0.9rem";
+      ["any", "morning", "afternoon", "evening", "night"].forEach(p => {
+         const opt = document.createElement("option");
+         opt.value = p;
+         opt.text = p;
+         opt.selected = (scheduleRule.part_of_day || "any") === p;
+         podSelect.appendChild(opt);
+      });
+      podSelect.onchange = (e) => {
+         const current = (othelloState.routines.find(r => r.id === routine.id) || {}).schedule_rule || {};
+         updateRoutine(routine.id, { schedule_rule: { ...current, part_of_day: e.target.value } });
+      };
+      podWrap.appendChild(podLabel);
+      podWrap.appendChild(podSelect);
+      extraContainer.appendChild(podWrap);
+      
+      // Time Window
+      const timeWrap = document.createElement("div");
+      timeWrap.style.display = "flex";
+      timeWrap.style.flexDirection = "column";
+      timeWrap.style.gap = "0.3rem";
+      const timeLabel = document.createElement("label");
+      timeLabel.textContent = "Time Window (Optional)";
+      timeLabel.style.fontSize = "0.8rem";
+      timeLabel.style.color = "var(--text-soft)";
+      
+      const timeInputs = document.createElement("div");
+      timeInputs.style.display = "flex";
+      timeInputs.style.gap = "0.5rem";
+      timeInputs.style.alignItems = "center";
+      
+      const startInput = document.createElement("input");
+      startInput.type = "time";
+      startInput.className = "login-input";
+      startInput.style.padding = "0.4rem";
+      startInput.value = (scheduleRule.time_window || {}).start || "";
+      startInput.onchange = (e) => {
+         const current = (othelloState.routines.find(r => r.id === routine.id) || {}).schedule_rule || {};
+         const win = current.time_window || {};
+         updateRoutine(routine.id, { schedule_rule: { ...current, time_window: { ...win, start: e.target.value } } });
+      };
+      
+      const endInput = document.createElement("input");
+      endInput.type = "time";
+      endInput.className = "login-input";
+      endInput.style.padding = "0.4rem";
+      endInput.value = (scheduleRule.time_window || {}).end || "";
+      endInput.onchange = (e) => {
+         const current = (othelloState.routines.find(r => r.id === routine.id) || {}).schedule_rule || {};
+         const win = current.time_window || {};
+         updateRoutine(routine.id, { schedule_rule: { ...current, time_window: { ...win, end: e.target.value } } });
+      };
+      
+      timeInputs.appendChild(startInput);
+      timeInputs.appendChild(document.createTextNode("-"));
+      timeInputs.appendChild(endInput);
+      
+      timeWrap.appendChild(timeLabel);
+      timeWrap.appendChild(timeInputs);
+      extraContainer.appendChild(timeWrap);
+      
+      daysContainer.parentNode.insertBefore(extraContainer, daysContainer.nextSibling);
       
       // Steps
       const stepsContainer = document.getElementById("routine-steps");

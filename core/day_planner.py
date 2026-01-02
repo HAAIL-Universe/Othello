@@ -3,7 +3,7 @@ import logging
 import os
 import re
 from dataclasses import dataclass, field
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -297,6 +297,7 @@ class RoutineStore:
                     "active": True,
                     "tags": [], # Could map from DB if we had tags on routine
                     "days": days or [],
+                    "schedule_rule": schedule,
                     "variants": [{
                         "id": "default",
                         "label": "default",
@@ -327,10 +328,18 @@ class RoutineStore:
                 "name": routine.get("name"),
                 "variant": variant,
                 "section_hint": self._infer_section_hint(routine),
+                "schedule_rule": routine.get("schedule_rule"),
             })
         return active
 
     def _infer_section_hint(self, routine: Dict[str, Any]) -> str:
+        schedule = routine.get("schedule_rule", {})
+        part = schedule.get("part_of_day")
+        if part in ("morning", "afternoon", "evening", "night", "any"):
+            if part == "night":
+                return "evening"
+            return part
+
         tags = routine.get("tags", [])
         if "morning" in tags:
             return "morning"
@@ -391,6 +400,50 @@ class DayPlanner:
         return self.plan_dir / f"plan_{safe_uid}_{target_date.isoformat()}.json"
 
     # ------------------------------------------------------------------
+    def _is_snoozed_now(self, meta: Dict[str, Any], now_utc: datetime) -> bool:
+        if not meta or not meta.get("snoozed_until"):
+            return False
+        ts = meta["snoozed_until"]
+        try:
+            # Handle ISO strings that might lack timezone or have Z
+            if ts.endswith("Z"):
+                ts = ts[:-1] + "+00:00"
+            dt = datetime.fromisoformat(ts)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt > now_utc
+        except Exception:
+            return False
+
+    def _pick_next_action(self, flat_items: List[Dict[str, Any]], now_utc: datetime) -> Optional[Dict[str, Any]]:
+        candidates = []
+        for item in flat_items:
+            status = item.get("status", "planned")
+            if status in ("complete", "skipped", "rescheduled"):
+                continue
+            if self._is_snoozed_now(item.get("metadata") or {}, now_utc):
+                continue
+            candidates.append(item)
+        
+        if not candidates:
+            return None
+
+        # Sort: in_progress > planned
+        # Then by section hint (morning < afternoon < evening < any)
+        section_order = {"morning": 0, "afternoon": 1, "evening": 2, "night": 3, "any": 4}
+        
+        def sort_key(i):
+            s = i.get("status", "planned")
+            status_score = 0 if s == "in_progress" else 1
+            sec = i.get("section") or i.get("section_hint") or "any"
+            sec_score = section_order.get(sec, 99)
+            # Tie-break with order_index if available, else 0
+            idx = i.get("order_index", 0)
+            return (status_score, sec_score, idx)
+
+        candidates.sort(key=sort_key)
+        return candidates[0]
+
     def get_today_plan(
         self,
         user_id: str,
@@ -399,6 +452,8 @@ class DayPlanner:
     ) -> Dict[str, Any]:
         uid = self._normalize_user_id(user_id)
         today = date.today()
+        plan = None
+        
         if not force_regen:
             existing = self._load_plan(uid, today)
             if existing:
@@ -411,14 +466,23 @@ class DayPlanner:
                     appended_goal_tasks=appended_goal_tasks,
                     source=persisted_existing.get("_plan_source", "cache"),
                 )
-                return persisted_existing
-        behavior_snapshot = self.behavior_profile.build_profile()
-        plan = self._generate_plan(uid, today, mood_context or {}, behavior_snapshot)
-        appended_goal_tasks = self._append_persisted_goal_tasks(uid, today, plan)
-        persisted = self._persist_plan(uid, today, plan)
-        persisted["_plan_source"] = "generated"
-        self._log_plan_structure(today, persisted, appended_goal_tasks=appended_goal_tasks, source="generated")
-        return persisted
+                plan = persisted_existing
+
+        if not plan:
+            behavior_snapshot = self.behavior_profile.build_profile()
+            plan = self._generate_plan(uid, today, mood_context or {}, behavior_snapshot)
+            appended_goal_tasks = self._append_persisted_goal_tasks(uid, today, plan)
+            persisted = self._persist_plan(uid, today, plan)
+            persisted["_plan_source"] = "generated"
+            self._log_plan_structure(today, persisted, appended_goal_tasks=appended_goal_tasks, source="generated")
+            plan = persisted
+
+        # Compute next action
+        if plan:
+            flat = self._flatten_plan_items(plan)
+            plan["next_action"] = self._pick_next_action(flat, datetime.now(timezone.utc))
+            
+        return plan
 
     def rebuild_today_plan(self, user_id: str, mood_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         return self.get_today_plan(user_id, mood_context=mood_context, force_regen=True)
@@ -475,7 +539,8 @@ class DayPlanner:
                         status_map[iid] = {
                             "status": item.get("status"),
                             "reschedule_to": item.get("reschedule_to"),
-                            "skip_reason": item.get("skip_reason")
+                            "skip_reason": item.get("skip_reason"),
+                            "metadata": item.get("metadata") or {}
                         }
 
                 items = self._flatten_plan_items(plan)
@@ -489,8 +554,14 @@ class DayPlanner:
                             item["status"] = prev["status"]
                         if prev["reschedule_to"]:
                             item["reschedule_to"] = prev["reschedule_to"]
-                        if prev["skip_reason"]:
+                        if prev["skip_reason"] and item["status"] == "skipped":
                             item["reason"] = prev["skip_reason"]
+                        
+                        # Preserve snoozed_until
+                        prev_meta = prev["metadata"]
+                        if prev_meta.get("snoozed_until"):
+                            item.setdefault("metadata", {})
+                            item["metadata"]["snoozed_until"] = prev_meta["snoozed_until"]
 
                 plan_repository.replace_plan_items(plan_row["id"], items)
         except Exception as exc:
@@ -519,6 +590,7 @@ class DayPlanner:
                 "effort": routine.get("approx_duration_min"),
                 "energy": routine.get("energy_profile"),
                 "metadata": {k: v for k, v in routine.items() if k != "steps"},
+                "schedule_rule": routine.get("schedule_rule"),
             })
             for step in routine.get("steps", []):
                 metadata = dict(step)
@@ -974,11 +1046,12 @@ class DayPlanner:
         if not plan_row:
             raise ValueError(f"No plan stored for {target_date}")
 
-        existing_item = plan_repository.get_plan_item(plan_row["id"], item_id)
         if snooze_minutes <= 0:
             snooze_until = None
         else:
-            snooze_until = (datetime.utcnow() + timedelta(minutes=snooze_minutes)).isoformat()
+            # Use timezone-aware UTC and write ISO with Z
+            snooze_until = datetime.now(timezone.utc) + timedelta(minutes=snooze_minutes)
+            snooze_until = snooze_until.isoformat().replace("+00:00", "Z")
         
         # Update metadata
         plan_repository.update_plan_item_metadata(
@@ -987,7 +1060,12 @@ class DayPlanner:
             {"snoozed_until": snooze_until}
         )
         
-        return self.get_day_plan(user_id, target_date.isoformat())
+        plan = self._load_plan(uid, target_date)
+        if plan:
+            flat = self._flatten_plan_items(plan)
+            plan["next_action"] = self._pick_next_action(flat, datetime.now(timezone.utc))
+            return plan
+        return self.get_today_plan(user_id, mood_context=None, force_regen=False)
 
     # ------------------------------------------------------------------
     def update_plan_item_status(
@@ -1029,12 +1107,7 @@ class DayPlanner:
             raise ValueError(f"Cannot transition from complete to {status}")
 
         # Clear snooze if status changes
-        metadata_update = {}
-        if existing_item.get("metadata") and "snoozed_until" in existing_item["metadata"]:
-             # We can't easily delete a key with jsonb_set or || operator in simple update
-             # But we can set it to null or handle it in UI. 
-             # For now, let's just overwrite it with null which is explicit enough
-             metadata_update["snoozed_until"] = None
+        metadata_update = {"snoozed_until": None}
 
         updated_row = plan_repository.update_plan_item_status(
             plan_row["id"],
@@ -1052,6 +1125,10 @@ class DayPlanner:
             self._mark_goal_step_complete(uid, metadata)
 
         plan = self._load_plan(uid, target_date) or {}
+        if plan:
+            flat = self._flatten_plan_items(plan)
+            plan["next_action"] = self._pick_next_action(flat, datetime.now(timezone.utc))
+        
         entry, section_name, _ = self._find_item(plan, item_id)
 
         self._log_lifecycle(
