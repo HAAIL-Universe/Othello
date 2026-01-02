@@ -4655,6 +4655,15 @@ def list_proposals():
     return jsonify({"proposals": filtered})
 
 
+def _get_local_today(user_id: str) -> date:
+    """
+    Get the local date for the user.
+    Defaults to Europe/London if no timezone is configured.
+    """
+    # TODO: Fetch user timezone from DB or profile
+    tz = ZoneInfo("Europe/London")
+    return datetime.now(tz).date()
+
 @app.route("/api/proposals/generate", methods=["POST"])
 @require_auth
 def generate_proposals():
@@ -4662,14 +4671,21 @@ def generate_proposals():
     if error: return error
     
     data = request.json or {}
-    plan_date_str = data.get("plan_date") or date.today().isoformat()
-    try:
-        plan_date = date.fromisoformat(plan_date_str)
-    except ValueError:
-        return api_error("VALIDATION_ERROR", "Invalid plan_date", 400)
+    plan_date_str = data.get("plan_date")
+    
+    local_today = _get_local_today(user_id)
+    
+    if plan_date_str:
+        try:
+            plan_date = date.fromisoformat(plan_date_str)
+        except ValueError:
+            return api_error("VALIDATION_ERROR", "Invalid plan_date format (expected YYYY-MM-DD)", 400)
+    else:
+        plan_date = local_today
+        plan_date_str = plan_date.isoformat()
 
     # 1. Read-only Guard
-    if plan_date != date.today():
+    if plan_date != local_today:
         return api_error("READ_ONLY_MODE", "Cannot generate proposals for past/future dates", 403)
 
     comps = get_agent_components()
@@ -4734,49 +4750,60 @@ def generate_proposals():
             "ops": overdue_ops
         })
 
-    # 4. Dedupe & Persist
-    # Fetch existing pending proposals to check against
-    existing = suggestions_repository.list_suggestions(
-        user_id=user_id,
-        status="pending",
-        kind="plan_proposal",
-        limit=50
-    )
-    
-    def _compute_hash(p_payload):
-        # Stable hash of relevant fields
-        canonical = {
-            "plan_date": p_payload.get("plan_date"),
-            "ops": p_payload.get("ops", [])
-        }
-        s = json.dumps(canonical, sort_keys=True)
-        return hashlib.sha256(s.encode("utf-8")).hexdigest()
-
-    existing_hashes = set()
-    for e in existing:
-        existing_hashes.add(_compute_hash(e.get("payload") or {}))
-
+    # 4. Dedupe & Persist (Transactional)
     created = []
-    for p in new_proposals:
-        p_hash = _compute_hash(p)
-        if p_hash in existing_hashes:
-            continue
-            
-        res = suggestions_repository.create_suggestion(
-            user_id=user_id,
-            kind="plan_proposal",
-            payload=p,
-            provenance={"generated_by": "rule_engine"},
-            status="pending"
-        )
-        created.append({
-            "proposal_id": res["id"],
-            "created_at": res["created_at"],
-            "title": p["title"],
-            "summary": p["summary"],
-            "ops": p["ops"],
-            "plan_date": p["plan_date"]
-        })
+    with get_connection() as conn:
+        try:
+            with conn.cursor() as cursor:
+                # Fetch existing pending proposals to check against (FOR UPDATE to prevent race)
+                # Note: We lock the user's pending suggestions to ensure we don't insert duplicates
+                cursor.execute(
+                    "SELECT payload FROM suggestions WHERE user_id = %s AND status = 'pending' AND kind = 'plan_proposal' FOR UPDATE",
+                    (user_id,)
+                )
+                existing_rows = cursor.fetchall()
+                
+                def _compute_hash(p_payload):
+                    # Stable hash of relevant fields
+                    canonical = {
+                        "plan_date": p_payload.get("plan_date"),
+                        "ops": p_payload.get("ops", [])
+                    }
+                    s = json.dumps(canonical, sort_keys=True)
+                    return hashlib.sha256(s.encode("utf-8")).hexdigest()
+
+                existing_hashes = set()
+                for row in existing_rows:
+                    existing_hashes.add(_compute_hash(row[0] or {}))
+
+                for p in new_proposals:
+                    p_hash = _compute_hash(p)
+                    if p_hash in existing_hashes:
+                        continue
+                        
+                    # Insert new proposal
+                    cursor.execute(
+                        """
+                        INSERT INTO suggestions (user_id, kind, status, payload, provenance, created_at)
+                        VALUES (%s, %s, %s, %s, %s, NOW())
+                        RETURNING id, created_at
+                        """,
+                        (user_id, "plan_proposal", "pending", json.dumps(p), json.dumps({"generated_by": "rule_engine"}))
+                    )
+                    new_row = cursor.fetchone()
+                    created.append({
+                        "proposal_id": new_row[0],
+                        "created_at": new_row[1],
+                        "title": p["title"],
+                        "summary": p["summary"],
+                        "ops": p["ops"],
+                        "plan_date": p["plan_date"]
+                    })
+                conn.commit()
+        except Exception as e:
+            conn.rollback()
+            logging.getLogger("API").error(f"Failed to generate proposals: {e}", exc_info=True)
+            return api_error("GENERATE_FAILED", str(e), 500)
         
     return jsonify({"proposals": created})
 
@@ -4794,10 +4821,12 @@ def apply_proposal():
         
     comps = get_agent_components()
     othello_engine = comps["othello_engine"]
+    local_today = _get_local_today(user_id)
 
-    # Transactional Apply
-    # Note: Plan updates happen in separate transactions (via day_planner), 
-    # so we use this transaction to lock the suggestion and ensure idempotency.
+    # Phase 1: Lock & Validate & Mark Applying
+    ops_to_apply = []
+    plan_date_str = None
+    
     with get_connection() as conn:
         try:
             with conn.cursor() as cursor:
@@ -4811,15 +4840,28 @@ def apply_proposal():
                     return api_error("NOT_FOUND", "Proposal not found", 404)
                 
                 s_id, status, payload = row
+                if status == "applying":
+                    # Retry-safe: if it's applying, we can't re-apply yet.
+                    # In a more complex system we might check timeout, but here we just block.
+                    return api_error("CONFLICT", "Proposal is currently being applied", 409)
+                
                 if status != "pending":
-                    return jsonify({"ok": True, "status": status, "message": "Already decided"})
+                    return jsonify({"ok": True, "status": status, "message": "Already decided", "proposal_id": proposal_id})
                 
                 # 2. Read-only Guard
                 plan_date_str = payload.get("plan_date")
-                if not plan_date_str or plan_date_str != date.today().isoformat():
+                if not plan_date_str:
+                     return api_error("VALIDATION_ERROR", "Proposal missing plan_date", 400)
+                
+                try:
+                    plan_date = date.fromisoformat(plan_date_str)
+                except ValueError:
+                    return api_error("VALIDATION_ERROR", "Invalid plan_date format", 400)
+
+                if plan_date != local_today:
                     return api_error("READ_ONLY_MODE", "Cannot apply proposals for past/future dates", 403)
 
-                # 3. Validate Ops (Allowlist)
+                # 3. Validate Ops (Allowlist + Required Fields)
                 ops = payload.get("ops", [])
                 allowed_ops = {"set_status", "reschedule"}
                 allowed_statuses = {"planned", "in_progress", "complete", "skipped", "rescheduled"}
@@ -4835,51 +4877,103 @@ def apply_proposal():
 
                 for op in ops:
                     op_type = op.get("op")
-                    if op_type not in allowed_ops:
-                        return api_error("INVALID_OP", f"Unknown op type: {op_type}", 400)
+                    if not op_type or op_type not in allowed_ops:
+                        return api_error("INVALID_OP", f"Unknown or missing op type: {op_type}", 400)
                     
                     item_id = op.get("item_id")
+                    if not item_id:
+                        return api_error("INVALID_OP", "Missing item_id", 400)
                     if item_id not in plan_item_ids:
                         return api_error("INVALID_OP", f"Item {item_id} not found in today's plan", 400)
                         
                     target_status = op.get("status")
-                    if target_status and target_status not in allowed_statuses:
-                        return api_error("INVALID_OP", f"Invalid status: {target_status}", 400)
-
-                # 4. Apply Ops (External Commits)
-                # If this fails, we rollback the suggestion transaction so it stays pending.
-                for op in ops:
-                    op_type = op.get("op")
-                    item_id = op.get("item_id")
                     if op_type == "set_status":
-                        othello_engine.day_planner.update_plan_item_status(
-                            user_id, 
-                            item_id, 
-                            op["status"], 
-                            plan_date=plan_date_str
-                        )
+                        if not target_status or target_status not in allowed_statuses:
+                            return api_error("INVALID_OP", f"Invalid status: {target_status}", 400)
                     elif op_type == "reschedule":
-                        othello_engine.day_planner.update_plan_item_status(
-                            user_id,
-                            item_id,
-                            op.get("status", "rescheduled"),
-                            plan_date=plan_date_str,
-                            reschedule_to=op.get("reschedule_to")
-                        )
+                        # Reschedule might have status 'rescheduled' or 'planned'
+                        if target_status and target_status not in allowed_statuses:
+                             return api_error("INVALID_OP", f"Invalid status: {target_status}", 400)
+                        # Reschedule usually requires reschedule_to or clearing it (None)
+                        # We allow None to clear it.
 
-                # 5. Mark Accepted
+                ops_to_apply = ops
+                
+                # 4. Mark Applying (Commit Phase 1)
                 cursor.execute(
-                    "UPDATE suggestions SET status = 'accepted', decided_at = NOW() WHERE id = %s",
+                    "UPDATE suggestions SET status = 'applying' WHERE id = %s",
                     (s_id,)
                 )
                 conn.commit()
                 
         except Exception as e:
             conn.rollback()
-            logging.getLogger("API").error(f"Failed to apply proposal {proposal_id}: {e}", exc_info=True)
+            logging.getLogger("API").error(f"Failed to validate/lock proposal {proposal_id}: {e}", exc_info=True)
+            if isinstance(e, HTTPException): raise e
             return api_error("APPLY_FAILED", str(e), 500)
+
+    # Phase 2: Execute Ops (External Commits)
+    # If this fails, we must revert status in Phase 3
+    apply_error = None
+    try:
+        for op in ops_to_apply:
+            op_type = op.get("op")
+            item_id = op.get("item_id")
+            if op_type == "set_status":
+                othello_engine.day_planner.update_plan_item_status(
+                    user_id, 
+                    item_id, 
+                    op["status"], 
+                    plan_date=plan_date_str
+                )
+            elif op_type == "reschedule":
+                othello_engine.day_planner.update_plan_item_status(
+                    user_id,
+                    item_id,
+                    op.get("status", "rescheduled"),
+                    plan_date=plan_date_str,
+                    reschedule_to=op.get("reschedule_to")
+                )
+    except Exception as e:
+        apply_error = e
+        logging.getLogger("API").error(f"Failed to execute ops for proposal {proposal_id}: {e}", exc_info=True)
+
+    # Phase 3: Finalize Status
+    with get_connection() as conn:
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT id, status FROM suggestions WHERE id = %s AND user_id = %s FOR UPDATE",
+                    (proposal_id, user_id)
+                )
+                row = cursor.fetchone()
+                if row:
+                    s_id, status = row
+                    if status == "applying":
+                        if apply_error:
+                            # Revert to pending (or rejected? pending allows retry)
+                            # Let's revert to pending so user can try again or we can debug
+                            cursor.execute(
+                                "UPDATE suggestions SET status = 'pending' WHERE id = %s",
+                                (s_id,)
+                            )
+                        else:
+                            cursor.execute(
+                                "UPDATE suggestions SET status = 'accepted', decided_at = NOW() WHERE id = %s",
+                                (s_id,)
+                            )
+                        conn.commit()
+        except Exception as e:
+            conn.rollback()
+            logging.getLogger("API").error(f"Failed to finalize proposal {proposal_id}: {e}", exc_info=True)
+            # If we succeeded in ops but failed to mark accepted, it's a weird state.
+            # But 'applying' status will block further attempts until cleared/timeout.
+            return api_error("APPLY_FINALIZE_FAILED", str(e), 500)
+
+    if apply_error:
+        return api_error("APPLY_EXECUTION_FAILED", str(apply_error), 500)
     
-    return jsonify({"ok": True})
+    return jsonify({"ok": True, "proposal_id": proposal_id, "status": "accepted", "plan_date": plan_date_str})
 
 
 @app.route("/api/proposals/reject", methods=["POST"])
@@ -4893,6 +4987,8 @@ def reject_proposal():
     if not proposal_id:
         return api_error("VALIDATION_ERROR", "proposal_id required", 400)
         
+    local_today = _get_local_today(user_id)
+    
     with get_connection() as conn:
         try:
             with conn.cursor() as cursor:
@@ -4905,12 +5001,25 @@ def reject_proposal():
                     return api_error("NOT_FOUND", "Proposal not found", 404)
                 
                 s_id, status, payload = row
+                if status == "applying":
+                    return api_error("CONFLICT", "Proposal is currently being applied", 409)
+                    
                 if status != "pending":
-                    return jsonify({"ok": True, "status": status, "message": "Already decided"})
+                    return jsonify({"ok": True, "status": status, "message": "Already decided", "proposal_id": proposal_id})
                 
                 # Read-only Guard
                 plan_date_str = payload.get("plan_date")
-                if not plan_date_str or plan_date_str != date.today().isoformat():
+                if not plan_date_str:
+                     # If missing, we can't validate date, but maybe safe to reject? 
+                     # Let's be strict.
+                     return api_error("VALIDATION_ERROR", "Proposal missing plan_date", 400)
+                
+                try:
+                    plan_date = date.fromisoformat(plan_date_str)
+                except ValueError:
+                    return api_error("VALIDATION_ERROR", "Invalid plan_date format", 400)
+
+                if plan_date != local_today:
                     return api_error("READ_ONLY_MODE", "Cannot reject proposals for past/future dates", 403)
 
                 cursor.execute(
@@ -4921,9 +5030,10 @@ def reject_proposal():
         except Exception as e:
             conn.rollback()
             logging.getLogger("API").error(f"Failed to reject proposal {proposal_id}: {e}", exc_info=True)
+            if isinstance(e, HTTPException): raise e
             return api_error("REJECT_FAILED", str(e), 500)
 
-    return jsonify({"ok": True})
+    return jsonify({"ok": True, "proposal_id": proposal_id, "status": "rejected"})
 
 
 # ---------------------------------------------------------------------------

@@ -4812,6 +4812,13 @@
                 body: JSON.stringify({ proposal_id: id })
             });
             const data = await res.json();
+            
+            if (res.status === 409) {
+                alert("Suggestion is currently being applied. Please wait.");
+                await loadSuggestions();
+                return;
+            }
+            
             if (res.ok) {
                 if (data.message === "Already decided") {
                     console.log("Suggestion already decided, refreshing...");
@@ -4835,10 +4842,18 @@
                 body: JSON.stringify({ proposal_id: id })
             });
             const data = await res.json();
+            
+            if (res.status === 409) {
+                alert("Suggestion is currently being applied. Cannot reject now.");
+                await loadSuggestions();
+                return;
+            }
+
             if (res.ok) {
                 await loadSuggestions();
             } else {
                 console.error("Failed to reject suggestion:", data);
+                alert("Failed to reject suggestion: " + (data.message || "Unknown error"));
             }
         } catch (e) {
             console.error(e);
