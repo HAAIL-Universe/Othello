@@ -3,7 +3,7 @@ import logging
 import os
 import re
 from dataclasses import dataclass, field
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -531,6 +531,7 @@ class DayPlanner:
                     "metadata": metadata,
                     "reschedule_to": step.get("reschedule_to"),
                     "reason": step.get("reason"),
+                    "order_index": step.get("order_index", 0),
                 })
 
         # Goal tasks and optional/backlog entries
@@ -578,6 +579,7 @@ class DayPlanner:
                 step["status"] = row.get("status", step.get("status", "planned"))
                 step["type"] = "routine_step"
                 step["section_hint"] = row.get("section") or step.get("section_hint")
+                step["order_index"] = row.get("order_index") or metadata.get("order_index") or 0
                 step["energy_cost"] = row.get("energy") or metadata.get("energy_cost")
                 if parent_id:
                     steps_by_parent.setdefault(parent_id, []).append(step)
@@ -602,7 +604,7 @@ class DayPlanner:
                 else:
                     goal_tasks.append(entry)
 
-        for routine_id, routine in routines.items():
+        for routine_id, routine in routines.items():(s.get("order_index", 0), s.get("id", "")
             routine["steps"] = sorted(steps_by_parent.get(routine_id, []), key=lambda s: s.get("id", ""))
 
         generation_context = plan_row.get("generation_context") or {}
@@ -635,7 +637,7 @@ class DayPlanner:
         behavior_snapshot: Dict[str, Any],
     ) -> Dict[str, Any]:
         mood_payload = self._normalise_mood(mood)
-        routines = self._select_routines(target_date, mood_payload, behavior_snapshot)
+        routines = self._select_routines(user_id, target_date, mood_payload, behavior_snapshot)
         capacity = self._derive_capacity(mood_payload, behavior_snapshot)
         goal_tasks, optional = self._select_goal_tasks(user_id, capacity)
 
@@ -829,7 +831,7 @@ class DayPlanner:
         for idx, bundle in enumerate(active):
             variant = bundle["variant"]
             steps = []
-            for step in variant.get("steps", []):
+            for step_idx, step in enumerate(variant.get("steps", [])):
                 # Ensure step has item_id equal to id for UI actions
                 sid = f"routine-{bundle['routine_id']}-variant-{variant.get('id')}-step-{step.get('id')}"
                 steps.append({
@@ -841,6 +843,8 @@ class DayPlanner:
                     "energy_cost": step.get("energy_cost", "low"),
                     "friction": step.get("friction", "low"),
                     "approx_duration_min": step.get("approx_duration_min"),
+                    "order_index": step_idx,
+                    "metadata": {"template_step_id": step.get("id")},
                 })
             
             rid = f"routine-{bundle['routine_id']}-variant-{variant.get('id')}"
@@ -963,7 +967,15 @@ class DayPlanner:
             raise ValueError(f"Invalid status '{status}'. Allowed: {sorted(allowed_statuses)}")
         target_date = date.fromisoformat(plan_date) if plan_date else date.today()
         if status == "rescheduled" and not reschedule_to:
-            raise ValueError("reschedule_to is required when status is rescheduled")
+            reschedule_to = (target_date + timedelta(days=1)).isoformat()
+
+        if status != "rescheduled":
+            reschedule_to = None
+        if status != "skipped":
+            reason = None
+        if status in ("complete", "in_progress"):
+            reason = None
+            reschedule_to = None
 
         uid = self._normalize_user_id(user_id)
         plan_row = plan_repository.get_plan_by_date(uid, target_date)
@@ -1065,6 +1077,6 @@ __all__ = [
     "RoutineStep",
 ]
 
-_PHASE1_DB_ONLY = (os.getenv("OTHELLO_PHASE1_DB_ONLY") or "").strip().lower() in ("1", "true", "yes")
+_PHASE1_DB_ONLY = (os.getenv("OTHELLO_PHASE1_DB_ONLY") or "").strip().lower() in ("1", "true", "yes", "on")
 _ROUTINES_DB_ONLY_WARNED = False
 _PLAN_CACHE_DB_ONLY_WARNED = False

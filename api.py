@@ -4629,10 +4629,15 @@ def create_routine():
         return api_error("INVALID_INPUT", "Title is required", 400)
     
     try:
+        schedule_rule = data.get("schedule_rule", {})
+        if "days" in schedule_rule and isinstance(schedule_rule["days"], list):
+            valid = {"mon", "tue", "wed", "thu", "fri", "sat", "sun"}
+            schedule_rule["days"] = [d.strip().lower()[:3] for d in schedule_rule["days"] if str(d).strip().lower()[:3] in valid]
+
         routine = routines_repository.create_routine(
             user_id, 
             title, 
-            data.get("schedule_rule", {}), 
+            schedule_rule, 
             data.get("enabled", True)
         )
         return jsonify({"ok": True, "routine": routine})
@@ -4646,7 +4651,15 @@ def update_routine(routine_id):
     user_id, error = _get_user_id_or_error()
     if error: return error
     try:
-        routine = routines_repository.update_routine(user_id, routine_id, request.json or {})
+        patch = request.json or {}
+        if "schedule_rule" in patch:
+            schedule_rule = patch["schedule_rule"]
+            if "days" in schedule_rule and isinstance(schedule_rule["days"], list):
+                valid = {"mon", "tue", "wed", "thu", "fri", "sat", "sun"}
+                schedule_rule["days"] = [d.strip().lower()[:3] for d in schedule_rule["days"] if str(d).strip().lower()[:3] in valid]
+            patch["schedule_rule"] = schedule_rule
+
+        routine = routines_repository.update_routine(user_id, routine_id, patch)
         if not routine:
             return api_error("NOT_FOUND", "Routine not found", 404)
         return jsonify({"ok": True, "routine": routine})

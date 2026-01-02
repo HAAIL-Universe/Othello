@@ -5800,6 +5800,14 @@
     othelloState.routines = [];
     othelloState.activeRoutineId = null;
 
+    function debounce(func, wait) {
+      let timeout;
+      return function(...args) {
+        clearTimeout(timeout);
+        timeout = setTimeout(() => func.apply(this, args), wait);
+      };
+    }
+
     async function fetchRoutines() {
       try {
         const resp = await fetch(ROUTINES_API, { credentials: "include" });
@@ -5872,9 +5880,11 @@
     }
 
     function renderRoutineEditor(routine) {
+      const debouncedUpdateRoutine = debounce((patch) => updateRoutine(routine.id, patch), 500);
+
       const titleInput = document.getElementById("routine-title-input");
       titleInput.value = routine.title;
-      titleInput.onchange = (e) => updateRoutine(routine.id, { title: e.target.value });
+      titleInput.oninput = (e) => debouncedUpdateRoutine({ title: e.target.value });
       
       const enabledToggle = document.getElementById("routine-enabled-toggle");
       enabledToggle.checked = routine.enabled;
@@ -5918,7 +5928,8 @@
       
       // Steps
       const stepsContainer = document.getElementById("routine-steps");
-      stepsContainer.innerHTML = "";
+      stepsCondebouncedUpdateStep = debounce((patch) => updateStep(step.id, patch), 500);
+        const tainer.innerHTML = "";
       (routine.steps || []).forEach((step, idx) => {
         const row = document.createElement("div");
         row.style.display = "flex";
@@ -5965,8 +5976,7 @@
         sTitle.className = "login-input";
         sTitle.style.flex = "1";
         sTitle.style.padding = "0.3rem 0.5rem";
-        sTitle.style.fontSize = "0.9rem";
-        sTitle.onchange = (e) => updateStep(step.id, { title: e.target.value });
+        sTitle.stinput = (e) => debouncedUpdateStep({ title: e.target.value });
         row.appendChild(sTitle);
         
         // Duration
@@ -5978,6 +5988,7 @@
         sDur.style.width = "60px";
         sDur.style.padding = "0.3rem 0.5rem";
         sDur.style.fontSize = "0.9rem";
+        sDur.oninput = (e) => debouncedUpdateStep(
         sDur.onchange = (e) => updateStep(step.id, { est_minutes: parseInt(e.target.value) || 0 });
         row.appendChild(sDur);
         
