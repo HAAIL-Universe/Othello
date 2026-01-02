@@ -194,6 +194,22 @@ def update_plan_item_status(
     return execute_and_fetch_one(query, (status, skip_reason, reschedule_to, metadata, plan_id, item_id))
 
 
+def update_plan_item_metadata(
+    plan_id: int,
+    item_id: str,
+    metadata: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    query = """
+        UPDATE plan_items
+        SET metadata = metadata || %s,
+            updated_at = NOW()
+        WHERE plan_id = %s AND item_id = %s
+        RETURNING id, plan_id, item_id, type, section, status, reschedule_to, skip_reason,
+                  priority, effort, energy, metadata, created_at, updated_at;
+    """
+    return execute_and_fetch_one(query, (json.dumps(metadata), plan_id, item_id))
+
+
 def get_plan_item(plan_id: int, item_id: str) -> Optional[Dict[str, Any]]:
     query = """
         SELECT id, plan_id, item_id, type, section, status, reschedule_to, skip_reason,

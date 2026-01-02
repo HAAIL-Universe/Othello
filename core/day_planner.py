@@ -954,6 +954,38 @@ class DayPlanner:
             "friction": "medium" if effort != "light" else "low",
         }
 
+    def snooze_plan_item(
+        self,
+        user_id: str,
+        item_id: str,
+        snooze_minutes: int,
+        plan_date: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Snoozes a plan item by setting 'snoozed_until' in metadata.
+        """
+        target_date = date.fromisoformat(plan_date) if plan_date else date.today()
+        uid = self._normalize_user_id(user_id)
+        
+        plan_row = plan_repository.get_plan_by_date(uid, target_date)
+        if not plan_row:
+            raise ValueError(f"No plan stored for {target_date}")
+
+        existing_item = plan_repository.get_plan_item(plan_row["id"], item_id)
+        if not existing_item:
+            raise ValueError(f"Item {item_id} not found in plan for {target_date}")
+
+        snooze_until = datetime.utcnow() + timedelta(minutes=snooze_minutes)
+        
+        # Update metadata
+        plan_repository.update_plan_item_metadata(
+            plan_row["id"], 
+            item_id, 
+            {"snoozed_until": snooze_until.isoformat()}
+        )
+        
+        return self.get_day_plan(user_id, target_date.isoformat())
+
     # ------------------------------------------------------------------
     def update_plan_item_status(
         self,
@@ -993,12 +1025,22 @@ class DayPlanner:
         if current_status == "complete" and status != "complete":
             raise ValueError(f"Cannot transition from complete to {status}")
 
+        # Clear snooze if status changes
+        metadata_update = {}
+        if existing_item.get("metadata") and "snoozed_until" in existing_item["metadata"]:
+             # We can't easily delete a key with jsonb_set or || operator in simple update
+             # But we can set it to null or handle it in UI. 
+             # For now, let's just overwrite it with null which is explicit enough
+             metadata_update["snoozed_until"] = None
+
         updated_row = plan_repository.update_plan_item_status(
             plan_row["id"],
             item_id,
             status,
             skip_reason=reason,
             reschedule_to=reschedule_to,
+            metadata=metadata_update if metadata_update else None
+        )
         )
         if not updated_row:
             raise ValueError(f"Failed to update item {item_id} for {target_date}")

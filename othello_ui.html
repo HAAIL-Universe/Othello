@@ -3248,33 +3248,55 @@
       if (!iid) return container;
 
       const status = item.status || "planned";
+      const metadata = item.metadata || {};
+      const snoozedUntil = metadata.snoozed_until;
+      const isSnoozed = snoozedUntil && new Date(snoozedUntil) > new Date();
+
       const actions = [];
       
-      if (status === "planned") {
-        actions.push({ label: "Start", status: "in_progress" });
+      if (isSnoozed) {
+        // If snoozed, allow waking up (clears snooze) or completing
+        actions.push({ label: "Wake", status: status }); // Re-sending status clears snooze
         actions.push({ label: "Done", status: "complete" });
-        actions.push({ label: "Skip", status: "skipped" });
-        actions.push({ label: "Move to Tomorrow", status: "rescheduled" });
-      } else if (status === "in_progress") {
-        actions.push({ label: "Done", status: "complete" });
-        actions.push({ label: "Skip", status: "skipped" });
-        actions.push({ label: "Move to Tomorrow", status: "rescheduled" });
+      } else {
+        if (status === "planned") {
+          actions.push({ label: "Start", status: "in_progress" });
+          actions.push({ label: "Done", status: "complete" });
+          actions.push({ label: "Snooze 1h", snooze: 60 });
+          actions.push({ label: "Skip", status: "skipped" });
+          actions.push({ label: "Move to Tomorrow", status: "rescheduled" });
+        } else if (status === "in_progress") {
+          actions.push({ label: "Done", status: "complete" });
+          actions.push({ label: "Snooze 30m", snooze: 30 });
+          actions.push({ label: "Skip", status: "skipped" });
+          actions.push({ label: "Move to Tomorrow", status: "rescheduled" });
+        }
       }
 
       actions.forEach(action => {
         const btn = document.createElement("button");
         btn.className = "planner-action-btn";
         btn.textContent = action.label;
+        
+        // Style snooze buttons differently?
+        if (action.snooze) {
+            btn.style.color = "var(--text-soft)";
+        }
+
         btn.addEventListener("click", async () => {
           btn.disabled = true;
           try {
-            const payload = {
-              item_id: iid,
-              status: action.status,
-            };
-            if (action.status === "rescheduled") {
-              payload.reschedule_to = getTomorrowDate();
+            const payload = { item_id: iid };
+            
+            if (action.snooze) {
+                payload.snooze_minutes = action.snooze;
+            } else {
+                payload.status = action.status;
+                if (action.status === "rescheduled") {
+                  payload.reschedule_to = getTomorrowDate();
+                }
             }
+
             const resp = await fetch(PLAN_UPDATE_API, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
@@ -5880,7 +5902,7 @@
     }
 
     function renderRoutineEditor(routine) {
-      const debouncedUpdateRoutine = debounce((patch) => updateRoutine(routine.id, patch), 500);
+      const debouncedUpdateRoutine = debounce((patch) => updateRoutine(routine.id, patch, false), 500);
 
       const titleInput = document.getElementById("routine-title-input");
       titleInput.value = routine.title;
@@ -5930,7 +5952,7 @@
       const stepsContainer = document.getElementById("routine-steps");
       stepsContainer.innerHTML = "";
       (routine.steps || []).forEach((step, idx) => {
-        const debouncedUpdateStep = debounce((patch) => updateStep(step.id, patch), 500);
+        const debouncedUpdateStep = debounce((patch) => updateStep(step.id, patch, false), 500);
         const row = document.createElement("div");
         row.style.display = "flex";
         row.style.gap = "0.5rem";
@@ -6025,7 +6047,7 @@
       document.getElementById("routine-add-step-btn").onclick = () => addStep(routine.id);
     }
 
-    async function updateRoutine(id, patch) {
+    async function updateRoutine(id, patch, refresh = true) {
       try {
         const resp = await fetch(`${ROUTINES_API}/${id}`, {
           method: "PATCH",
@@ -6034,8 +6056,19 @@
           credentials: "include"
         });
         if (resp.ok) {
-          await fetchRoutines();
-          selectRoutine(id); // refresh view
+          if (refresh) {
+            await fetchRoutines();
+            selectRoutine(id); // refresh view
+          } else {
+             // Optimistic update
+             const r = othelloState.routines.find(r => r.id === id);
+             if (r) {
+                 Object.assign(r, patch);
+                 if (patch.schedule_rule) {
+                     r.schedule_rule = Object.assign(r.schedule_rule || {}, patch.schedule_rule);
+                 }
+             }
+          }
         }
       } catch (err) { console.error(err); }
     }
@@ -6085,7 +6118,7 @@
       } catch (err) { console.error(err); }
     }
 
-    async function updateStep(stepId, patch) {
+    async function updateStep(stepId, patch, refresh = true) {
       try {
         const resp = await fetch(`/api/steps/${stepId}`, {
           method: "PATCH",
@@ -6094,7 +6127,19 @@
           credentials: "include"
         });
         if (resp.ok) {
-          await fetchRoutines();
+          if (refresh) {
+            await fetchRoutines();
+            if (othelloState.activeRoutineId) {
+                selectRoutine(othelloState.activeRoutineId);
+            }
+          } else {
+             // Optimistic update
+             const r = othelloState.routines.find(r => r.id === othelloState.activeRoutineId);
+             if (r && r.steps) {
+                 const s = r.steps.find(s => s.id === stepId);
+                 if (s) Object.assign(s, patch);
+             }
+          }
         }
       } catch (err) { console.error(err); }
     }

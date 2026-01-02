@@ -4630,7 +4630,11 @@ def create_routine():
     
     try:
         schedule_rule = data.get("schedule_rule", {})
-        if "days" in schedule_rule and isinstance(schedule_rule["days"], list):
+        # Default to all days if days is missing/null (but respect empty list)
+        if "days" not in schedule_rule or schedule_rule["days"] is None:
+            schedule_rule["days"] = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+        
+        if isinstance(schedule_rule.get("days"), list):
             valid = {"mon", "tue", "wed", "thu", "fri", "sat", "sun"}
             schedule_rule["days"] = [d.strip().lower()[:3] for d in schedule_rule["days"] if str(d).strip().lower()[:3] in valid]
 
@@ -4654,7 +4658,11 @@ def update_routine(routine_id):
         patch = request.json or {}
         if "schedule_rule" in patch:
             schedule_rule = patch["schedule_rule"]
-            if "days" in schedule_rule and isinstance(schedule_rule["days"], list):
+            # If days is explicitly None or missing in a replacement object, default to all
+            if "days" not in schedule_rule or schedule_rule["days"] is None:
+                 schedule_rule["days"] = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+
+            if isinstance(schedule_rule.get("days"), list):
                 valid = {"mon", "tue", "wed", "thu", "fri", "sat", "sun"}
                 schedule_rule["days"] = [d.strip().lower()[:3] for d in schedule_rule["days"] if str(d).strip().lower()[:3] in valid]
             patch["schedule_rule"] = schedule_rule
@@ -4746,21 +4754,36 @@ def update_plan_item():
     othello_engine = comps["othello_engine"]
     user_id, error = _get_user_id_or_error()
     if error:
-        return error
-    data = request.get_json() or {}
-    item_id = data.get("item_id")
-    status = data.get("status")
-    plan_date = data.get("plan_date")
-    reason = data.get("reason")
-    reschedule_to = data.get("reschedule_to")
+    snooze_minutes = data.get("snooze_minutes")
 
-    if not item_id or not status:
-        return api_error("VALIDATION_ERROR", "item_id and status are required", 400)
+    if not item_id:
+        return api_error("VALIDATION_ERROR", "item_id is required", 400)
+        
+    # Handle snooze request (metadata update only)
+    if snooze_minutes is not None:
+        try:
+            plan = othello_engine.day_planner.snooze_plan_item(
+                user_id,
+                item_id=item_id,
+                snooze_minutes=int(snooze_minutes),
+                plan_date=data.get("plan_date")
+            )
+            return jsonify({"plan": plan})
+        except Exception as exc:
+            logger.error(f"API: Failed to snooze item {item_id}: {exc}", exc_info=True)
+            return api_error("PLAN_SNOOZE_FAILED", str(exc), 500)
+
+    if not status:
+        return api_error("VALIDATION_ERROR", "status is required", 400)
 
     try:
         plan = othello_engine.day_planner.update_plan_item_status(
             user_id,
             item_id=item_id,
+            status=status,
+            plan_date=data.get("plan_date"),
+            reason=data.get("reason"),
+            reschedule_to=data.get("reschedule_to")
             status=status,
             plan_date=plan_date,
             reason=reason,
