@@ -3071,8 +3071,8 @@
       return formatDateYYYYMMDD(d);
     }
 
-    async function fetchTodayBrief() {
-      const resp = await fetch("/api/today-brief", { credentials: "include" });
+    async function fetchTodayBrief(signal) {
+      const resp = await fetch("/api/today-brief", { credentials: "include", signal });
       const status = resp.status;
       const text = await resp.text();
       if (status === 401 || status === 403) {
@@ -3148,14 +3148,18 @@
       }
       return payload;
     }
-    async function fetchV1TodayPlan() {
-      const payload = await v1Request("/v1/read/today", { cache: "no-store", credentials: "include" }, "Today plan");
+    async function fetchV1TodayPlan(signal) {
+      const payload = await v1Request(
+        "/v1/read/today",
+        { cache: "no-store", credentials: "include", signal },
+        "Today plan"
+      );
       return payload?.data?.plan || {};
     }
-    async function fetchPlanItemSuggestions() {
+    async function fetchPlanItemSuggestions(signal) {
       const payload = await v1Request(
         "/v1/suggestions?status=pending&kind=plan_item&limit=20",
-        { credentials: "include" },
+        { credentials: "include", signal },
         "Plan suggestions"
       );
       return Array.isArray(payload?.data?.suggestions) ? payload.data.suggestions : [];
@@ -3291,13 +3295,23 @@
       }
       return { payload: { include_rollover: true }, note: "No recent chat message found; drafting from rollover only." };
     }
-    async function loadTodayPlanPanel() {
+    async function loadTodayPlanPanel(signal) {
+      if (othelloState.currentView !== "today-planner") return;
+      if (document.hidden) return;
       if (!todayPlanItems || !todayPlanSuggestions) return;
+      logPlannerDebug("[Today Planner] loadTodayPlanPanel");
       clearTodayPlanError();
+      let panelSignal = signal;
+      if (!panelSignal) {
+        abortPlannerRequests("panel-reload");
+        plannerAbort = new AbortController();
+        panelSignal = plannerAbort.signal;
+      }
       try {
-        const plan = await fetchV1TodayPlan();
+        const plan = await fetchV1TodayPlan(panelSignal);
         renderTodayPlanItems(plan);
       } catch (e) {
+        if (isAbortError(e)) return;
         if (e && (e.status === 401 || e.status === 403)) {
           await handleUnauthorized('today-plan-read');
           return;
@@ -3305,9 +3319,10 @@
         setTodayPlanError(e && e.message ? e.message : "Failed to load today plan.", e && e.requestId ? e.requestId : null);
       }
       try {
-        const suggestions = await fetchPlanItemSuggestions();
+        const suggestions = await fetchPlanItemSuggestions(panelSignal);
         renderPlanSuggestions(suggestions);
       } catch (e) {
+        if (isAbortError(e)) return;
         if (e && (e.status === 401 || e.status === 403)) {
           await handleUnauthorized('today-plan-suggestions');
           return;
@@ -4564,6 +4579,66 @@
     const weekViewCache = {}; 
     let isWeekViewActive = false;
     let dayViewDateYmd = null; // null means "today/live"
+    let plannerPollId = null;
+    let plannerAbort = null;
+    let weekAbort = null;
+    let routinesAbort = null;
+    let activeWeekDrilldownYmd = null;
+    let plannerListenersBound = false;
+    const PLANNER_POLL_MS = 60000;
+
+    function isAbortError(err) {
+      return err && (err.name === "AbortError" || err.code === 20);
+    }
+
+    function logPlannerDebug(message, payload) {
+      if (!BOOT_DEBUG) return;
+      if (payload) {
+        console.log(message, payload);
+      } else {
+        console.log(message);
+      }
+    }
+
+    function abortPlannerRequests(reason) {
+      if (!plannerAbort) return;
+      plannerAbort.abort();
+      plannerAbort = null;
+      logPlannerDebug("[Today Planner] aborted in-flight request", { reason });
+    }
+
+    function abortWeekRequests(reason) {
+      if (!weekAbort) return;
+      weekAbort.abort();
+      weekAbort = null;
+      logPlannerDebug("[Week View] aborted in-flight request", { reason });
+    }
+
+    function abortRoutineRequests(reason) {
+      if (!routinesAbort) return;
+      routinesAbort.abort();
+      routinesAbort = null;
+      logPlannerDebug("[Routine Planner] aborted in-flight request", { reason });
+    }
+
+    function stopPlannerPolling(reason) {
+      if (plannerPollId) {
+        clearInterval(plannerPollId);
+        plannerPollId = null;
+        logPlannerDebug("[Today Planner] polling stopped", { reason });
+      }
+    }
+
+    function startPlannerPolling() {
+      stopPlannerPolling("restart");
+      if (!PLANNER_POLL_MS || PLANNER_POLL_MS < 1000) return;
+      plannerPollId = setInterval(() => {
+        if (document.hidden) return;
+        if (othelloState.currentView !== "today-planner") return;
+        loadTodayPlanner();
+      }, PLANNER_POLL_MS);
+      logPlannerDebug("[Today Planner] polling started", { intervalMs: PLANNER_POLL_MS });
+    }
 
     function getWeekStartYmd(refDate = new Date()) {
       // Monday-start, local time
@@ -4641,12 +4716,18 @@
         return { completed, inProgress, overdue, snoozed, tomorrow };
     }
 
-    async function fetchPlanForDate(ymd) {
+    async function fetchPlanForDate(ymd, options = {}) {
+      const { signal, source } = options;
+      if (othelloState.currentView !== "today-planner") return null;
+      if (!isWeekViewActive && source !== "drilldown") return null;
       if (weekViewCache[ymd]) return weekViewCache[ymd];
       
       try {
         // Use peek=1 to prevent generation/mutation of plans during week view browsing
-        const resp = await fetch(`/api/today-plan?plan_date=${ymd}&peek=1`, { cache: "no-store", credentials: "include" });
+        const resp = await fetch(
+          `/api/today-plan?plan_date=${ymd}&peek=1`,
+          { cache: "no-store", credentials: "include", signal }
+        );
         if (!resp.ok) throw new Error("Failed to fetch");
         const data = await resp.json();
         const plan = data.plan || {};
@@ -4655,19 +4736,34 @@
         weekViewCache[ymd] = { plan, counts, fetchedAt: Date.now() };
         return weekViewCache[ymd];
       } catch (e) {
+        if (isAbortError(e)) {
+          logPlannerDebug("[Week View] fetch aborted", { ymd });
+          return null;
+        }
         console.error(`Failed to fetch plan for ${ymd}`, e);
         return null;
       }
     }
 
     async function loadWeekView() {
+        if (othelloState.currentView !== "today-planner") return;
+        if (!isWeekViewActive) return;
+        if (document.hidden) return;
+        
         const container = document.getElementById("week-view-content");
-        if (!container) return;
+        const weekView = document.getElementById("planner-week-view");
+        if (!container || (weekView && weekView.style.display === "none")) return;
         container.innerHTML = '<div style="padding:1rem; text-align:center; color:var(--text-soft);">Loading week...</div>';
         
-        const days = getWeekDays();
-        const results = await Promise.all(days.map(ymd => fetchPlanForDate(ymd)));
+        abortWeekRequests("week-view-reload");
+        weekAbort = new AbortController();
+        const { signal } = weekAbort;
+        logPlannerDebug("[Week View] loadWeekView invoked", { view: othelloState.currentView });
         
+        const days = getWeekDays();
+        const results = await Promise.all(days.map(ymd => fetchPlanForDate(ymd, { signal })));
+        
+        if (signal.aborted) return;
         container.innerHTML = '';
         
         results.forEach((res, idx) => {
@@ -4738,12 +4834,28 @@
         return items;
     }
 
-    async function openWeekDrilldown(ymd) {
-        const res = await fetchPlanForDate(ymd);
-        if (!res) return;
-        
+    function closeWeekDrilldown() {
         const existing = document.getElementById("planner-week-drilldown");
         if (existing) existing.remove();
+        activeWeekDrilldownYmd = null;
+        logPlannerDebug("[Week View] drilldown closed");
+    }
+
+    async function openWeekDrilldown(ymd) {
+        if (othelloState.currentView !== "today-planner") return;
+        if (activeWeekDrilldownYmd === ymd && document.getElementById("planner-week-drilldown")) return;
+        activeWeekDrilldownYmd = ymd;
+        logPlannerDebug("[Week View] drilldown open", { ymd });
+        
+        abortWeekRequests("week-drilldown");
+        weekAbort = new AbortController();
+        const res = await fetchPlanForDate(ymd, { signal: weekAbort.signal, source: "drilldown" });
+        if (!res) {
+            activeWeekDrilldownYmd = null;
+            return;
+        }
+        
+        closeWeekDrilldown();
         
         const modal = document.createElement("div");
         modal.id = "planner-week-drilldown";
@@ -4754,7 +4866,7 @@
         modal.style.display = "flex";
         modal.style.alignItems = "center";
         modal.style.justifyContent = "center";
-        modal.onclick = (e) => { if (e.target === modal) modal.remove(); };
+        modal.onclick = (e) => { if (e.target === modal) closeWeekDrilldown(); };
         
         const card = document.createElement("div");
         card.className = "planner-card";
@@ -4777,7 +4889,7 @@
                     <div class="planner-section__title" style="font-size:1.1rem;">${dateStr}</div>
                     <div style="font-size:0.85rem; color:var(--text-soft); margin-top:0.2rem;">${summary}</div>
                 </div>
-                <button class="icon-button" style="border:none; background:transparent;" onclick="document.getElementById('planner-week-drilldown').remove()">✕</button>
+                <button class="icon-button" style="border:none; background:transparent;" onclick="closeWeekDrilldown()">✕</button>
             </div>
             <div style="flex:1; overflow-y:auto; padding-right:0.5rem;" id="drilldown-list"></div>
             <div style="margin-top:1rem; padding-top:1rem; border-top:1px solid var(--border); text-align:center;">
@@ -4864,8 +4976,8 @@
 
     function openDayViewForDate(ymd) {
         dayViewDateYmd = ymd;
-        const modal = document.getElementById("planner-week-drilldown");
-        if (modal) modal.remove();
+        closeWeekDrilldown();
+        abortWeekRequests("day-view-open");
         
         isWeekViewActive = false;
         document.getElementById("planner-week-view").style.display = "none";
@@ -4883,6 +4995,7 @@
     }
 
     function toggleWeekView() {
+        if (othelloState.currentView !== "today-planner") return;
         const weekView = document.getElementById("planner-week-view");
         const dayView = document.getElementById("planner-day-view");
         const btn = document.getElementById("week-view-toggle");
@@ -4898,14 +5011,25 @@
             weekView.style.display = "none";
             dayView.style.display = "block";
             btn.textContent = "Week View";
+            closeWeekDrilldown();
+            abortWeekRequests("week-view-close");
         }
     }
     
-    // Initialize toggle
-    document.addEventListener("DOMContentLoaded", () => {
+    function bindPlannerListeners() {
+        if (plannerListenersBound) return;
+        plannerListenersBound = true;
         const btn = document.getElementById("week-view-toggle");
         if (btn) btn.onclick = toggleWeekView;
-    });
+        
+        const toggle = document.getElementById("suggestions-toggle");
+        if (toggle) toggle.onclick = toggleSuggestions;
+        
+        const genBtn = document.getElementById("generate-suggestions-btn");
+        if (genBtn) genBtn.onclick = generateSuggestions;
+    }
+    
+    document.addEventListener("DOMContentLoaded", bindPlannerListeners);
 
     // --- Suggestions Logic ---
     
@@ -5035,21 +5159,23 @@
         }
     }
 
-    // Initialize suggestions
-    document.addEventListener("DOMContentLoaded", () => {
-        const toggle = document.getElementById("suggestions-toggle");
-        if (toggle) toggle.onclick = toggleSuggestions;
-        
-        const genBtn = document.getElementById("generate-suggestions-btn");
-        if (genBtn) genBtn.onclick = generateSuggestions;
-    });
-
     async function loadTodayPlanner() {
+      if (othelloState.currentView !== "today-planner") {
+        logPlannerDebug("[Today Planner] load skipped", { view: othelloState.currentView });
+        return;
+      }
+      if (document.hidden) {
+        logPlannerDebug("[Today Planner] load skipped (hidden)", { view: othelloState.currentView });
+        return;
+      }
       if (BOOT_DEBUG) console.log("[Today Planner] loadTodayPlanner invoked", {
         view: othelloState.currentView,
         ts: new Date().toISOString(),
         dayViewDateYmd
       });
+      abortPlannerRequests("planner-reload");
+      plannerAbort = new AbortController();
+      const { signal } = plannerAbort;
       clearPlannerError();
       plannerHeadline.textContent = "Loading...";
       plannerEnergy.textContent = "";
@@ -5107,7 +5233,8 @@
         planUrl = dayViewDateYmd 
             ? `/api/today-plan?plan_date=${dayViewDateYmd}` 
             : `/api/today-plan?ts=${Date.now()}`;
-        const brief = dayViewDateYmd ? {} : await fetchTodayBrief().catch((err) => {
+        const brief = dayViewDateYmd ? {} : await fetchTodayBrief(signal).catch((err) => {
+          if (isAbortError(err)) throw err;
           briefStatus = err && err.status ? err.status : null;
           briefSnippet = err && err.bodySnippet ? err.bodySnippet : null;
           briefParseError = err && err.parseError ? err.parseError : null;
@@ -5118,7 +5245,7 @@
           });
           return {};
         });
-        const planResponse = await fetch(planUrl, { cache: "no-store", credentials: "include" });
+        const planResponse = await fetch(planUrl, { cache: "no-store", credentials: "include", signal });
         planStatus = planResponse.status;
         const planText = await planResponse.text();
         planSnippet = planText.replace(/\s+/g, " ").trim().slice(0, 300);
@@ -5153,8 +5280,12 @@
         renderPlannerSections(plan, goalTasks);
         const currentItem = renderCurrentFocus(plan);
         renderNextAction(plan, currentItem ? [currentItem.item_id || currentItem.id] : []);
-        await loadTodayPlanPanel();
+        await loadTodayPlanPanel(signal);
       } catch (e) {
+        if (isAbortError(e)) {
+          logPlannerDebug("[Today Planner] load aborted", { view: othelloState.currentView });
+          return;
+        }
         let httpStatus = null;
         if (e && (e.status === 401 || e.status === 403)) {
           await handleUnauthorized('today-planner');
@@ -5403,11 +5534,22 @@
         if (focusRibbon) focusRibbon.classList.remove("visible");
       }
 
+      if (viewName !== "today-planner") {
+        stopPlannerPolling("view-change");
+        abortPlannerRequests("view-change");
+        abortWeekRequests("view-change");
+        closeWeekDrilldown();
+      }
+      if (viewName !== "routine-planner") {
+        abortRoutineRequests("view-change");
+      }
+
       // Load view-specific data
       if (viewName === "goals") {
         renderGoalsList();
       } else if (viewName === "today-planner") {
         loadTodayPlanner();
+        startPlannerPolling();
       } else if (viewName === "insights") {
         loadInsightsInbox();
       } else if (viewName === "routine-planner") {
@@ -5422,6 +5564,19 @@
         });
       });
     }
+
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) {
+        stopPlannerPolling("hidden");
+        abortPlannerRequests("hidden");
+        abortWeekRequests("hidden");
+        abortRoutineRequests("hidden");
+        return;
+      }
+      if (othelloState.currentView === "today-planner") {
+        startPlannerPolling();
+      }
+    });
 
     // ===== MODE SWITCHER =====
     function persistMode(mode) {
@@ -5651,6 +5806,11 @@
     }
 
     function resetAuthBoundary(reason) {
+      stopPlannerPolling("auth-reset");
+      abortPlannerRequests("auth-reset");
+      abortWeekRequests("auth-reset");
+      abortRoutineRequests("auth-reset");
+      closeWeekDrilldown();
       if (connectRetryTimeout) {
         clearTimeout(connectRetryTimeout);
         connectRetryTimeout = null;
@@ -7553,13 +7713,17 @@
     }
 
     async function fetchRoutines() {
+      if (othelloState.currentView !== "routine-planner") return;
+      if (document.hidden) return;
       const listEl = document.getElementById("routine-list");
       // Only show loader if we don't have data yet to avoid flicker on refresh
       if (listEl && othelloState.routines.length === 0) {
          listEl.innerHTML = '<div class="routine-loader">Loading routines...</div>';
       }
       try {
-        const resp = await fetch(ROUTINES_API, { credentials: "include" });
+        abortRoutineRequests("routines-reload");
+        routinesAbort = new AbortController();
+        const resp = await fetch(ROUTINES_API, { credentials: "include", signal: routinesAbort.signal });
         if (!resp.ok) throw new Error("Failed to fetch routines");
         const data = await resp.json();
         if (data.ok) {
@@ -7574,6 +7738,10 @@
           }
         }
       } catch (err) {
+        if (isAbortError(err)) {
+          logPlannerDebug("[Routine Planner] fetch aborted", { reason: "routines-reload" });
+          return;
+        }
         console.error("fetchRoutines error:", err);
         showToast("Failed to load routines", "error");
         if (listEl && othelloState.routines.length === 0) {
@@ -7583,6 +7751,8 @@
     }
 
     async function loadRoutinePlanner() {
+      if (othelloState.currentView !== "routine-planner") return;
+      if (document.hidden) return;
       await fetchRoutines();
       renderRoutineList(othelloState.routines);
       
