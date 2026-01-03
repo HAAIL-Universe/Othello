@@ -3073,14 +3073,30 @@
 
     async function fetchTodayBrief() {
       const resp = await fetch("/api/today-brief", { credentials: "include" });
-      if (resp.status === 401 || resp.status === 403) {
+      const status = resp.status;
+      const text = await resp.text();
+      if (status === 401 || status === 403) {
         const err = new Error("Unauthorized");
-        err.status = resp.status;
+        err.status = status;
         throw err;
       }
-      if (!resp.ok) throw new Error("Failed to load brief");
-      const data = await resp.json();
-      return data.brief || {};
+      if (!resp.ok) {
+        const err = new Error("Failed to load brief");
+        err.status = status;
+        err.bodySnippet = text.slice(0, 300);
+        throw err;
+      }
+      let data = null;
+      try {
+        data = JSON.parse(text);
+      } catch (parseErr) {
+        const err = new Error("Failed to parse brief");
+        err.status = status;
+        err.bodySnippet = text.slice(0, 300);
+        err.parseError = parseErr.message;
+        throw err;
+      }
+      return (data && data.brief) || {};
     }
 
     async function fetchTodayPlan() {
@@ -3206,13 +3222,21 @@
           if (!suggestion || !suggestion.id) return;
           confirmBtn.disabled = true;
           try {
+            const confirmPayload = { reason: "confirm" };
+            if (BOOT_DEBUG) {
+              console.info("[Today Planner] confirm suggestion", {
+                endpoint: `/v1/suggestions/${suggestion.id}/accept`,
+                method: "POST",
+                payloadKeys: Object.keys(confirmPayload),
+              });
+            }
             await v1Request(
               `/v1/suggestions/${suggestion.id}/accept`,
               {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 credentials: "include",
-                body: JSON.stringify({ reason: "confirm" })
+                body: JSON.stringify(confirmPayload)
               },
               "Confirm suggestion"
             );
@@ -3359,11 +3383,16 @@
       });
     }
 
-    function renderPlannerError(message, httpStatus) {
+    function renderPlannerError(message, httpStatus, details) {
       plannerError.style.display = "block";
       let msg = message || "Could not load today's plan. Please try again later.";
       if (httpStatus) msg += ` (HTTP ${httpStatus})`;
       plannerError.innerHTML = `${msg} <button id="planner-retry-btn" style="margin-left:1em;">Retry</button>`;
+      if (details) {
+        plannerError.dataset.error = details;
+      } else {
+        delete plannerError.dataset.error;
+      }
       const retryBtn = document.getElementById("planner-retry-btn");
       if (retryBtn) {
         retryBtn.onclick = () => {
@@ -5067,16 +5096,50 @@
           };
       }
 
+      let planStatus = null;
+      let planSnippet = null;
+      let planParseError = null;
+      let briefStatus = null;
+      let briefSnippet = null;
+      let briefParseError = null;
+      let planUrl = null;
       try {
-        const planUrl = dayViewDateYmd 
+        planUrl = dayViewDateYmd 
             ? `/api/today-plan?plan_date=${dayViewDateYmd}` 
             : `/api/today-plan?ts=${Date.now()}`;
-            
-        const [brief, planResp] = await Promise.all([
-            dayViewDateYmd ? Promise.resolve({}) : fetchTodayBrief(), // No brief for past days
-            fetch(planUrl, { cache: "no-store", credentials: "include" }).then(r => r.json())
-        ]);
-        
+        const brief = dayViewDateYmd ? {} : await fetchTodayBrief().catch((err) => {
+          briefStatus = err && err.status ? err.status : null;
+          briefSnippet = err && err.bodySnippet ? err.bodySnippet : null;
+          briefParseError = err && err.parseError ? err.parseError : null;
+          console.error("[Today Planner] fetchTodayBrief failed", {
+            status: briefStatus,
+            parseError: briefParseError,
+            error: err && err.message,
+          });
+          return {};
+        });
+        const planResponse = await fetch(planUrl, { cache: "no-store", credentials: "include" });
+        planStatus = planResponse.status;
+        const planText = await planResponse.text();
+        planSnippet = planText.replace(/\s+/g, " ").trim().slice(0, 300);
+        if (!planResponse.ok) {
+          const err = new Error("Failed to load plan");
+          err.status = planStatus;
+          err.bodySnippet = planSnippet;
+          throw err;
+        }
+        let planResp = null;
+        try {
+          planResp = JSON.parse(planText);
+        } catch (parseErr) {
+          planParseError = parseErr.message;
+          const err = new Error("Failed to parse plan");
+          err.status = planStatus;
+          err.bodySnippet = planSnippet;
+          err.parseError = planParseError;
+          throw err;
+        }
+
         const plan = planResp.plan || {};
         const goalTasks = (plan.sections?.goal_tasks || []);
         if (BOOT_DEBUG) console.log("[Today Planner] goalTasks count", goalTasks.length, { source: "ui", planSource: plan._plan_source });
@@ -5103,7 +5166,25 @@
           const match = e.message.match(/HTTP (\d+)/);
           if (match) httpStatus = match[1];
         }
-        renderPlannerError("Planner load failed", httpStatus);
+        if (e && e.status) httpStatus = e.status;
+        const detailParts = [];
+        if (planStatus) detailParts.push(`today-plan:${planStatus}`);
+        if (planParseError) detailParts.push(`plan_parse:${planParseError}`);
+        if (planSnippet) detailParts.push(`plan_snippet:${planSnippet.slice(0, 120)}`);
+        if (briefStatus) detailParts.push(`today-brief:${briefStatus}`);
+        if (briefParseError) detailParts.push(`brief_parse:${briefParseError}`);
+        if (briefSnippet) detailParts.push(`brief_snippet:${briefSnippet.slice(0, 120)}`);
+        if (e && e.message) detailParts.push(`error:${e.message}`);
+        const detailString = detailParts.join(" | ").slice(0, 300);
+        console.error("[Today Planner] loadTodayPlanner failed", {
+          planUrl,
+          planStatus,
+          briefStatus,
+          planParseError,
+          briefParseError,
+          error: e && e.message,
+        });
+        renderPlannerError("Planner load failed", httpStatus, detailString);
         if (BOOT_DEBUG) console.log("[Today Planner] loadTodayPlanner error", e);
       }
     }

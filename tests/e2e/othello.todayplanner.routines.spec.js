@@ -108,6 +108,7 @@ test("Routine -> Build Today's Plan -> Confirm Suggestion", async ({ page }, tes
   const consoleErrors = [];
   const authTrace = [];
   const plannerTrace = [];
+  const postTrace = [];
 
   page.on("response", (response) => {
     if (response.status() >= 500) {
@@ -123,6 +124,7 @@ test("Routine -> Build Today's Plan -> Confirm Suggestion", async ({ page }, tes
       || url.includes("/v1/plan/draft")
       || url.includes("/api/confirm")
       || url.includes("/v1/confirm")
+      || url.includes("/v1/suggestions/")
       || url.includes("/api/plan/update")
     );
     if (!matchesPlanner) return;
@@ -140,6 +142,26 @@ test("Routine -> Build Today's Plan -> Confirm Suggestion", async ({ page }, tes
     }
     const snippet = bodyText.replace(/\s+/g, " ").trim().slice(0, 300);
     plannerTrace.push(`${request.method()} ${path} ${response.status()} ${snippet}`);
+  });
+
+  page.on("request", (request) => {
+    const url = request.url();
+    if (request.method() !== "POST") return;
+    const matches = (
+      url.includes("/api/confirm")
+      || url.includes("/v1/confirm")
+      || url.includes("/v1/suggestions/")
+      || url.includes("/api/plan/update")
+    );
+    if (!matches) return;
+    let path = url;
+    try {
+      const parsed = new URL(url);
+      path = `${parsed.pathname}${parsed.search}`;
+    } catch {}
+    const postData = request.postData() || "";
+    const snippet = postData.replace(/\s+/g, " ").trim().slice(0, 300);
+    postTrace.push(`${request.method()} ${path} ${snippet}`);
   });
 
   page.on("console", (msg) => {
@@ -225,6 +247,13 @@ test("Routine -> Build Today's Plan -> Confirm Suggestion", async ({ page }, tes
         body: consoleErrors.join("\n"),
         contentType: "text/plain",
       });
+      const plannerErrorDetails = await page.locator("#planner-error").getAttribute("data-error");
+      if (plannerErrorDetails) {
+        await testInfo.attach("planner-error.txt", {
+          body: plannerErrorDetails,
+          contentType: "text/plain",
+        });
+      }
       if (plannerLoadResult === "fail") {
         throw new Error("Planner load failed banner displayed; see planner-trace.txt");
       }
@@ -260,7 +289,7 @@ test("Routine -> Build Today's Plan -> Confirm Suggestion", async ({ page }, tes
       (response) => {
         const url = response.url();
         if (response.request().method() !== "POST") return false;
-        return url.includes("/confirm") || url.includes("/plan/update");
+        return url.includes("/v1/suggestions/") && url.includes("/accept");
       },
       { timeout: 20000 }
     );
@@ -271,8 +300,12 @@ test("Routine -> Build Today's Plan -> Confirm Suggestion", async ({ page }, tes
       confirmText = await confirmResponse.text();
     } catch {}
     let confirmOk = confirmResponse.status() === 200;
-    if (confirmText.includes("\"ok\":")) {
-      confirmOk = confirmText.includes("\"ok\":true");
+    let confirmJson = null;
+    try {
+      confirmJson = JSON.parse(confirmText);
+    } catch {}
+    if (confirmJson && Object.prototype.hasOwnProperty.call(confirmJson, "ok")) {
+      confirmOk = confirmJson.ok === true;
     }
     if (!confirmOk) {
       await testInfo.attach("planner-trace.txt", {
@@ -322,5 +355,9 @@ test("Routine -> Build Today's Plan -> Confirm Suggestion", async ({ page }, tes
         contentType: "text/plain",
       });
     }
+    await testInfo.attach("post-trace.txt", {
+      body: postTrace.join("\n"),
+      contentType: "text/plain",
+    });
   }
 });
