@@ -46,6 +46,7 @@ class OthelloEngine:
     def update_plan_item(
         self,
         *,
+        user_id: str,
         item_id: str,
         status: str,
         plan_date: Optional[str] = None,
@@ -54,6 +55,7 @@ class OthelloEngine:
     ) -> Dict[str, Any]:
         """Update lifecycle for a plan item and return the updated plan."""
         return self.day_planner.update_plan_item_status(
+            user_id=user_id,
             item_id=item_id,
             status=status,
             plan_date=plan_date,

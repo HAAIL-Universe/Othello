@@ -53,7 +53,16 @@ def get_plan_with_items(user_id: str, plan_date: date) -> Optional[Dict[str, Any
     return plan
 
 
-def update_behavior_snapshot(plan_id: int, behavior_snapshot: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def update_behavior_snapshot(plan_id: int, behavior_snapshot: Dict[str, Any], user_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    if user_id:
+        query = """
+            UPDATE plans
+            SET behavior_snapshot = %s, updated_at = NOW()
+            WHERE id = %s AND user_id = %s
+            RETURNING id, user_id, plan_date, generation_context, behavior_snapshot, created_at, updated_at;
+        """
+        return execute_and_fetch_one(query, (behavior_snapshot, plan_id, user_id))
+    
     query = """
         UPDATE plans
         SET behavior_snapshot = %s, updated_at = NOW()
@@ -77,8 +86,11 @@ def get_plans_since(user_id: str, earliest_date: date) -> List[Dict[str, Any]]:
 # Plan items
 # ---------------------------------------------------------------------------
 
-def delete_plan_items(plan_id: int) -> None:
-    execute_query("DELETE FROM plan_items WHERE plan_id = %s", (plan_id,))
+def delete_plan_items(plan_id: int, user_id: Optional[str] = None) -> None:
+    if user_id:
+        execute_query("DELETE FROM plan_items WHERE plan_id = %s AND user_id = %s", (plan_id, user_id))
+    else:
+        execute_query("DELETE FROM plan_items WHERE plan_id = %s", (plan_id,))
 
 
 def insert_plan_item(plan_id: int, item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -132,10 +144,15 @@ def insert_plan_item(plan_id: int, item: Dict[str, Any]) -> Optional[Dict[str, A
     )
 
 
-def replace_plan_items(plan_id: int, items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    delete_plan_items(plan_id)
+def replace_plan_items(plan_id: int, items: List[Dict[str, Any]], user_id: Optional[str] = None) -> List[Dict[str, Any]]:
+    delete_plan_items(plan_id, user_id=user_id)
     created: List[Dict[str, Any]] = []
     for item in items:
+        # If user_id is provided, ensure it's in the item or validated?
+        # insert_plan_item takes item dict.
+        if user_id and "user_id" not in item:
+            item["user_id"] = user_id
+        
         created_item = insert_plan_item(plan_id, item)
         if created_item:
             created.append(created_item)
@@ -179,7 +196,22 @@ def update_plan_item_status(
     skip_reason: Optional[str] = None,
     reschedule_to: Optional[str] = None,
     metadata: Optional[Dict[str, Any]] = None,
+    user_id: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
+    if user_id:
+        query = """
+            UPDATE plan_items
+            SET status = %s,
+                skip_reason = %s,
+                reschedule_to = %s,
+                metadata = COALESCE(metadata || %s::jsonb, metadata),
+                updated_at = NOW()
+            WHERE plan_id = %s AND item_id = %s AND user_id = %s
+            RETURNING id, plan_id, item_id, type, section, status, reschedule_to, skip_reason,
+                      priority, effort, energy, metadata, created_at, updated_at;
+        """
+        return execute_and_fetch_one(query, (status, skip_reason, reschedule_to, Json(metadata) if metadata else None, plan_id, item_id, user_id))
+
     query = """
         UPDATE plan_items
         SET status = %s,
@@ -198,7 +230,19 @@ def update_plan_item_metadata(
     plan_id: int,
     item_id: str,
     metadata: Dict[str, Any],
+    user_id: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
+    if user_id:
+        query = """
+            UPDATE plan_items
+            SET metadata = metadata || %s::jsonb,
+                updated_at = NOW()
+            WHERE plan_id = %s AND item_id = %s AND user_id = %s
+            RETURNING id, plan_id, item_id, type, section, status, reschedule_to, skip_reason,
+                      priority, effort, energy, metadata, created_at, updated_at;
+        """
+        return execute_and_fetch_one(query, (Json(metadata), plan_id, item_id, user_id))
+
     query = """
         UPDATE plan_items
         SET metadata = metadata || %s::jsonb,

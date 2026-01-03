@@ -372,6 +372,7 @@ class DbGoalManager:
             new_plan=plan,
             new_checklist=checklist,
             new_summary=summary,
+            user_id=uid,
         )
         
         if db_goal is None:
@@ -749,7 +750,7 @@ class DbGoalManager:
                 self.logger.error(f"DbGoalManager: Step {step_id} does not belong to goal {goal_id}")
                 return None
 
-            updated_step = goals_repository.update_plan_step_status(step_id, status)
+            updated_step = goals_repository.update_plan_step_status(step_id, status, user_id=uid)
             if updated_step:
                 self.logger.info(f"DbGoalManager: Updated step {step_id} status to '{status}'")
 

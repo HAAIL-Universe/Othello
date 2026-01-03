@@ -2,6 +2,49 @@
 <html lang="en">
 <head>
     <style>
+      /* Mobile Routine Planner Styles */
+      @media (max-width: 768px) {
+        .routine-planner-layout {
+          display: block !important;
+          height: calc(100vh - 120px) !important;
+        }
+        .routine-list-panel {
+          width: 100%;
+          height: 100%;
+          display: flex;
+        }
+        .routine-editor-panel {
+          width: 100%;
+          height: 100%;
+          position: absolute;
+          top: 0;
+          left: 0;
+          z-index: 10;
+          display: none; /* Hidden by default on mobile */
+        }
+        #routine-empty-state {
+          display: none !important;
+        }
+        
+        /* When editor is active on mobile */
+        body.routine-editor-open .routine-list-panel {
+          display: none !important;
+        }
+        body.routine-editor-open .routine-editor-panel {
+          display: flex !important;
+          position: relative; /* Reset position when active */
+        }
+        
+        /* Back button visibility */
+        #routine-mobile-back-btn {
+          display: inline-block !important;
+        }
+      }
+      
+      #routine-mobile-back-btn {
+        display: none; /* Hidden on desktop */
+      }
+
       .waking-overlay {
         position: fixed;
         z-index: 9999;
@@ -1850,8 +1893,11 @@
 
       <!-- ROUTINE PLANNER VIEW -->
       <div id="routine-planner-view" class="view">
-        <div class="view-header">
+        <div class="view-header" style="display: flex; justify-content: space-between; align-items: center;">
           <h2 class="view-title">Routine Planner</h2>
+          <button id="routine-preview-plan-btn" class="settings-button" style="font-size: 0.85rem; padding: 0.4rem 0.8rem;">
+            Preview Today Plan
+          </button>
         </div>
         <div class="routine-planner-layout" style="display: grid; grid-template-columns: 300px 1fr; gap: 1.5rem; height: calc(100vh - 140px);">
           <!-- Left: List -->
@@ -1871,7 +1917,10 @@
           <div id="routine-editor" class="routine-editor-panel" style="background: var(--bg-2); border: 1px solid var(--border); border-radius: 12px; padding: 1.5rem; display: none; flex-direction: column; overflow-y: auto;">
             <div style="display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 1.5rem;">
               <div style="flex: 1; margin-right: 1rem;">
-                <label style="display: block; font-size: 0.85rem; color: var(--text-soft); margin-bottom: 0.4rem;">Routine Name</label>
+                <div style="display: flex; align-items: center; gap: 0.5rem; margin-bottom: 0.4rem;">
+                  <button id="routine-mobile-back-btn" class="icon-button" style="width: 28px; height: 28px; font-size: 0.9rem;">←</button>
+                  <label style="display: block; font-size: 0.85rem; color: var(--text-soft);">Routine Name</label>
+                </div>
                 <input type="text" id="routine-title-input" class="login-input" style="width: 100%; font-size: 1.1rem; font-weight: 600;">
               </div>
               <div style="display: flex; flex-direction: column; align-items: flex-end;">
@@ -1947,6 +1996,22 @@
       <div class="goal-detail__actions">
         <button class="continue-btn" id="continue-working-btn">Continue working on this goal</button>
         <button class="settings-button danger goal-archive-btn" id="archive-goal-btn">Archive goal</button>
+      </div>
+    </div>
+
+    <!-- PLAN PREVIEW MODAL -->
+    <div id="plan-preview-overlay" class="settings-overlay">
+      <div class="settings-modal" style="width: min(600px, 95%); max-height: 85vh; display: flex; flex-direction: column;">
+        <div class="settings-header">
+          <div class="settings-title">Today Plan Preview</div>
+          <button id="plan-preview-close" class="settings-close">Close</button>
+        </div>
+        <div id="plan-preview-content" style="overflow-y: auto; flex: 1; padding-right: 0.5rem;">
+          <div style="text-align: center; color: var(--text-soft); padding: 2rem;">Loading plan...</div>
+        </div>
+        <div style="margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--border); font-size: 0.85rem; color: var(--text-soft);">
+          This is a read-only preview based on your current routines and goals.
+        </div>
       </div>
     </div>
 
@@ -7349,13 +7414,19 @@
         item.style.cursor = "pointer";
         item.style.background = r.id === othelloState.activeRoutineId ? "var(--card-bg)" : "transparent";
         item.style.borderLeft = r.id === othelloState.activeRoutineId ? "3px solid var(--accent)" : "3px solid transparent";
+        item.style.position = "relative";
+        
+        const titleRow = document.createElement("div");
+        titleRow.style.display = "flex";
+        titleRow.style.justifyContent = "space-between";
+        titleRow.style.alignItems = "center";
         
         const title = document.createElement("div");
         title.style.fontWeight = "600";
         title.style.color = r.enabled ? "var(--text-main)" : "var(--text-soft)";
         title.style.display = "flex";
-        title.style.justifyContent = "space-between";
         title.style.alignItems = "center";
+        title.style.gap = "0.5rem";
         
         const nameSpan = document.createElement("span");
         nameSpan.textContent = r.title;
@@ -7373,17 +7444,65 @@
            title.appendChild(badge);
         }
         
+        titleRow.appendChild(title);
+
+        // Duplicate button (stop propagation)
+        const dupBtn = document.createElement("button");
+        dupBtn.innerHTML = "📋"; // Copy icon
+        dupBtn.title = "Duplicate Routine";
+        dupBtn.style.background = "none";
+        dupBtn.style.border = "none";
+        dupBtn.style.cursor = "pointer";
+        dupBtn.style.fontSize = "0.9rem";
+        dupBtn.style.opacity = "0.6";
+        dupBtn.style.padding = "0.2rem";
+        dupBtn.onclick = (e) => {
+          e.stopPropagation();
+          duplicateRoutine(r.id);
+        };
+        dupBtn.onmouseover = () => dupBtn.style.opacity = "1";
+        dupBtn.onmouseout = () => dupBtn.style.opacity = "0.6";
+        titleRow.appendChild(dupBtn);
+
         const meta = document.createElement("div");
         meta.style.fontSize = "0.8rem";
         meta.style.color = "var(--text-soft)";
+        meta.style.marginTop = "0.2rem";
         const stepCount = (r.steps || []).length;
-        meta.textContent = `${stepCount} step${stepCount !== 1 ? 's' : ''}`;
         
-        item.appendChild(title);
+        let updatedText = "";
+        if (r.updated_at) {
+            try {
+                const d = new Date(r.updated_at);
+                updatedText = ` • ${d.toLocaleDateString()}`;
+            } catch(e) {}
+        }
+        
+        meta.textContent = `${stepCount} step${stepCount !== 1 ? 's' : ''}${updatedText}`;
+        
+        item.appendChild(titleRow);
         item.appendChild(meta);
         item.onclick = () => selectRoutine(r.id);
         listEl.appendChild(item);
       });
+    }
+
+    // Mobile Navigation Helpers
+    function openMobileEditor() {
+      if (window.innerWidth <= 768) {
+        document.body.classList.add("routine-editor-open");
+      }
+    }
+
+    function closeMobileEditor() {
+      document.body.classList.remove("routine-editor-open");
+      othelloState.activeRoutineId = null; // Deselect
+      renderRoutineList(othelloState.routines); // Refresh list selection state
+    }
+    
+    const mobileBackBtn = document.getElementById("routine-mobile-back-btn");
+    if (mobileBackBtn) {
+      mobileBackBtn.onclick = closeMobileEditor;
     }
 
     function selectRoutine(routineId) {
@@ -7395,6 +7514,7 @@
         document.getElementById("routine-empty-state").style.display = "none";
         document.getElementById("routine-editor").style.display = "flex";
         renderRoutineEditor(routine);
+        openMobileEditor(); // Switch view on mobile
       } else {
         document.getElementById("routine-editor").style.display = "none";
         document.getElementById("routine-empty-state").style.display = "flex";
@@ -7535,7 +7655,29 @@
       
       daysContainer.parentNode.insertBefore(extraContainer, daysContainer.nextSibling);
       
-      // Steps
+      // Steps Header
+      const stepsHeader = document.getElementById("routine-add-step-btn").parentNode;
+      // Hide the old "Add Step" button if it exists, or just clear the header content
+      stepsHeader.innerHTML = "";
+      const stepsTitle = document.createElement("span");
+      stepsTitle.style.fontSize = "0.95rem";
+      stepsTitle.style.fontWeight = "600";
+      stepsTitle.style.color = "var(--text-main)";
+      stepsTitle.textContent = "Steps";
+      stepsHeader.appendChild(stepsTitle);
+
+      // Save Order Button
+      const saveOrderBtn = document.createElement("button");
+      saveOrderBtn.id = "routine-save-order-btn";
+      saveOrderBtn.textContent = "Save Order";
+      saveOrderBtn.className = "settings-button";
+      saveOrderBtn.style.fontSize = "0.8rem";
+      saveOrderBtn.style.padding = "0.3rem 0.6rem";
+      saveOrderBtn.style.display = "none"; // Hidden by default
+      saveOrderBtn.onclick = () => saveStepOrder(routine.id);
+      stepsHeader.appendChild(saveOrderBtn);
+
+      // Steps List
       const stepsContainer = document.getElementById("routine-steps");
       stepsContainer.innerHTML = "";
       (routine.steps || []).forEach((step, idx) => {
@@ -7562,7 +7704,7 @@
         upBtn.style.color = "var(--text-soft)";
         upBtn.style.cursor = "pointer";
         upBtn.disabled = idx === 0;
-        upBtn.onclick = () => reorderStep(routine, step.id, -1);
+        upBtn.onclick = () => moveStepLocal(routine.id, step.id, -1);
         
         const downBtn = document.createElement("button");
         downBtn.innerHTML = "▼";
@@ -7572,7 +7714,7 @@
         downBtn.style.color = "var(--text-soft)";
         downBtn.style.cursor = "pointer";
         downBtn.disabled = idx === (routine.steps.length - 1);
-        downBtn.onclick = () => reorderStep(routine, step.id, 1);
+        downBtn.onclick = () => moveStepLocal(routine.id, step.id, 1);
         
         orderCol.appendChild(upBtn);
         orderCol.appendChild(downBtn);
@@ -7630,8 +7772,43 @@
         
         stepsContainer.appendChild(row);
       });
+
+      // Inline Add Step Row
+      const addRow = document.createElement("div");
+      addRow.style.display = "flex";
+      addRow.style.gap = "0.5rem";
+      addRow.style.alignItems = "center";
+      addRow.style.padding = "0.5rem";
+      addRow.style.marginTop = "0.5rem";
       
-      document.getElementById("routine-add-step-btn").onclick = () => addStep(routine.id);
+      const addInput = document.createElement("input");
+      addInput.type = "text";
+      addInput.placeholder = "New step title...";
+      addInput.className = "login-input";
+      addInput.style.flex = "1";
+      addInput.style.padding = "0.4rem 0.6rem";
+      addInput.style.fontSize = "0.9rem";
+      addInput.onkeydown = (e) => {
+        if (e.key === "Enter") {
+            addStepInline(routine.id, addInput.value);
+            addInput.value = "";
+        }
+      };
+      
+      const addBtn = document.createElement("button");
+      addBtn.textContent = "Add";
+      addBtn.className = "settings-button";
+      addBtn.style.padding = "0.4rem 0.8rem";
+      addBtn.onclick = () => {
+        if (addInput.value.trim()) {
+            addStepInline(routine.id, addInput.value);
+            addInput.value = "";
+        }
+      };
+      
+      addRow.appendChild(addInput);
+      addRow.appendChild(addBtn);
+      stepsContainer.appendChild(addRow);
     }
 
     async function updateRoutine(id, patch, refresh = true) {
@@ -7685,6 +7862,7 @@
           const data = await resp.json();
           othelloState.activeRoutineId = data.routine.id;
           await loadRoutinePlanner();
+          openMobileEditor(); // Switch view on mobile
         }
       } catch (err) { console.error(err); }
     }
@@ -7742,26 +7920,180 @@
       } catch (err) { console.error(err); }
     }
 
-    async function reorderStep(routine, stepId, direction) {
-      const steps = [...routine.steps];
-      const idx = steps.findIndex(s => s.id === stepId);
-      if (idx === -1) return;
-      const newIdx = idx + direction;
-      if (newIdx < 0 || newIdx >= steps.length) return;
-      
-      const item = steps.splice(idx, 1)[0];
-      steps.splice(newIdx, 0, item);
-      
-      const updates = steps.map((s, i) => {
-        if (s.order_index !== i) {
-          return updateStep(s.id, { order_index: i });
+    async function duplicateRoutine(routineId) {
+      const routine = othelloState.routines.find(r => r.id === routineId);
+      if (!routine) return;
+      const newTitle = routine.title + " (Copy)";
+      try {
+        const resp = await fetch(ROUTINES_API, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ title: newTitle, schedule_rule: routine.schedule_rule, enabled: false }),
+          credentials: "include"
+        });
+        if (!resp.ok) throw new Error("Failed to create routine copy");
+        const data = await resp.json();
+        const newRoutine = data.routine;
+        
+        // Copy steps
+        if (routine.steps && routine.steps.length > 0) {
+            for (const step of routine.steps) {
+                await fetch(`${ROUTINES_API}/${newRoutine.id}/steps`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        title: step.title,
+                        est_minutes: step.est_minutes,
+                        energy: step.energy,
+                        order_index: step.order_index,
+                        tags: step.tags
+                    }),
+                    credentials: "include"
+                });
+            }
         }
-        return Promise.resolve();
-      });
-      
-      await Promise.all(updates);
-      await fetchRoutines();
-      selectRoutine(routine.id);
+        await fetchRoutines();
+        selectRoutine(newRoutine.id);
+        openMobileEditor(); // Switch view on mobile
+      } catch (err) {
+        console.error("Duplicate routine error:", err);
+        alert("Failed to duplicate routine.");
+      }
+    }
+
+    function moveStepLocal(routineId, stepId, direction) {
+        const routine = othelloState.routines.find(r => r.id === routineId);
+        if (!routine || !routine.steps) return;
+        
+        const idx = routine.steps.findIndex(s => s.id === stepId);
+        if (idx === -1) return;
+        const newIdx = idx + direction;
+        if (newIdx < 0 || newIdx >= routine.steps.length) return;
+        
+        // Swap in local array
+        const item = routine.steps.splice(idx, 1)[0];
+        routine.steps.splice(newIdx, 0, item);
+        
+        // Re-render editor
+        renderRoutineEditor(routine);
+        
+        // Show Save button
+        const saveBtn = document.getElementById("routine-save-order-btn");
+        if (saveBtn) {
+            saveBtn.style.display = "inline-block";
+            saveBtn.textContent = "Save Order";
+            saveBtn.disabled = false;
+        }
+    }
+
+    async function saveStepOrder(routineId) {
+        const routine = othelloState.routines.find(r => r.id === routineId);
+        if (!routine || !routine.steps) return;
+        
+        const saveBtn = document.getElementById("routine-save-order-btn");
+        if (saveBtn) {
+            saveBtn.textContent = "Saving...";
+            saveBtn.disabled = true;
+        }
+        
+        try {
+            const updates = routine.steps.map((s, i) => {
+                return updateStep(s.id, { order_index: i }, false);
+            });
+            await Promise.all(updates);
+            if (saveBtn) {
+                saveBtn.style.display = "none";
+            }
+            await fetchRoutines(); // Sync with server
+        } catch (err) {
+            console.error("Save order error:", err);
+            if (saveBtn) {
+                saveBtn.textContent = "Error";
+                setTimeout(() => {
+                    saveBtn.textContent = "Save Order";
+                    saveBtn.disabled = false;
+                }, 2000);
+            }
+        }
+    }
+
+    async function addStepInline(routineId, title) {
+      try {
+        const resp = await fetch(`${ROUTINES_API}/${routineId}/steps`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ title: title, est_minutes: 15, energy: "medium" }),
+          credentials: "include"
+        });
+        if (resp.ok) {
+          await fetchRoutines();
+          selectRoutine(routineId);
+        }
+      } catch (err) { console.error(err); }
+    }
+
+    // Preview Plan Logic
+    const planPreviewOverlay = document.getElementById("plan-preview-overlay");
+    const planPreviewClose = document.getElementById("plan-preview-close");
+    const planPreviewContent = document.getElementById("plan-preview-content");
+    const planPreviewBtn = document.getElementById("routine-preview-plan-btn");
+
+    if (planPreviewBtn) {
+        planPreviewBtn.onclick = async () => {
+            if (planPreviewOverlay) planPreviewOverlay.style.display = "flex";
+            if (planPreviewContent) planPreviewContent.innerHTML = '<div style="text-align: center; color: var(--text-soft); padding: 2rem;">Generating preview...</div>';
+            
+            try {
+                const resp = await fetch("/api/today-plan", { credentials: "include" });
+                if (!resp.ok) throw new Error("Failed to fetch plan");
+                const data = await resp.json();
+                renderPlanPreview(data.plan);
+            } catch (err) {
+                if (planPreviewContent) planPreviewContent.innerHTML = `<div class="planner-error">Failed to load plan: ${err.message}</div>`;
+            }
+        };
+    }
+
+    if (planPreviewClose) {
+        planPreviewClose.onclick = () => {
+            if (planPreviewOverlay) planPreviewOverlay.style.display = "none";
+        };
+    }
+
+    function renderPlanPreview(plan) {
+        if (!planPreviewContent) return;
+        if (!plan || !plan.items || plan.items.length === 0) {
+            planPreviewContent.innerHTML = '<div class="planner-empty">No items in plan.</div>';
+            return;
+        }
+        
+        let html = `<div style="margin-bottom: 1rem; font-weight: 600; color: var(--accent);">Plan Date: ${plan.date}</div>`;
+        html += '<div class="planner-blocks">';
+        
+        // Group by section
+        const sections = {};
+        plan.items.forEach(item => {
+            const sec = item.section || "Uncategorized";
+            if (!sections[sec]) sections[sec] = [];
+            sections[sec].push(item);
+        });
+        
+        for (const [sec, items] of Object.entries(sections)) {
+            html += `<div class="planner-block">
+                <div class="planner-block__header"><div class="planner-block__title">${sec}</div></div>
+                <div class="planner-steps">`;
+            
+            items.forEach(item => {
+                html += `<div class="planner-step">
+                    <div class="planner-step__label">${item.title}</div>
+                    <div class="planner-step__meta">${item.effort || ''}</div>
+                </div>`;
+            });
+            
+            html += `</div></div>`;
+        }
+        html += '</div>';
+        planPreviewContent.innerHTML = html;
     }
 
     // ===== INITIALIZATION =====

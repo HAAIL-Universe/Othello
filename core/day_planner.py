@@ -597,7 +597,7 @@ class DayPlanner:
                             if prev_meta.get("completed_at"):
                                 item["metadata"]["completed_at"] = prev_meta["completed_at"]
 
-                plan_repository.replace_plan_items(plan_row["id"], items)
+                plan_repository.replace_plan_items(plan_row["id"], items, user_id=uid)
         except Exception as exc:
             self.logger.error(f"DayPlanner: failed to persist plan to DB for {target_date}: {exc}")
 
@@ -1165,7 +1165,8 @@ class DayPlanner:
             status,
             skip_reason=reason,
             reschedule_to=reschedule_to,
-            metadata=metadata_update if metadata_update else None
+            metadata=metadata_update if metadata_update else None,
+            user_id=uid
         )
         if not updated_row:
             raise ValueError(f"Failed to update item {item_id} for {target_date}")

@@ -254,7 +254,8 @@ def update_goal_from_conversation(
     goal_id: int,
     new_plan: Optional[str] = None,
     new_checklist: Optional[List[Dict[str, Any]]] = None,
-    new_summary: Optional[str] = None
+    new_summary: Optional[str] = None,
+    user_id: Optional[str] = None
 ) -> Optional[Dict[str, Any]]:
     """
     Update goal fields that are derived from conversation analysis
@@ -291,15 +292,25 @@ def update_goal_from_conversation(
     # Always update updated_at
     set_clauses.append("updated_at = NOW()")
     
-    query = f"""
-        UPDATE goals
-        SET {', '.join(set_clauses)}
-        WHERE id = %s
-        RETURNING id, user_id, title, description, status, priority, category,
-                  plan, checklist, last_conversation_summary, created_at, updated_at
-    """
-    
-    params.append(goal_id)
+    if user_id:
+        query = f"""
+            UPDATE goals
+            SET {', '.join(set_clauses)}
+            WHERE id = %s AND user_id = %s
+            RETURNING id, user_id, title, description, status, priority, category,
+                      plan, checklist, last_conversation_summary, created_at, updated_at
+        """
+        params.append(goal_id)
+        params.append(user_id)
+    else:
+        query = f"""
+            UPDATE goals
+            SET {', '.join(set_clauses)}
+            WHERE id = %s
+            RETURNING id, user_id, title, description, status, priority, category,
+                      plan, checklist, last_conversation_summary, created_at, updated_at
+        """
+        params.append(goal_id)
     
     return execute_and_fetch_one(query, tuple(params))
 
@@ -453,17 +464,27 @@ def get_plan_steps_for_goal(goal_id: int) -> List[Dict[str, Any]]:
     return fetch_all(query, (goal_id,))
 
 
-def update_plan_step_status(step_id: int, status: str) -> Optional[Dict[str, Any]]:
+def update_plan_step_status(step_id: int, status: str, user_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """
     Update the status of a plan step.
     
     Args:
         step_id: The step ID to update
         status: New status ('pending', 'in_progress', 'done')
+        user_id: Optional user_id for tenant scoping
     
     Returns:
         Updated step dictionary if successful, None otherwise
     """
+    if user_id:
+        query = """
+            UPDATE plan_steps
+            SET status = %s, updated_at = NOW()
+            WHERE id = %s AND goal_id IN (SELECT id FROM goals WHERE user_id = %s)
+            RETURNING id, goal_id, step_index, description, status, due_date, created_at, updated_at
+        """
+        return execute_and_fetch_one(query, (status, step_id, user_id))
+
     query = """
         UPDATE plan_steps
         SET status = %s, updated_at = NOW()

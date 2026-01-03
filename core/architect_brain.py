@@ -646,7 +646,8 @@ class Architect:
                     from db import goals_repository
                     goals_repository.update_goal_from_conversation(
                         goal_id=goal_id,
-                        new_summary=summary
+                        new_summary=summary,
+                        user_id=user_id
                     )
                     self.logger.info(f"  → Updated conversation summary")
                 except Exception as e:

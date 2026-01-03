@@ -98,12 +98,89 @@ def _get_valid_clarification_cache(user_id: str, local_today: date) -> Optional[
         
     return entry
 
+def _get_last_ai2_batch_from_db(user_id: str, local_today: date) -> Optional[Dict]:
+    """
+    Authoritative fallback: fetches the most recent AI2 batch from DB.
+    Returns a dict structure compatible with AI2_BATCH_CACHE.
+    """
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cursor:
+                # Find the latest batch_id for this user and day
+                cursor.execute(
+                    """
+                    SELECT provenance->>'ai2_batch_id' as batch_id, MAX(created_at) as last_created
+                    FROM suggestions
+                    WHERE user_id = %s 
+                      AND kind = 'plan_proposal'
+                      AND provenance->>'ai2_batch_id' IS NOT NULL
+                      AND provenance->>'plan_date' = %s
+                    GROUP BY batch_id
+                    ORDER BY last_created DESC
+                    LIMIT 1
+                    """,
+                    (user_id, local_today.isoformat())
+                )
+                row = cursor.fetchone()
+                if not row:
+                    return None
+                
+                batch_id = row[0]
+                created_at_dt = row[1]
+                
+                # TTL Check
+                if created_at_dt.tzinfo is None:
+                    created_at_dt = created_at_dt.replace(tzinfo=timezone.utc)
+                
+                age = (datetime.now(timezone.utc) - created_at_dt).total_seconds()
+                if age > AI2_BATCH_TTL_SECONDS:
+                    return None
+                
+                # Now fetch the suggestions for this batch
+                cursor.execute(
+                    """
+                    SELECT id, provenance->>'option_label' as label
+                    FROM suggestions
+                    WHERE user_id = %s 
+                      AND provenance->>'ai2_batch_id' = %s
+                    """,
+                    (user_id, batch_id)
+                )
+                rows = cursor.fetchall()
+                
+                if not rows:
+                    return None
+                    
+                entry = {
+                    "created_at": created_at_dt.timestamp(),
+                    "plan_date": local_today.isoformat(),
+                    "batch_id": batch_id
+                }
+                
+                for r in rows:
+                    s_id = r[0]
+                    label = r[1] # "A" or "B"
+                    if label == "A":
+                        entry["option_a"] = s_id
+                    elif label == "B":
+                        entry["option_b"] = s_id
+                
+                return entry
+    except Exception as e:
+        logger.error(f"DB fallback for AI2 batch failed: {e}")
+        return None
+
 def _get_valid_ai2_batch_cache(user_id: str, local_today: date) -> Optional[Dict]:
     """
     Retrieves AI2 batch cache if valid (not expired, same day).
     Returns None if invalid or missing, and cleans up.
     """
     entry = AI2_BATCH_CACHE.get(user_id)
+    
+    # Fallback to DB if cache miss
+    if not entry:
+        entry = _get_last_ai2_batch_from_db(user_id, local_today)
+        
     if not entry:
         return None
         
@@ -1739,6 +1816,7 @@ def v1_ready_check():
 
 
 @v1.route("/read/today", methods=["GET"])
+@require_auth
 def v1_read_today():
     logger = logging.getLogger("API.V1")
     request_id = _get_request_id()
@@ -1796,6 +1874,7 @@ def v1_read_today():
 
 
 @v1.route("/plan/draft", methods=["POST"])
+@require_auth
 def v1_plan_draft():
     logger = logging.getLogger("API.V1")
     request_id = _get_request_id()
@@ -1910,6 +1989,7 @@ def v1_plan_draft():
 
 
 @v1.route("/suggestions/<int:suggestion_id>/accept", methods=["POST"])
+@require_auth
 def v1_accept_suggestion(suggestion_id: int):
     logger = logging.getLogger("API.V1")
     request_id = _get_request_id()
@@ -1958,6 +2038,7 @@ def v1_auth_logout():
 
 
 @v1.route("/sessions", methods=["POST"])
+@require_auth
 def v1_create_session():
     user_id, error = _v1_get_user_id()
     if error:
@@ -1970,6 +2051,7 @@ def v1_create_session():
     return _v1_envelope(data={"session_id": session_id}, status=201)
 
 
+@require_auth
 @v1.route("/messages", methods=["GET", "POST"])
 def v1_messages():
     if request.method == "GET":
@@ -2092,6 +2174,7 @@ def v1_messages():
 
 
 @v1.route("/data/clear", methods=["POST"])
+@require_auth
 def v1_clear_data():
     logger = logging.getLogger("API")
     user_id, error = _get_user_id_or_error()
@@ -2185,6 +2268,7 @@ def v1_clear_data():
     )
 
 
+@require_auth
 @v1.route("/sessions/<int:session_id>/messages", methods=["GET"])
 def v1_list_session_messages(session_id: int):
     user_id, error = _v1_get_user_id()
@@ -2195,6 +2279,7 @@ def v1_list_session_messages(session_id: int):
     return _v1_envelope(data={"session_id": session_id, "messages": rows}, status=200)
 
 
+@require_auth
 @v1.route("/messages/<int:message_id>", methods=["GET"])
 def v1_get_message(message_id: int):
     user_id, error = _v1_get_user_id()
@@ -2267,6 +2352,7 @@ def _v1_update_message_payload(message_id: int, data: Dict[str, Any]):
 
 
 @v1.route("/messages/<int:message_id>", methods=["PATCH"])
+@require_auth
 def v1_update_message(message_id: int):
     if not request.is_json:
         return _v1_error("VALIDATION_ERROR", "JSON body required", 400)
@@ -2274,6 +2360,7 @@ def v1_update_message(message_id: int):
     return _v1_update_message_payload(message_id, data)
 
 
+@require_auth
 @v1.route("/messages/<int:message_id>/finalize", methods=["POST"])
 def v1_finalize_message(message_id: int):
     if not request.is_json:
@@ -2290,6 +2377,7 @@ def v1_finalize_message(message_id: int):
     return _v1_update_message_payload(message_id, payload)
 
 
+@require_auth
 @v1.route("/analyze", methods=["POST"])
 def v1_analyze():
     user_id, error = _v1_get_user_id()
@@ -2404,6 +2492,7 @@ def v1_analyze():
         status=200,
     )
 
+@require_auth
 
 @v1.route("/suggestions", methods=["GET"])
 def v1_list_suggestions():
@@ -2623,6 +2712,16 @@ def auth_me():
         "ok": True,
         "authed": authed,
         "user_id": user_id,
+    })
+
+@app.route("/api/whoami", methods=["GET"])
+@require_auth
+def whoami():
+    return jsonify({
+        "ok": True,
+        "user_id": g.user_id,
+        "server_time_utc": datetime.now(timezone.utc).isoformat(),
+        "request_id": _get_request_id()
     })
 
 @app.route("/api/auth/logout", methods=["POST"])
@@ -3364,6 +3463,9 @@ def handle_message():
                         
                         # Track IDs for caching
                         generated_ids = []
+                        
+                        # Generate Batch ID for persistence
+                        batch_id = str(uuid.uuid4())
 
                         for i, alt in enumerate(alts):
                             if i >= 2: break
@@ -3372,7 +3474,16 @@ def handle_message():
                             
                             # Prefix title
                             alt["title"] = f"{labels[i]}: {alt.get('title')}"
-                            res = _save_proposal(user_id, alt)
+                            alt["plan_date"] = local_today.isoformat()
+                            
+                            # Persist with batch info
+                            provenance = {
+                                "ai2_batch_id": batch_id,
+                                "option_label": "A" if i == 0 else "B",
+                                "plan_date": local_today.isoformat()
+                            }
+                            res = _save_proposal(user_id, alt, provenance_data=provenance)
+                            
                             if res["status"] == "created":
                                 pid = res['proposal_id']
                                 generated_ids.append(pid)
@@ -5777,7 +5888,7 @@ def _parse_propose_text_to_ops(user_id: str, text: str) -> Optional[Dict]:
         "ops": ops
     }
 
-def _save_proposal(user_id: str, proposal: Dict) -> Dict:
+def _save_proposal(user_id: str, proposal: Dict, provenance_data: Optional[Dict] = None) -> Dict:
     """Persists a single proposal if not already pending."""
     with get_connection() as conn:
         with conn.cursor() as cursor:
@@ -5801,13 +5912,17 @@ def _save_proposal(user_id: str, proposal: Dict) -> Dict:
                 if _compute_hash(row[0] or {}) == new_hash:
                     return {"status": "duplicate", "message": "Identical proposal already pending."}
 
+            final_provenance = {"generated_by": "user_command"}
+            if provenance_data:
+                final_provenance.update(provenance_data)
+
             cursor.execute(
                 """
                 INSERT INTO suggestions (user_id, kind, status, payload, provenance, created_at)
                 VALUES (%s, %s, %s, %s, %s, NOW())
                 RETURNING id
                 """,
-                (user_id, "plan_proposal", "pending", json.dumps(proposal), json.dumps({"generated_by": "user_command"}))
+                (user_id, "plan_proposal", "pending", json.dumps(proposal), json.dumps(final_provenance))
             )
             new_id = cursor.fetchone()[0]
             conn.commit()
