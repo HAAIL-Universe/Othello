@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 from flask import Flask, request, jsonify, send_file, session, send_from_directory, g, Blueprint
 from flask_cors import CORS
 import asyncio
-from typing import Any, Dict, Optional, List
+from typing import Any, Dict, Optional, List, Tuple
 from functools import wraps
 from passlib.hash import bcrypt
 import mimetypes
@@ -67,6 +67,60 @@ MAX_ERROR_MSG_LENGTH = 200  # Maximum length for error message logging
 REQUEST_ID_HEADER = "X-Request-ID"
 CHAT_CONTEXT_TURNS = 12
 CHAT_CONTEXT_MAX_CHARS = 6000
+CLARIFICATION_TTL_SECONDS = 600
+AI2_BATCH_TTL_SECONDS = 600
+
+# Simple in-memory cache for clarification candidates: { user_id: { candidates, request, created_at, plan_date } }
+CLARIFICATION_CACHE = {}
+# Simple in-memory cache for AI2 batches: { user_id: { option_a_id, option_b_id, created_at, plan_date } }
+AI2_BATCH_CACHE = {}
+
+def _get_valid_clarification_cache(user_id: str, local_today: date) -> Optional[Dict]:
+    """
+    Retrieves clarification cache if valid (not expired, same day).
+    Returns None if invalid or missing, and cleans up.
+    """
+    entry = CLARIFICATION_CACHE.get(user_id)
+    if not entry:
+        return None
+        
+    # Check Day Scope
+    if entry.get("plan_date") != local_today.isoformat():
+        CLARIFICATION_CACHE.pop(user_id, None)
+        return None
+        
+    # Check TTL
+    created_at = entry.get("created_at", 0)
+    now_ts = datetime.now(timezone.utc).timestamp()
+    if (now_ts - created_at) > CLARIFICATION_TTL_SECONDS:
+        CLARIFICATION_CACHE.pop(user_id, None)
+        return None
+        
+    return entry
+
+def _get_valid_ai2_batch_cache(user_id: str, local_today: date) -> Optional[Dict]:
+    """
+    Retrieves AI2 batch cache if valid (not expired, same day).
+    Returns None if invalid or missing, and cleans up.
+    """
+    entry = AI2_BATCH_CACHE.get(user_id)
+    if not entry:
+        return None
+        
+    # Check Day Scope
+    if entry.get("plan_date") != local_today.isoformat():
+        AI2_BATCH_CACHE.pop(user_id, None)
+        return None
+        
+    # Check TTL
+    created_at = entry.get("created_at", 0)
+    now_ts = datetime.now(timezone.utc).timestamp()
+    if (now_ts - created_at) > AI2_BATCH_TTL_SECONDS:
+        AI2_BATCH_CACHE.pop(user_id, None)
+        return None
+        
+    return entry
+
 
 
 def _get_request_id() -> str:
@@ -2848,6 +2902,622 @@ def handle_message():
                 return user_error
             user_id = None
 
+        # --- Phase 3.2: Chat Command Router ---
+        if user_id:
+            cmd_text = user_input.strip().lower()
+            
+            # 1. Generate Proposals
+            if cmd_text in ("/suggest", "/proposals", "suggest plan", "suggest changes"):
+                try:
+                    local_today = _get_local_today(user_id)
+                    proposals = _generate_proposals_core(user_id, local_today)
+                    count = len(proposals)
+                    
+                    if count > 0:
+                        reply = f"Generated {count} proposal{'s' if count != 1 else ''}:\n\n"
+                        for p in proposals:
+                            reply += f"ID {p['proposal_id']}: {p['title']} - {p['summary']}\n"
+                        reply += "\nUse '/accept <id>' or '/reject <id>'."
+                    else:
+                        # Check if duplicates were skipped by listing pending
+                        pending = _get_last_pending_proposals(user_id, local_today.isoformat(), limit=5)
+                        if pending:
+                            reply = "No new proposals (duplicates skipped). Pending:\n\n"
+                            for p in pending:
+                                reply += f"ID {p['proposal_id']}: {p['title']} - {p['summary']}\n"
+                            reply += "\nUse '/accept <id>' or '/reject <id>'."
+                        else:
+                            reply = "No new proposals found."
+                    
+                    return jsonify({
+                        "reply": reply,
+                        "agent_status": {"planner_active": False},
+                        "request_id": request_id
+                    })
+                except Exception as e:
+                    logger.error(f"Command /suggest failed: {e}")
+                    return jsonify({
+                        "reply": "Failed to generate proposals.",
+                        "agent_status": {},
+                        "request_id": request_id
+                    })
+
+            # 2. List Proposals / Last
+            if cmd_text in ("/suggestions", "/proposals list", "/pending", "/last"):
+                try:
+                    local_today = _get_local_today(user_id)
+                    limit = 3 if cmd_text == "/last" else 100
+                    proposals = _get_last_pending_proposals(user_id, local_today.isoformat(), limit=limit)
+                    
+                    if not proposals:
+                        reply = "No pending proposals for today."
+                    else:
+                        reply = f"{'Most recent' if cmd_text == '/last' else 'Pending'} proposals:\n\n"
+                        for p in proposals:
+                            reply += f"ID {p['proposal_id']}: {p['title']} - {p['summary']}\n"
+                        reply += "\nUse '/accept <id>' or '/reject <id>'."
+                    
+                    return jsonify({
+                        "reply": reply,
+                        "agent_status": {},
+                        "request_id": request_id
+                    })
+                except Exception as e:
+                    logger.error(f"Command /list failed: {e}")
+                    return jsonify({
+                        "reply": "Failed to list proposals.",
+                        "agent_status": {},
+                        "request_id": request_id
+                    })
+
+            # 3. Accept/Reject (Specific or Last or A/B)
+            accept_match = re.match(r"^/accept\s+(a|b|last|\d+)$", cmd_text, re.IGNORECASE)
+            reject_match = re.match(r"^/reject\s+(a|b|last|\d+)$", cmd_text, re.IGNORECASE)
+            
+            if accept_match:
+                target = accept_match.group(1).lower()
+                p_id = None
+                is_batch_selection = False
+                
+                if target in ("a", "b"):
+                    local_today = _get_local_today(user_id)
+                    cached = _get_valid_ai2_batch_cache(user_id, local_today)
+                    if cached:
+                        if target == "a": p_id = cached.get("option_a")
+                        elif target == "b": p_id = cached.get("option_b")
+                        is_batch_selection = True
+                    
+                    if not p_id:
+                        return jsonify({"reply": f"Option '{target.upper()}' not found in active batch (expired or invalid).", "agent_status": {}, "request_id": request_id})
+
+                elif target == "last":
+                    local_today = _get_local_today(user_id)
+                    last_props = _get_last_pending_proposals(user_id, local_today.isoformat(), limit=1)
+                    if last_props:
+                        p_id = last_props[0]["proposal_id"]
+                    else:
+                        return jsonify({"reply": "No pending proposals for today.", "agent_status": {}, "request_id": request_id})
+                else:
+                    p_id = int(target)
+
+                ok, status, detail = _apply_proposal_core(user_id, p_id)
+                if ok:
+                    if is_batch_selection:
+                        AI2_BATCH_CACHE.pop(user_id, None)
+                    reply = f"Accepted proposal {p_id}. Plan updated."
+                else:
+                    reply = f"Failed to accept proposal {p_id}: {status} ({detail})"
+                return jsonify({
+                    "reply": reply,
+                    "agent_status": {},
+                    "request_id": request_id
+                })
+            
+            if reject_match:
+                target = reject_match.group(1).lower()
+                p_id = None
+                
+                if target in ("a", "b"):
+                    local_today = _get_local_today(user_id)
+                    cached = _get_valid_ai2_batch_cache(user_id, local_today)
+                    if cached:
+                        if target == "a": p_id = cached.get("option_a")
+                        elif target == "b": p_id = cached.get("option_b")
+                    
+                    if not p_id:
+                        return jsonify({"reply": f"Option '{target.upper()}' not found in active batch.", "agent_status": {}, "request_id": request_id})
+
+                elif target == "last":
+                    local_today = _get_local_today(user_id)
+                    last_props = _get_last_pending_proposals(user_id, local_today.isoformat(), limit=1)
+                    if last_props:
+                        p_id = last_props[0]["proposal_id"]
+                    else:
+                        return jsonify({"reply": "No pending proposals for today.", "agent_status": {}, "request_id": request_id})
+                else:
+                    p_id = int(target)
+
+                ok, status, detail = _reject_proposal_core(user_id, p_id)
+                if ok:
+                    reply = f"Rejected proposal {p_id}."
+                else:
+                    reply = f"Failed to reject proposal {p_id}: {status} ({detail})"
+                return jsonify({
+                    "reply": reply,
+                    "agent_status": {},
+                    "request_id": request_id
+                })
+
+            # 4. Preview
+            preview_match = re.match(r"^/preview\s+(a|b|last|\d+)$", cmd_text, re.IGNORECASE)
+            if preview_match:
+                target = preview_match.group(1).lower()
+                p_id = None
+                local_today = _get_local_today(user_id)
+                
+                if target in ("a", "b"):
+                    cached = _get_valid_ai2_batch_cache(user_id, local_today)
+                    if cached:
+                        if target == "a": p_id = cached.get("option_a")
+                        elif target == "b": p_id = cached.get("option_b")
+                    
+                    if not p_id:
+                        return jsonify({"reply": f"Option '{target.upper()}' not found in active batch.", "agent_status": {}, "request_id": request_id})
+
+                elif target == "last":
+                    last_props = _get_last_pending_proposals(user_id, local_today.isoformat(), limit=1)
+                    if last_props:
+                        p_id = last_props[0]["proposal_id"]
+                    else:
+                        return jsonify({"reply": "No pending proposals for today.", "agent_status": {}, "request_id": request_id})
+                else:
+                    p_id = int(target)
+                
+                # Fetch proposal payload
+                proposal_data = None
+                with get_connection() as conn:
+                    with conn.cursor() as cursor:
+                        cursor.execute(
+                            "SELECT payload, status FROM suggestions WHERE id = %s AND user_id = %s AND kind = 'plan_proposal'",
+                            (p_id, user_id)
+                        )
+                        row = cursor.fetchone()
+                        if row:
+                            proposal_data = row[0]
+                            p_status = row[1]
+                
+                if not proposal_data:
+                    return jsonify({"reply": f"Proposal {p_id} not found.", "agent_status": {}, "request_id": request_id})
+                
+                # Load plan for context
+                comps = get_agent_components()
+                othello_engine = comps["othello_engine"]
+                plan = othello_engine.day_planner.get_today_plan(user_id, force_regen=False, plan_date=local_today)
+                
+                preview_text = _format_proposal_preview(plan, proposal_data)
+
+                reply = f"Preview proposal {p_id}: {proposal_data.get('title', 'Untitled')}\n"
+                if p_status != "pending":
+                    reply += f"(Status: {p_status})\n"
+                reply += "\n" + preview_text
+                
+                return jsonify({
+                    "reply": reply,
+                    "agent_status": {},
+                    "request_id": request_id
+                })
+
+            # 5. Cleanup
+            cleanup_match = re.match(r"^/cleanup(?:\s+(\d+))?$", cmd_text)
+            if cleanup_match:
+                days_str = cleanup_match.group(1)
+                days = int(days_str) if days_str else 14
+                # Clamp to [1, 90]
+                days = max(1, min(90, days))
+                
+                cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+                
+                accepted_count = 0
+                rejected_count = 0
+                total_count = 0
+                
+                with get_connection() as conn:
+                    with conn.cursor() as cursor:
+                        cursor.execute(
+                            """
+                            DELETE FROM suggestions 
+                            WHERE user_id = %s 
+                              AND kind = 'plan_proposal' 
+                              AND status IN ('accepted', 'rejected') 
+                              AND created_at < %s
+                            RETURNING status
+                            """,
+                            (user_id, cutoff)
+                        )
+                        rows = cursor.fetchall()
+                        total_count = len(rows)
+                        for r in rows:
+                            if r[0] == 'accepted':
+                                accepted_count += 1
+                            elif r[0] == 'rejected':
+                                rejected_count += 1
+                        conn.commit()
+                
+                return jsonify({
+                    "reply": f"Cleanup complete: {total_count} removed (accepted={accepted_count}, rejected={rejected_count}) older than {days}d.",
+                    "agent_status": {},
+                    "request_id": request_id
+                })
+
+            # 6. Cancel Applying
+            cancel_match = re.match(r"^/cancel\s+applying(?:\s+(last|\d+))?$", cmd_text)
+            if cancel_match:
+                target = cancel_match.group(1) or "last"
+                p_id = None
+                created_at = None
+                
+                with get_connection() as conn:
+                    with conn.cursor() as cursor:
+                        if target == "last":
+                            cursor.execute(
+                                """
+                                SELECT id, created_at FROM suggestions 
+                                WHERE user_id = %s 
+                                  AND kind = 'plan_proposal' 
+                                  AND status = 'applying'
+                                ORDER BY created_at DESC LIMIT 1
+                                """,
+                                (user_id,)
+                            )
+                            row = cursor.fetchone()
+                            if row:
+                                p_id = row[0]
+                                created_at = row[1]
+                            else:
+                                return jsonify({"reply": "No applying proposal found.", "agent_status": {}, "request_id": request_id})
+                        else:
+                            p_id = int(target)
+                            cursor.execute(
+                                "SELECT created_at FROM suggestions WHERE id = %s AND user_id = %s AND kind = 'plan_proposal' AND status = 'applying'",
+                                (p_id, user_id)
+                            )
+                            row = cursor.fetchone()
+                            if row:
+                                created_at = row[0]
+                            else:
+                                return jsonify({"reply": f"Proposal {p_id} is not in 'applying' state or not found.", "agent_status": {}, "request_id": request_id})
+
+                        # Check staleness
+                        if created_at.tzinfo is None:
+                            created_at = created_at.replace(tzinfo=timezone.utc)
+                        
+                        stale_threshold = datetime.now(timezone.utc) - timedelta(minutes=10)
+                        
+                        if created_at > stale_threshold:
+                             return jsonify({"reply": "Cannot cancel yet (not stale). Try again later.", "agent_status": {}, "request_id": request_id})
+                        
+                        cursor.execute(
+                            "UPDATE suggestions SET status = 'pending' WHERE id = %s",
+                            (p_id,)
+                        )
+                        conn.commit()
+                        
+                        return jsonify({
+                            "reply": f"Cancelled applying; proposal reset to pending: {p_id}.",
+                            "agent_status": {},
+                            "request_id": request_id
+                        })
+
+            # 6.4 Pick (AI2 Selection - Read Only)
+            if cmd_text.startswith("/ai2") or cmd_text.startswith("/pick "):
+                is_pick = cmd_text.startswith("/pick ")
+                pick_target = cmd_text[6:].strip().lower() if is_pick else None
+                
+                local_today = _get_local_today(user_id)
+                cached = _get_valid_ai2_batch_cache(user_id, local_today)
+                
+                if not cached:
+                    return jsonify({"reply": "No active AI2 batch found (expired or lost). Please rerun: /propose ai2 <request>", "agent_status": {}, "request_id": request_id})
+                
+                # /ai2 (Inspect)
+                if not is_pick:
+                    created_at = cached.get("created_at", 0)
+                    age = int(datetime.now(timezone.utc).timestamp() - created_at)
+                    ttl_rem = max(0, AI2_BATCH_TTL_SECONDS - age)
+                    
+                    lines = [f"Active AI2 Batch (expires in {ttl_rem}s):"]
+                    if cached.get("option_a"): lines.append(f"Option A: ID {cached['option_a']}")
+                    if cached.get("option_b"): lines.append(f"Option B: ID {cached['option_b']}")
+                    lines.append("\nUse '/preview a' or '/preview b' to see details.")
+                    lines.append("Use '/accept a' or '/accept b' to apply.")
+                    
+                    return jsonify({"reply": "\n".join(lines), "agent_status": {}, "request_id": request_id})
+
+                # /pick (Preview + Guidance)
+                target_id = None
+                if pick_target == "a":
+                    target_id = cached.get("option_a")
+                elif pick_target == "b":
+                    target_id = cached.get("option_b")
+                
+                if not target_id:
+                    return jsonify({"reply": f"Option '{pick_target}' not available in this batch.", "agent_status": {}, "request_id": request_id})
+                
+                # Fetch proposal payload for preview
+                proposal_data = None
+                with get_connection() as conn:
+                    with conn.cursor() as cursor:
+                        cursor.execute(
+                            "SELECT payload, status FROM suggestions WHERE id = %s AND user_id = %s AND kind = 'plan_proposal'",
+                            (target_id, user_id)
+                        )
+                        row = cursor.fetchone()
+                        if row:
+                            proposal_data = row[0]
+                            p_status = row[1]
+                
+                if not proposal_data:
+                    return jsonify({"reply": f"Proposal {target_id} not found.", "agent_status": {}, "request_id": request_id})
+
+                # Load plan for context
+                comps = get_agent_components()
+                othello_engine = comps["othello_engine"]
+                plan = othello_engine.day_planner.get_today_plan(user_id, force_regen=False, plan_date=local_today)
+                
+                preview_text = _format_proposal_preview(plan, proposal_data)
+                
+                reply = (
+                    f"Selected Option {pick_target.upper()} (ID {target_id}).\n"
+                    f"Run: /accept {pick_target} (or /accept {target_id}) to confirm.\n\n"
+                    f"{preview_text}"
+                )
+                
+                return jsonify({
+                    "reply": reply,
+                    "agent_status": {},
+                    "request_id": request_id
+                })
+
+            # 6.5 Use (Clarification Response)
+            if cmd_text.startswith("/use "):
+                try:
+                    idx_str = cmd_text[5:].strip()
+                    idx = int(idx_str)
+                    
+                    local_today = _get_local_today(user_id)
+                    cached = _get_valid_clarification_cache(user_id, local_today)
+                    
+                    if not cached:
+                        return jsonify({"reply": "No active clarification found (expired or lost). Please rerun: /propose ai <your request>", "agent_status": {}, "request_id": request_id})
+                    
+                    candidates = cached["candidates"]
+                    if idx < 1 or idx > len(candidates):
+                        return jsonify({"reply": f"Invalid selection. Choose 1-{len(candidates)}.", "agent_status": {}, "request_id": request_id})
+                        
+                    selected = candidates[idx-1]
+                    item_id = selected["item_id"]
+                    orig_req = cached.get("request", "...")
+                    
+                    # Clear cache to prevent replay
+                    CLARIFICATION_CACHE.pop(user_id, None)
+                    
+                    reply = (
+                        f"Selected: {selected['label']} (ID {item_id}).\n"
+                        f"Please run:\n"
+                        f"/propose ai {orig_req} item {item_id}"
+                    )
+                    return jsonify({"reply": reply, "agent_status": {}, "request_id": request_id})
+                except ValueError:
+                    return jsonify({"reply": "Usage: /use <number>", "agent_status": {}, "request_id": request_id})
+
+            # 7. Propose (Deterministic Intent or AI)
+            if cmd_text.startswith("/propose "):
+                propose_text = cmd_text[9:].strip()
+                
+                # AI2 Branch (Alternatives)
+                if propose_text.startswith("ai2 "):
+                    user_request = propose_text[4:].strip()
+                    if not user_request:
+                        return jsonify({"reply": "Usage: /propose ai2 <request>", "agent_status": {}, "request_id": request_id})
+                    
+                    try:
+                        comps = get_agent_components()
+                        othello_engine = comps["othello_engine"]
+                        local_today = _get_local_today(user_id)
+                        plan = othello_engine.day_planner.get_today_plan(user_id, force_regen=False, plan_date=local_today)
+                        if not plan: return jsonify({"reply": "No active plan.", "agent_status": {}, "request_id": request_id})
+                        
+                        plan_context, valid_ids = _build_plan_context_for_llm(plan)
+                        from core.llm_wrapper import LLMWrapper
+                        from utils.prompts import load_prompt
+                        
+                        llm = LLMWrapper()
+                        system_prompt = load_prompt("plan_proposal_generator_alternatives")
+                        user_prompt = f"User Request: {user_request}\n\nCurrent Plan:\n{plan_context}"
+                        
+                        raw_response, attempts = _generate_llm_proposal_with_retry(llm, user_prompt, system_prompt)
+                        result_data, error_code = _validate_and_parse_alternatives(raw_response, valid_ids)
+                        
+                        if not result_data:
+                            return jsonify({"reply": f"Failed to generate alternatives: {error_code}", "agent_status": {}, "request_id": request_id})
+                            
+                        # Handle Clarification
+                        if result_data.get("need_clarification"):
+                            candidates = result_data.get("candidates", [])
+                            CLARIFICATION_CACHE[user_id] = {
+                                "candidates": candidates,
+                                "request": user_request,
+                                "created_at": datetime.now(timezone.utc).timestamp(),
+                                "plan_date": local_today.isoformat(),
+                                "request_id": request_id
+                            }
+                            lines = ["Which item did you mean?"]
+                            for i, c in enumerate(candidates, 1):
+                                lines.append(f"{i}) [{c['item_id']}] {c['label']}")
+                            lines.append("\nReply: '/use <number>' or '/propose ai ... item <id>'")
+                            return jsonify({"reply": "\n".join(lines), "agent_status": {}, "request_id": request_id})
+                            
+                        # Handle Alternatives
+                        alts = result_data.get("alternatives", [])
+                        reply_parts = []
+                        labels = ["Option A", "Option B"]
+                        
+                        # Track IDs for caching
+                        generated_ids = []
+
+                        for i, alt in enumerate(alts):
+                            if i >= 2: break
+                            # Server-side cap
+                            if len(alt.get("ops", [])) > 5: continue
+                            
+                            # Prefix title
+                            alt["title"] = f"{labels[i]}: {alt.get('title')}"
+                            res = _save_proposal(user_id, alt)
+                            if res["status"] == "created":
+                                pid = res['proposal_id']
+                                generated_ids.append(pid)
+                                preview = _format_proposal_preview(plan, alt)
+                                reply_parts.append(
+                                    f"{labels[i]} created: {pid} — {alt['title']}\n"
+                                    f"{alt['summary']}\n"
+                                    f"{preview}\n"
+                                )
+                        
+                        if not reply_parts:
+                            return jsonify({"reply": "Could not generate valid safe alternatives.", "agent_status": {}, "request_id": request_id})
+                        
+                        # Cache for /pick command
+                        if len(generated_ids) > 0:
+                            cache_entry = {
+                                "created_at": datetime.now(timezone.utc).timestamp(),
+                                "plan_date": local_today.isoformat(),
+                                "request_id": request_id
+                            }
+                            if len(generated_ids) >= 1: cache_entry["option_a"] = generated_ids[0]
+                            if len(generated_ids) >= 2: cache_entry["option_b"] = generated_ids[1]
+                            AI2_BATCH_CACHE[user_id] = cache_entry
+
+                        reply_parts.append("Use '/pick a' or '/pick b' (or '/accept <id>') to apply one option.")
+                        return jsonify({"reply": "\n".join(reply_parts), "agent_status": {}, "request_id": request_id})
+                        
+                    except Exception as e:
+                        logger.error(f"Command /propose ai2 failed: {e}", exc_info=True)
+                        return jsonify({"reply": "Error generating alternatives.", "agent_status": {}, "request_id": request_id})
+
+                # AI Branch
+                if propose_text.startswith("ai "):
+                    user_request = propose_text[3:].strip()
+                    if not user_request:
+                        return jsonify({"reply": "Usage: /propose ai <request>\nExample: /propose ai move gym to tomorrow", "agent_status": {}, "request_id": request_id})
+                    
+                    try:
+                        # Load Plan Context
+                        comps = get_agent_components()
+                        othello_engine = comps["othello_engine"]
+                        local_today = _get_local_today(user_id)
+                        plan = othello_engine.day_planner.get_today_plan(user_id, force_regen=False, plan_date=local_today)
+                        
+                        if not plan:
+                             return jsonify({"reply": "No active plan found for today. Cannot generate proposal.", "agent_status": {}, "request_id": request_id})
+
+                        plan_context, valid_ids = _build_plan_context_for_llm(plan)
+                        
+                        # Call LLM
+                        from core.llm_wrapper import LLMWrapper
+                        from utils.prompts import load_prompt
+                        
+                        llm = LLMWrapper() # Uses env config
+                        system_prompt = load_prompt("plan_proposal_generator")
+                        user_prompt = f"User Request: {user_request}\n\nCurrent Plan:\n{plan_context}"
+                        
+                        # Retry Logic
+                        raw_response, attempts = _generate_llm_proposal_with_retry(llm, user_prompt, system_prompt)
+                        
+                        # Validate
+                        proposal, error_code = _validate_and_parse_llm_proposal(raw_response, valid_ids)
+                        
+                        if not proposal:
+                             # Transparent Failure
+                             reason = error_code or "UNKNOWN"
+                             reply = (
+                                 f"Couldn't form a safe proposal (reason: {reason}).\n"
+                                 f"Attempts: {attempts}\n\n"
+                                 "Try rephrasing, e.g.:\n"
+                                 "- 'move item 123 to tomorrow'\n"
+                                 "- 'snooze item 123 20'"
+                             )
+                             return jsonify({"reply": reply, "agent_status": {}, "request_id": request_id})
+
+                        # Handle Clarification
+                        if proposal.get("need_clarification"):
+                            candidates = proposal.get("candidates", [])
+                            CLARIFICATION_CACHE[user_id] = {
+                                "candidates": candidates,
+                                "request": user_request,
+                                "created_at": datetime.now(timezone.utc).timestamp(),
+                                "plan_date": local_today.isoformat(),
+                                "request_id": request_id
+                            }
+                            lines = ["Which item did you mean?"]
+                            for i, c in enumerate(candidates, 1):
+                                lines.append(f"{i}) [{c['item_id']}] {c['label']}")
+                            lines.append("\nReply: '/use <number>' or '/propose ai ... item <id>'")
+                            return jsonify({"reply": "\n".join(lines), "agent_status": {}, "request_id": request_id})
+                        
+                        # Server-side Cap for AI Proposals
+                        ops = proposal.get("ops", [])
+                        if len(ops) > 5:
+                            return jsonify({"reply": f"Too many steps for one AI proposal ({len(ops)}). Please break it into smaller requests.", "agent_status": {}, "request_id": request_id})
+                             
+                        # Save
+                        result = _save_proposal(user_id, proposal)
+                        if result["status"] == "created":
+                            # Auto-preview
+                            preview_text = _format_proposal_preview(plan, proposal)
+                            reply = (
+                                f"Created AI proposal {result['proposal_id']}: {proposal['title']}\n"
+                                f"{proposal['summary']}\n\n"
+                                f"{preview_text}\n\n"
+                                f"Use '/accept {result['proposal_id']}' to apply, or '/reject {result['proposal_id']}' to discard."
+                            )
+                        elif result["status"] == "duplicate":
+                            reply = f"Proposal already pending: {proposal['summary']}"
+                        else:
+                            reply = "Failed to save proposal."
+                            
+                        return jsonify({"reply": reply, "agent_status": {}, "request_id": request_id})
+
+                    except Exception as e:
+                        logger.error(f"Command /propose ai failed: {e}", exc_info=True)
+                        return jsonify({"reply": "An error occurred while generating the proposal.", "agent_status": {}, "request_id": request_id})
+
+                # Deterministic Branch (Existing)
+                try:
+                    proposal = _parse_propose_text_to_ops(user_id, propose_text)
+                    if not proposal:
+                        reply = f"Could not parse intent '{propose_text}'. Try 'start next', 'snooze', 'move <item>', or 'complete <item>'."
+                    else:
+                        result = _save_proposal(user_id, proposal)
+                        if result["status"] == "created":
+                            reply = f"Created proposal {result['proposal_id']}: {proposal['summary']}\nUse '/accept {result['proposal_id']}' to apply."
+                        elif result["status"] == "duplicate":
+                            reply = f"Proposal already pending: {proposal['summary']}"
+                        else:
+                            reply = "Failed to create proposal."
+                    
+                    return jsonify({
+                        "reply": reply,
+                        "agent_status": {},
+                        "request_id": request_id
+                    })
+                except Exception as e:
+                    logger.error(f"Command /propose failed: {e}")
+                    return jsonify({
+                        "reply": "Failed to process proposal.",
+                        "agent_status": {},
+                        "request_id": request_id
+                    })
+
         def _should_persist_chat() -> bool:
             if not user_id:
                 return False
@@ -4619,6 +5289,78 @@ def get_today_brief():
 # PROPOSALS (Confirm-gated suggestions)
 # ---------------------------------------------------------------------------
 
+def _recover_stale_proposals(user_id: str):
+    with get_connection() as conn:
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    UPDATE suggestions 
+                    SET status = 'pending' 
+                    WHERE user_id = %s 
+                      AND kind = 'plan_proposal' 
+                      AND status = 'applying' 
+                      AND created_at < NOW() - INTERVAL '10 minutes'
+                    """,
+                    (user_id,)
+                )
+                if cursor.rowcount > 0:
+                    conn.commit()
+                    logging.getLogger("API").warning(f"Recovered {cursor.rowcount} stale applying proposals for user {user_id}")
+        except Exception as e:
+            logging.getLogger("API").error(f"Failed to recover stale proposals: {e}")
+
+def _list_proposals_core(user_id: str, plan_date_str: str) -> List[Dict]:
+    _recover_stale_proposals(user_id)
+    suggestions = suggestions_repository.list_suggestions(
+        user_id=user_id,
+        status="pending",
+        kind="plan_proposal",
+        limit=100
+    )
+    filtered = []
+    for s in suggestions:
+        payload = s.get("payload") or {}
+        if payload.get("plan_date") == plan_date_str:
+            filtered.append({
+                "proposal_id": s["id"],
+                "created_at": s["created_at"],
+                "title": payload.get("title"),
+                "summary": payload.get("summary"),
+                "ops": payload.get("ops", []),
+                "plan_date": payload.get("plan_date")
+            })
+    return filtered
+
+def _get_last_pending_proposals(user_id: str, plan_date_str: str, limit: int = 3) -> List[Dict]:
+    """
+    Retrieve the most recent pending proposals for the given plan date.
+    Ordered by ID descending (proxy for creation time).
+    """
+    _recover_stale_proposals(user_id)
+    suggestions = suggestions_repository.list_suggestions(
+        user_id=user_id,
+        status="pending",
+        kind="plan_proposal",
+        limit=100 # Fetch enough to filter by date
+    )
+    
+    # Filter by plan_date and sort by ID desc
+    filtered = []
+    for s in suggestions:
+        payload = s.get("payload") or {}
+        if payload.get("plan_date") == plan_date_str:
+            filtered.append({
+                "proposal_id": s["id"],
+                "title": payload.get("title"),
+                "summary": payload.get("summary"),
+                "created_at": s["created_at"]
+            })
+            
+    # Sort by ID descending (newest first)
+    filtered.sort(key=lambda x: x["proposal_id"], reverse=True)
+    return filtered[:limit]
+
 @app.route("/api/proposals", methods=["GET"])
 @require_auth
 def list_proposals():
@@ -4628,31 +5370,9 @@ def list_proposals():
     plan_date_str = request.args.get("plan_date")
     if not plan_date_str:
         return api_error("VALIDATION_ERROR", "plan_date is required", 400)
-        
-    # Filter by plan_date in payload
-    suggestions = suggestions_repository.list_suggestions(
-        user_id=user_id,
-        status="pending",
-        kind="plan_proposal",
-        limit=100
-    )
-    
-    # Filter in memory for now (low volume expected)
-    filtered = []
-    for s in suggestions:
-        payload = s.get("payload") or {}
-        if payload.get("plan_date") == plan_date_str:
-            # Flatten for UI
-            filtered.append({
-                "proposal_id": s["id"],
-                "created_at": s["created_at"],
-                "title": payload.get("title"),
-                "summary": payload.get("summary"),
-                "ops": payload.get("ops", []),
-                "plan_date": payload.get("plan_date")
-            })
-            
-    return jsonify({"proposals": filtered})
+
+    proposals = _list_proposals_core(user_id, plan_date_str)
+    return jsonify({"proposals": proposals})
 
 
 def _get_local_today(user_id: str) -> date:
@@ -4664,54 +5384,459 @@ def _get_local_today(user_id: str) -> date:
     tz = ZoneInfo("Europe/London")
     return datetime.now(tz).date()
 
-@app.route("/api/proposals/generate", methods=["POST"])
-@require_auth
-def generate_proposals():
-    user_id, error = _get_user_id_or_error()
-    if error: return error
+def _format_proposal_preview(plan: Dict, proposal_payload: Dict) -> str:
+    """
+    Generates a read-only preview string for a proposal payload against a plan.
+    """
+    # Flatten items for lookup
+    all_items = {}
+    if plan and "sections" in plan:
+        for items in plan["sections"].values():
+            if isinstance(items, list):
+                for it in items:
+                    all_items[it["id"]] = it
+
+    ops = proposal_payload.get("ops", [])
+    preview_lines = [f"Ops: {len(ops)}"]
     
-    data = request.json or {}
-    plan_date_str = data.get("plan_date")
+    for op in ops:
+        item_id = op.get("item_id")
+        item = all_items.get(item_id)
+        item_label = item.get("label", item_id) if item else item_id
+        op_type = op.get("op")
+        
+        if not item:
+            preview_lines.append(f"- [WARN] Item {item_id} not found in today's plan.")
+            continue
+
+        if op_type == "set_status":
+            old_status = item.get("status", "unknown")
+            new_status = op.get("status")
+            preview_lines.append(f"- {item_label}: status {old_status} -> {new_status}")
+        elif op_type == "snooze":
+            minutes = op.get("minutes", 60)
+            preview_lines.append(f"- {item_label}: snooze +{minutes}m")
+        elif op_type == "reschedule":
+            preview_lines.append(f"- {item_label}: reschedule to tomorrow")
+        else:
+            preview_lines.append(f"- {item_label}: {op_type} (unknown op)")
+            
+    return "\n".join(preview_lines)
+
+def _validate_and_parse_alternatives(raw_json: str, plan_item_ids: List[str]) -> Tuple[Optional[Dict], Optional[str]]:
+    """
+    Wrapper to parse alternatives or clarification.
+    Returns ({ "alternatives": [...], "need_clarification": ... }, error).
+    """
+    try:
+        cleaned = raw_json.strip()
+        if cleaned.startswith("```"):
+            lines = cleaned.splitlines()
+            if lines[0].startswith("```"): lines = lines[1:]
+            if lines and lines[-1].startswith("```"): lines = lines[:-1]
+            cleaned = "\n".join(lines).strip()
+        
+        if not cleaned.startswith("{"): return None, "NON_JSON"
+        data = json.loads(cleaned)
+        
+        # Clarification check
+        if data.get("need_clarification"):
+            # Reuse existing validator logic by passing raw json
+            return _validate_and_parse_llm_proposal(raw_json, plan_item_ids)
+            
+        # Alternatives check
+        alts = data.get("alternatives")
+        if not isinstance(alts, list) or not (1 <= len(alts) <= 2):
+            return None, "VALIDATION_ERROR: alternatives must be list of 1-2 items"
+            
+        valid_alts = []
+        for i, alt in enumerate(alts):
+            # Validate each as a standalone proposal
+            # We re-serialize to reuse the strict validator (inefficient but safe/DRY)
+            alt_json = json.dumps(alt)
+            prop, err = _validate_and_parse_llm_proposal(alt_json, plan_item_ids)
+            if prop:
+                valid_alts.append(prop)
+            else:
+                # If one fails, we skip it. If all fail, we return error.
+                pass
+                
+        if not valid_alts:
+            return None, "VALIDATION_ERROR: No valid alternatives found"
+            
+        return { "alternatives": valid_alts }, None
+        
+    except Exception as e:
+        return None, f"EXCEPTION: {str(e)}"
+
+def _build_plan_context_for_llm(plan: Dict) -> Tuple[str, List[str]]:
+    """
+    Constructs a compact text representation of the current plan for the LLM.
+    Returns (context_string, list_of_valid_ids).
+    Truncates to N=40 items to save tokens.
+    """
+    lines = []
+    valid_ids = []
+    count = 0
+    if "sections" in plan:
+        for section_name, items in plan["sections"].items():
+            if isinstance(items, list):
+                for item in items:
+                    if count >= 40:
+                        break
+                    status = item.get("status", "planned")
+                    label = item.get("label", "Untitled")
+                    item_id = item.get("id")
+                    if item_id:
+                        valid_ids.append(str(item_id))
+                        lines.append(f"- [{item_id}] {label} ({status}, {section_name})")
+                        count += 1
+            if count >= 40:
+                break
+    if not lines:
+        return "Plan is empty.", []
+    return "\n".join(lines), valid_ids
+
+def _validate_and_parse_llm_proposal(raw_json: str, plan_item_ids: List[str]) -> Tuple[Optional[Dict], Optional[str]]:
+    """
+    Parses LLM JSON output and validates against strict safety rules.
+    Returns (valid_proposal_dict, error_code_string).
+    If success, error_code is None.
+    If failure, proposal is None and error_code describes why (NON_JSON, JSON_PARSE_ERROR, VALIDATION_ERROR:...).
+    """
+    try:
+        # 1. Clean and Parse
+        cleaned = raw_json.strip()
+        # Remove markdown fences if present
+        if cleaned.startswith("```"):
+            lines = cleaned.splitlines()
+            if lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].startswith("```"):
+                lines = lines[:-1]
+            cleaned = "\n".join(lines).strip()
+        
+        # Deterministic non-JSON reject
+        if not cleaned.startswith("{"):
+            return None, "NON_JSON"
+            
+        try:
+            data = json.loads(cleaned)
+        except json.JSONDecodeError:
+            return None, "JSON_PARSE_ERROR"
+        
+        # 2. Structure Check
+        if not isinstance(data, dict): return None, "VALIDATION_ERROR: Root must be object"
+
+        # Clarification Branch
+        if data.get("need_clarification") is True:
+            candidates = data.get("candidates")
+            if not isinstance(candidates, list): return None, "VALIDATION_ERROR: candidates must be list"
+            
+            valid_candidates = []
+            for c in candidates:
+                if isinstance(c, dict) and str(c.get("item_id")) in plan_item_ids:
+                    valid_candidates.append({
+                        "item_id": c.get("item_id"),
+                        "label": str(c.get("label", ""))[:60]
+                    })
+            
+            if not valid_candidates:
+                return None, "VALIDATION_ERROR: No valid candidates provided"
+                
+            return {
+                "need_clarification": True,
+                "candidates": valid_candidates[:5],
+                "title": "Clarification Needed",
+                "summary": str(data.get("summary", "Please clarify item")),
+                "ops": []
+            }, None
+
+        title = str(data.get("title", "")).strip()
+        summary = str(data.get("summary", "")).strip()
+        ops = data.get("ops")
+        
+        if not title or len(title) > 80: return None, "VALIDATION_ERROR: Title missing or too long (>80)"
+        if not summary or len(summary) > 240: return None, "VALIDATION_ERROR: Summary missing or too long (>240)"
+        if not isinstance(ops, list) or not (1 <= len(ops) <= 10): return None, "VALIDATION_ERROR: Ops must be list of 1-10 items"
+        
+        # 3. Op Validation
+        valid_ops = []
+        allowed_ops = {"set_status", "snooze", "reschedule"}
+        allowed_statuses = {"planned", "in_progress", "complete", "skipped"}
+        
+        for i, op in enumerate(ops):
+            if not isinstance(op, dict): return None, f"VALIDATION_ERROR: Op {i} is not an object"
+            op_type = op.get("op")
+            item_id = op.get("item_id")
+            
+            if op_type not in allowed_ops: return None, f"VALIDATION_ERROR: Op {i} type '{op_type}' invalid"
+            
+            # Normalize ID for check
+            str_id = str(item_id)
+            if str_id not in plan_item_ids: return None, f"VALIDATION_ERROR: Op {i} item_id '{item_id}' not in today's plan"
+            
+            # Prefer int if it looks like one (for downstream compatibility)
+            if str_id.isdigit():
+                op["item_id"] = int(str_id)
+            
+            # Strict Schema Enforcement
+            keys = set(op.keys())
+            if op_type == "set_status":
+                if keys != {"op", "item_id", "status"}: return None, f"VALIDATION_ERROR: Op {i} (set_status) has invalid keys {keys}"
+                if op.get("status") not in allowed_statuses: return None, f"VALIDATION_ERROR: Op {i} status '{op.get('status')}' invalid"
+            elif op_type == "snooze":
+                if keys != {"op", "item_id", "minutes"}: return None, f"VALIDATION_ERROR: Op {i} (snooze) has invalid keys {keys}"
+                mins = op.get("minutes")
+                if not isinstance(mins, int) or not (5 <= mins <= 240): return None, f"VALIDATION_ERROR: Op {i} snooze minutes invalid (5-240)"
+            elif op_type == "reschedule":
+                if keys != {"op", "item_id", "to"}: return None, f"VALIDATION_ERROR: Op {i} (reschedule) has invalid keys {keys}"
+                target = op.get("to")
+                if target not in {"tomorrow", "later_today"}: return None, f"VALIDATION_ERROR: Op {i} reschedule.to must be 'tomorrow' or 'later_today'"
+                
+            valid_ops.append(op)
+            
+        return {
+            "title": title,
+            "summary": summary,
+            "ops": valid_ops
+        }, None
+        
+    except Exception as e:
+        return None, f"UNKNOWN_ERROR: {str(e)}"
+
+def _generate_llm_proposal_with_retry(llm, user_prompt: str, system_prompt: str) -> Tuple[str, int]:
+    """
+    Generates proposal with a single deterministic retry for JSON failures.
+    Returns (raw_response, attempt_count).
+    """
+    # Attempt 1: Standard
+    raw = llm.generate(user_prompt, system_prompt=system_prompt, temperature=0.2, max_tokens=1000)
     
+    # Quick check for obvious JSON failure (heuristic)
+    cleaned = raw.strip()
+    if cleaned.startswith("```"):
+        lines = cleaned.splitlines()
+        if lines[0].startswith("```"): lines = lines[1:]
+        if lines and lines[-1].startswith("```"): lines = lines[:-1]
+        cleaned = "\n".join(lines).strip()
+        
+    is_json_like = cleaned.startswith("{")
+    can_parse = False
+    if is_json_like:
+        try:
+            json.loads(cleaned)
+            can_parse = True
+        except:
+            pass
+            
+    if is_json_like and can_parse:
+        return raw, 1
+        
+    # Attempt 2: Strict Retry
+    retry_prompt = system_prompt + "\n\nCRITICAL: Your previous response was invalid JSON. Return a single valid JSON object only. No markdown. No prose."
+    raw_retry = llm.generate(user_prompt, system_prompt=retry_prompt, temperature=0.0, max_tokens=1000)
+    return raw_retry, 2
+
+def _parse_propose_text_to_ops(user_id: str, text: str) -> Optional[Dict]:
+    """
+    Parses natural language intent into a structured proposal.
+    Supported intents:
+    - "start next": Start the first planned item.
+    - "complete <item>": Complete an item.
+    - "snooze <item>": Snooze an item (default 60 mins if not specified).
+    - "move <item>": Reschedule an item (to tomorrow if not specified).
+    """
+    text = text.strip().lower()
+    comps = get_agent_components()
+    othello_engine = comps["othello_engine"]
+    
+    # Ensure we work on the user's local today
     local_today = _get_local_today(user_id)
     
-    if plan_date_str:
-        try:
-            plan_date = date.fromisoformat(plan_date_str)
-        except ValueError:
-            return api_error("VALIDATION_ERROR", "Invalid plan_date format (expected YYYY-MM-DD)", 400)
-    else:
-        plan_date = local_today
-        plan_date_str = plan_date.isoformat()
+    # We need the plan to resolve items
+    plan = othello_engine.day_planner.get_today_plan(
+        user_id, 
+        force_regen=False,
+        plan_date=local_today
+    )
+    if not plan:
+        return None
+        
+    # Flatten items for searching
+    all_items = []
+    if "sections" in plan:
+        for items in plan["sections"].values():
+            if isinstance(items, list):
+                all_items.extend(items)
+    
+    # Helper to find item by fuzzy match
+    def find_item(query):
+        # 1. Exact ID match
+        for item in all_items:
+            if item["id"] == query:
+                return item
+        # 2. Label contains query
+        for item in all_items:
+            if query in item.get("label", "").lower():
+                return item
+        return None
 
-    # 1. Read-only Guard
+    ops = []
+    title = ""
+    summary = ""
+    
+    # Intent: Start Next
+    if text == "start next":
+        next_action = None
+        for item in all_items:
+            if item.get("status") == "planned":
+                next_action = item
+                break
+        if next_action:
+            title = "Start Next Action"
+            summary = f"Mark '{next_action.get('label')}' as in progress"
+            ops.append({
+                "op": "set_status",
+                "item_id": next_action["id"],
+                "status": "in_progress"
+            })
+        else:
+            return None # No next action found
+
+    # Intent: Complete
+    elif text.startswith("complete "):
+        query = text[9:].strip()
+        target = find_item(query)
+        if target:
+            title = "Complete Item"
+            summary = f"Mark '{target.get('label')}' as complete"
+            ops.append({
+                "op": "set_status",
+                "item_id": target["id"],
+                "status": "complete"
+            })
+        else:
+            return None # Item not found
+
+    # Intent: Snooze
+    elif text.startswith("snooze"):
+        query = text[6:].strip()
+        target = None
+        if not query:
+            # Find in_progress
+            for item in all_items:
+                if item.get("status") == "in_progress":
+                    target = item
+                    break
+            # If no in_progress, find next planned
+            if not target:
+                for item in all_items:
+                    if item.get("status") == "planned":
+                        target = item
+                        break
+        else:
+            target = find_item(query)
+            
+        if target:
+            title = "Snooze Item"
+            summary = f"Snooze '{target.get('label')}' for 60m"
+            ops.append({
+                "op": "snooze",
+                "item_id": target["id"],
+                "minutes": 60 # Default
+            })
+        else:
+            return None
+
+    # Intent: Move (Reschedule)
+    elif text.startswith("move "):
+        query = text[5:].strip()
+        target = find_item(query)
+        if target:
+            title = "Move Item"
+            summary = f"Move '{target.get('label')}' to tomorrow"
+            ops.append({
+                "op": "reschedule",
+                "item_id": target["id"],
+                "status": "rescheduled",
+            })
+        else:
+            return None
+            
+    else:
+        return None
+
+    if not ops:
+        return None
+        
+    return {
+        "plan_date": local_today.isoformat(),
+        "title": title,
+        "summary": summary,
+        "ops": ops
+    }
+
+def _save_proposal(user_id: str, proposal: Dict) -> Dict:
+    """Persists a single proposal if not already pending."""
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            # Check for identical pending proposal
+            cursor.execute(
+                "SELECT payload FROM suggestions WHERE user_id = %s AND status = 'pending' AND kind = 'plan_proposal'",
+                (user_id,)
+            )
+            existing_rows = cursor.fetchall()
+            
+            def _compute_hash(p_payload):
+                canonical = {
+                    "plan_date": p_payload.get("plan_date"),
+                    "ops": p_payload.get("ops", [])
+                }
+                s = json.dumps(canonical, sort_keys=True)
+                return hashlib.sha256(s.encode("utf-8")).hexdigest()
+
+            new_hash = _compute_hash(proposal)
+            for row in existing_rows:
+                if _compute_hash(row[0] or {}) == new_hash:
+                    return {"status": "duplicate", "message": "Identical proposal already pending."}
+
+            cursor.execute(
+                """
+                INSERT INTO suggestions (user_id, kind, status, payload, provenance, created_at)
+                VALUES (%s, %s, %s, %s, %s, NOW())
+                RETURNING id
+                """,
+                (user_id, "plan_proposal", "pending", json.dumps(proposal), json.dumps({"generated_by": "user_command"}))
+            )
+            new_id = cursor.fetchone()[0]
+            conn.commit()
+            return {"status": "created", "proposal_id": new_id}
+
+def _generate_proposals_core(user_id: str, plan_date: date) -> List[Dict]:
+    local_today = _get_local_today(user_id)
     if plan_date != local_today:
-        return api_error("READ_ONLY_MODE", "Cannot generate proposals for past/future dates", 403)
+        raise ValueError("READ_ONLY_MODE: Cannot generate proposals for past/future dates")
 
     comps = get_agent_components()
     othello_engine = comps["othello_engine"]
     
-    # 2. Load plan (read-only)
     plan = othello_engine.day_planner.get_today_plan(
         user_id,
         plan_date=plan_date,
         force_regen=False
     )
     if not plan:
-        return jsonify({"proposals": []})
+        return []
         
-    # 3. Generate proposals (pure logic, no mutation)
     new_proposals = []
     
-    # Proposal A: Start next action
-    # Find first item that is planned
     sections = plan.get("sections", {})
     all_items = []
     for k, items in sections.items():
         if isinstance(items, list):
             all_items.extend(items)
             
-    # Sort by order/time if possible, but for now just take first 'planned'
     next_action = None
     for item in all_items:
         if item.get("status") == "planned":
@@ -4720,7 +5845,7 @@ def generate_proposals():
             
     if next_action:
         new_proposals.append({
-            "plan_date": plan_date_str,
+            "plan_date": plan_date.isoformat(),
             "title": "Start Next Action",
             "summary": f"Mark '{next_action.get('title') or 'Next Item'}' as in progress",
             "ops": [
@@ -4728,16 +5853,15 @@ def generate_proposals():
             ]
         })
 
-    # Proposal B: Normalize overdue
-    # Find items with reschedule_to < plan_date
     overdue_ops = []
+    plan_date_str = plan_date.isoformat()
     for item in all_items:
         reschedule_to = item.get("reschedule_to")
         if reschedule_to and reschedule_to < plan_date_str and item.get("status") == "planned":
             overdue_ops.append({
                 "op": "reschedule", 
                 "item_id": item["id"], 
-                "reschedule_to": None, # Clear it
+                "reschedule_to": None, 
                 "status": "planned"
             })
             if len(overdue_ops) >= 3: break
@@ -4750,13 +5874,10 @@ def generate_proposals():
             "ops": overdue_ops
         })
 
-    # 4. Dedupe & Persist (Transactional)
     created = []
     with get_connection() as conn:
         try:
             with conn.cursor() as cursor:
-                # Fetch existing pending proposals to check against (FOR UPDATE to prevent race)
-                # Note: We lock the user's pending suggestions to ensure we don't insert duplicates
                 cursor.execute(
                     "SELECT payload FROM suggestions WHERE user_id = %s AND status = 'pending' AND kind = 'plan_proposal' FOR UPDATE",
                     (user_id,)
@@ -4764,7 +5885,6 @@ def generate_proposals():
                 existing_rows = cursor.fetchall()
                 
                 def _compute_hash(p_payload):
-                    # Stable hash of relevant fields
                     canonical = {
                         "plan_date": p_payload.get("plan_date"),
                         "ops": p_payload.get("ops", [])
@@ -4781,7 +5901,6 @@ def generate_proposals():
                     if p_hash in existing_hashes:
                         continue
                         
-                    # Insert new proposal
                     cursor.execute(
                         """
                         INSERT INTO suggestions (user_id, kind, status, payload, provenance, created_at)
@@ -4803,27 +5922,45 @@ def generate_proposals():
         except Exception as e:
             conn.rollback()
             logging.getLogger("API").error(f"Failed to generate proposals: {e}", exc_info=True)
-            return api_error("GENERATE_FAILED", str(e), 500)
+            raise e
         
-    return jsonify({"proposals": created})
+    return created
 
-
-@app.route("/api/proposals/apply", methods=["POST"])
+@app.route("/api/proposals/generate", methods=["POST"])
 @require_auth
-def apply_proposal():
+def generate_proposals():
     user_id, error = _get_user_id_or_error()
     if error: return error
     
     data = request.json or {}
-    proposal_id = data.get("proposal_id")
-    if not proposal_id:
-        return api_error("VALIDATION_ERROR", "proposal_id required", 400)
-        
+    plan_date_str = data.get("plan_date")
+    
+    local_today = _get_local_today(user_id)
+    
+    if plan_date_str:
+        try:
+            plan_date = date.fromisoformat(plan_date_str)
+        except ValueError:
+            return api_error("VALIDATION_ERROR", "Invalid plan_date format (expected YYYY-MM-DD)", 400)
+    else:
+        plan_date = local_today
+
+    try:
+        created = _generate_proposals_core(user_id, plan_date)
+        return jsonify({"proposals": created})
+    except ValueError as ve:
+        if "READ_ONLY_MODE" in str(ve):
+            return api_error("READ_ONLY_MODE", str(ve), 403)
+        return api_error("VALIDATION_ERROR", str(ve), 400)
+    except Exception as e:
+        return api_error("GENERATE_FAILED", str(e), 500)
+
+
+def _apply_proposal_core(user_id: str, proposal_id: int) -> tuple[bool, str, Optional[str]]:
     comps = get_agent_components()
     othello_engine = comps["othello_engine"]
     local_today = _get_local_today(user_id)
 
-    # Phase 1: Lock & Validate & Mark Applying
     ops_to_apply = []
     plan_date_str = None
     
@@ -4832,38 +5969,36 @@ def apply_proposal():
             with conn.cursor() as cursor:
                 # 1. Lock & Check
                 cursor.execute(
-                    "SELECT id, status, payload FROM suggestions WHERE id = %s AND user_id = %s FOR UPDATE",
+                    "SELECT id, status, payload FROM suggestions WHERE id = %s AND user_id = %s AND kind = 'plan_proposal' FOR UPDATE",
                     (proposal_id, user_id)
                 )
                 row = cursor.fetchone()
                 if not row:
-                    return api_error("NOT_FOUND", "Proposal not found", 404)
+                    return False, "NOT_FOUND", "Proposal not found"
                 
                 s_id, status, payload = row
                 if status == "applying":
-                    # Retry-safe: if it's applying, we can't re-apply yet.
-                    # In a more complex system we might check timeout, but here we just block.
-                    return api_error("CONFLICT", "Proposal is currently being applied", 409)
+                    return False, "CONFLICT", "Proposal is currently being applied"
                 
                 if status != "pending":
-                    return jsonify({"ok": True, "status": status, "message": "Already decided", "proposal_id": proposal_id})
+                    return True, status, "Already decided"
                 
                 # 2. Read-only Guard
                 plan_date_str = payload.get("plan_date")
                 if not plan_date_str:
-                     return api_error("VALIDATION_ERROR", "Proposal missing plan_date", 400)
+                     return False, "VALIDATION_ERROR", "Proposal missing plan_date"
                 
                 try:
                     plan_date = date.fromisoformat(plan_date_str)
                 except ValueError:
-                    return api_error("VALIDATION_ERROR", "Invalid plan_date format", 400)
+                    return False, "VALIDATION_ERROR", "Invalid plan_date format"
 
                 if plan_date != local_today:
-                    return api_error("READ_ONLY_MODE", "Cannot apply proposals for past/future dates", 403)
+                    return False, "READ_ONLY_MODE", "Cannot apply proposals for past/future dates"
 
                 # 3. Validate Ops (Allowlist + Required Fields)
                 ops = payload.get("ops", [])
-                allowed_ops = {"set_status", "reschedule"}
+                allowed_ops = {"set_status", "reschedule", "snooze"}
                 allowed_statuses = {"planned", "in_progress", "complete", "skipped", "rescheduled"}
                 
                 # Pre-fetch plan items to validate existence
@@ -4878,24 +6013,25 @@ def apply_proposal():
                 for op in ops:
                     op_type = op.get("op")
                     if not op_type or op_type not in allowed_ops:
-                        return api_error("INVALID_OP", f"Unknown or missing op type: {op_type}", 400)
+                        return False, "INVALID_OP", f"Unknown or missing op type: {op_type}"
                     
                     item_id = op.get("item_id")
                     if not item_id:
-                        return api_error("INVALID_OP", "Missing item_id", 400)
+                        return False, "INVALID_OP", "Missing item_id"
                     if item_id not in plan_item_ids:
-                        return api_error("INVALID_OP", f"Item {item_id} not found in today's plan", 400)
+                        return False, "INVALID_OP", f"Item {item_id} not found in today's plan"
                         
                     target_status = op.get("status")
                     if op_type == "set_status":
                         if not target_status or target_status not in allowed_statuses:
-                            return api_error("INVALID_OP", f"Invalid status: {target_status}", 400)
+                            return False, "INVALID_OP", f"Invalid status: {target_status}"
                     elif op_type == "reschedule":
-                        # Reschedule might have status 'rescheduled' or 'planned'
                         if target_status and target_status not in allowed_statuses:
-                             return api_error("INVALID_OP", f"Invalid status: {target_status}", 400)
-                        # Reschedule usually requires reschedule_to or clearing it (None)
-                        # We allow None to clear it.
+                             return False, "INVALID_OP", f"Invalid status: {target_status}"
+                    elif op_type == "snooze":
+                        minutes = op.get("minutes")
+                        if minutes is not None and not isinstance(minutes, int):
+                             return False, "INVALID_OP", "Snooze minutes must be an integer"
 
                 ops_to_apply = ops
                 
@@ -4909,11 +6045,9 @@ def apply_proposal():
         except Exception as e:
             conn.rollback()
             logging.getLogger("API").error(f"Failed to validate/lock proposal {proposal_id}: {e}", exc_info=True)
-            if isinstance(e, HTTPException): raise e
-            return api_error("APPLY_FAILED", str(e), 500)
+            return False, "APPLY_FAILED", str(e)
 
     # Phase 2: Execute Ops (External Commits)
-    # If this fails, we must revert status in Phase 3
     apply_error = None
     try:
         for op in ops_to_apply:
@@ -4934,6 +6068,13 @@ def apply_proposal():
                     plan_date=plan_date_str,
                     reschedule_to=op.get("reschedule_to")
                 )
+            elif op_type == "snooze":
+                othello_engine.day_planner.snooze_plan_item(
+                    user_id,
+                    item_id,
+                    op.get("minutes", 60),
+                    plan_date=plan_date_str
+                )
     except Exception as e:
         apply_error = e
         logging.getLogger("API").error(f"Failed to execute ops for proposal {proposal_id}: {e}", exc_info=True)
@@ -4943,7 +6084,7 @@ def apply_proposal():
         try:
             with conn.cursor() as cursor:
                 cursor.execute(
-                    "SELECT id, status FROM suggestions WHERE id = %s AND user_id = %s FOR UPDATE",
+                    "SELECT id, status FROM suggestions WHERE id = %s AND user_id = %s AND kind = 'plan_proposal' FOR UPDATE",
                     (proposal_id, user_id)
                 )
                 row = cursor.fetchone()
@@ -4951,8 +6092,6 @@ def apply_proposal():
                     s_id, status = row
                     if status == "applying":
                         if apply_error:
-                            # Revert to pending (or rejected? pending allows retry)
-                            # Let's revert to pending so user can try again or we can debug
                             cursor.execute(
                                 "UPDATE suggestions SET status = 'pending' WHERE id = %s",
                                 (s_id,)
@@ -4966,15 +6105,80 @@ def apply_proposal():
         except Exception as e:
             conn.rollback()
             logging.getLogger("API").error(f"Failed to finalize proposal {proposal_id}: {e}", exc_info=True)
-            # If we succeeded in ops but failed to mark accepted, it's a weird state.
-            # But 'applying' status will block further attempts until cleared/timeout.
-            return api_error("APPLY_FINALIZE_FAILED", str(e), 500)
+            return False, "APPLY_FINALIZE_FAILED", str(e)
 
     if apply_error:
-        return api_error("APPLY_EXECUTION_FAILED", str(apply_error), 500)
+        return False, "APPLY_EXECUTION_FAILED", str(apply_error)
     
-    return jsonify({"ok": True, "proposal_id": proposal_id, "status": "accepted", "plan_date": plan_date_str})
+    return True, "accepted", plan_date_str
 
+@app.route("/api/proposals/apply", methods=["POST"])
+@require_auth
+def apply_proposal():
+    user_id, error = _get_user_id_or_error()
+    if error: return error
+    
+    data = request.json or {}
+    proposal_id = data.get("proposal_id")
+    if not proposal_id:
+        return api_error("VALIDATION_ERROR", "proposal_id required", 400)
+
+    ok, status, detail = _apply_proposal_core(user_id, proposal_id)
+    if not ok:
+        code = 500
+        if status in ("NOT_FOUND",): code = 404
+        elif status in ("CONFLICT",): code = 409
+        elif status in ("VALIDATION_ERROR", "INVALID_OP"): code = 400
+        elif status in ("READ_ONLY_MODE",): code = 403
+        return api_error(status, detail, code)
+        
+    return jsonify({"ok": True, "proposal_id": proposal_id, "status": status, "plan_date": detail})
+
+
+def _reject_proposal_core(user_id: str, proposal_id: int) -> tuple[bool, str, Optional[str]]:
+    local_today = _get_local_today(user_id)
+    
+    with get_connection() as conn:
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "SELECT id, status, payload FROM suggestions WHERE id = %s AND user_id = %s AND kind = 'plan_proposal' FOR UPDATE",
+                    (proposal_id, user_id)
+                )
+                row = cursor.fetchone()
+                if not row:
+                    return False, "NOT_FOUND", "Proposal not found"
+                
+                s_id, status, payload = row
+                if status == "applying":
+                    return False, "CONFLICT", "Proposal is currently being applied"
+                    
+                if status != "pending":
+                    return True, status, "Already decided"
+                
+                plan_date_str = payload.get("plan_date")
+                if not plan_date_str:
+                     return False, "VALIDATION_ERROR", "Proposal missing plan_date"
+                
+                try:
+                    plan_date = date.fromisoformat(plan_date_str)
+                except ValueError:
+                    return False, "VALIDATION_ERROR", "Invalid plan_date format"
+
+                if plan_date != local_today:
+                    return False, "READ_ONLY_MODE", "Cannot reject proposals for past/future dates"
+
+                cursor.execute(
+                    "UPDATE suggestions SET status = 'rejected', decided_at = NOW() WHERE id = %s",
+                    (s_id,)
+                )
+                conn.commit()
+        except Exception as e:
+            conn.rollback()
+            logging.getLogger("API").error(f"Failed to reject proposal {proposal_id}: {e}", exc_info=True)
+            return False, "REJECT_FAILED", str(e)
+
+    return True, "rejected", None
 
 @app.route("/api/proposals/reject", methods=["POST"])
 @require_auth
@@ -4986,54 +6190,17 @@ def reject_proposal():
     proposal_id = data.get("proposal_id")
     if not proposal_id:
         return api_error("VALIDATION_ERROR", "proposal_id required", 400)
-        
-    local_today = _get_local_today(user_id)
-    
-    with get_connection() as conn:
-        try:
-            with conn.cursor() as cursor:
-                cursor.execute(
-                    "SELECT id, status, payload FROM suggestions WHERE id = %s AND user_id = %s FOR UPDATE",
-                    (proposal_id, user_id)
-                )
-                row = cursor.fetchone()
-                if not row:
-                    return api_error("NOT_FOUND", "Proposal not found", 404)
-                
-                s_id, status, payload = row
-                if status == "applying":
-                    return api_error("CONFLICT", "Proposal is currently being applied", 409)
-                    
-                if status != "pending":
-                    return jsonify({"ok": True, "status": status, "message": "Already decided", "proposal_id": proposal_id})
-                
-                # Read-only Guard
-                plan_date_str = payload.get("plan_date")
-                if not plan_date_str:
-                     # If missing, we can't validate date, but maybe safe to reject? 
-                     # Let's be strict.
-                     return api_error("VALIDATION_ERROR", "Proposal missing plan_date", 400)
-                
-                try:
-                    plan_date = date.fromisoformat(plan_date_str)
-                except ValueError:
-                    return api_error("VALIDATION_ERROR", "Invalid plan_date format", 400)
 
-                if plan_date != local_today:
-                    return api_error("READ_ONLY_MODE", "Cannot reject proposals for past/future dates", 403)
+    ok, status, detail = _reject_proposal_core(user_id, proposal_id)
+    if not ok:
+        code = 500
+        if status in ("NOT_FOUND",): code = 404
+        elif status in ("CONFLICT",): code = 409
+        elif status in ("VALIDATION_ERROR",): code = 400
+        elif status in ("READ_ONLY_MODE",): code = 403
+        return api_error(status, detail, code)
 
-                cursor.execute(
-                    "UPDATE suggestions SET status = 'rejected', decided_at = NOW() WHERE id = %s",
-                    (s_id,)
-                )
-                conn.commit()
-        except Exception as e:
-            conn.rollback()
-            logging.getLogger("API").error(f"Failed to reject proposal {proposal_id}: {e}", exc_info=True)
-            if isinstance(e, HTTPException): raise e
-            return api_error("REJECT_FAILED", str(e), 500)
-
-    return jsonify({"ok": True, "proposal_id": proposal_id, "status": "rejected"})
+    return jsonify({"ok": True, "proposal_id": proposal_id, "status": status})
 
 
 # ---------------------------------------------------------------------------
