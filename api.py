@@ -765,6 +765,71 @@ def is_help_request(text: str) -> bool:
     return normalized in help_phrases
 
 
+def is_today_plan_request(text: str) -> bool:
+    if not text:
+        return False
+    normalized = re.sub(r"\s+", " ", text.strip().lower())
+    normalized = normalized.replace("?", "").replace("!", "").replace(".", "")
+    phrases = [
+        "whats todays plan",
+        "what is todays plan",
+        "what's todays plan",
+        "what is today's plan",
+        "what's today's plan",
+        "what is the plan today",
+        "what's the plan today",
+        "show today plan",
+        "show today's plan",
+        "show me today's plan",
+        "show me the plan today",
+        "do i have any plans",
+        "do i have any plan",
+        "do i have a plan",
+        "do i have plans",
+        "any plans today",
+        "what am i doing today",
+        "what am i doing",
+        "plan for today",
+        "today plan",
+        "my plan today",
+    ]
+    if any(phrase in normalized for phrase in phrases):
+        return True
+    if "plan" in normalized and "today" in normalized:
+        return normalized.startswith(("what", "do i", "show", "any", "is there"))
+    if normalized.startswith("do i have") and "plan" in normalized:
+        return True
+    return False
+
+
+def _format_today_plan_reply(plan: Dict[str, Any], brief: Optional[Dict[str, Any]], plan_date: date) -> str:
+    sections = plan.get("sections", {}) if isinstance(plan, dict) else {}
+    items: List[str] = []
+    for section_key in ("routines", "goal_tasks", "optional"):
+        for item in sections.get(section_key, []) or []:
+            label = (
+                item.get("label")
+                or item.get("name")
+                or item.get("title")
+                or (item.get("metadata") or {}).get("label")
+            )
+            if label:
+                items.append(str(label))
+    if not items:
+        return "No plan items for today yet. If you want, I can build a plan."
+    headline = ""
+    if isinstance(brief, dict):
+        headline = (brief.get("headline") or "").strip()
+    if not headline:
+        headline = f"Plan for {plan_date.isoformat()}"
+    lines = [headline, "", "Top items:"]
+    for label in items[:6]:
+        lines.append(f"- {label}")
+    if len(items) > 6:
+        lines.append(f"...and {len(items) - 6} more.")
+    return "\n".join(lines)
+
+
 def format_goal_list(goals) -> str:
     """
     Turn the GoalManager list into a human-friendly reply string.
@@ -4087,6 +4152,56 @@ def handle_message():
                         },
                     }
                     return _respond(response)
+
+
+        if user_id and is_chat_view and is_today_plan_request(user_input):
+            try:
+                local_today = _get_local_today(user_id)
+                comps = get_agent_components()
+                othello_engine = comps["othello_engine"]
+                plan = othello_engine.day_planner.get_today_plan(
+                    user_id,
+                    force_regen=False,
+                    plan_date=local_today,
+                )
+                brief = othello_engine.summarise_today_plan(plan) if isinstance(plan, dict) else {}
+                sections = plan.get("sections", {}) if isinstance(plan, dict) else {}
+                item_count = sum(
+                    len(sections.get(key, []) or [])
+                    for key in ("routines", "goal_tasks", "optional")
+                )
+                logger.info(
+                    "API: today-plan chat gate request_id=%s user_id=%s local_date=%s item_count=%s",
+                    request_id,
+                    user_id,
+                    local_today.isoformat(),
+                    item_count,
+                )
+                response = {
+                    "reply": _format_today_plan_reply(plan, brief, local_today),
+                    "agent_status": {"planner_active": False},
+                    "request_id": request_id,
+                    "meta": {
+                        "intent": "today_plan_brief",
+                        "plan_date": local_today.isoformat(),
+                        "item_count": item_count,
+                    },
+                }
+                return _respond(response)
+            except Exception as exc:
+                logger.error(
+                    "API: today-plan chat gate failed request_id=%s error=%s",
+                    request_id,
+                    type(exc).__name__,
+                    exc_info=True,
+                )
+                response = {
+                    "reply": "I couldn't load today's plan right now. Please try again in a moment.",
+                    "agent_status": {"planner_active": False},
+                    "request_id": request_id,
+                    "meta": {"intent": "today_plan_brief_failed"},
+                }
+                return _respond(response)
 
         if is_help_request(user_input):
             help_caps = get_help_capabilities(phase1_only=_PHASE1_ENABLED)
