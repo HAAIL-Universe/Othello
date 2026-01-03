@@ -11,7 +11,7 @@ async function login(page, accessCode) {
     await loginInput.fill(accessCode);
     await page.locator("#login-btn").click();
   }
-  await expect(page.getByRole("button", { name: "Chat" })).toBeVisible({ timeout: 20000 });
+  await expect(page.locator('button[data-view="chat"]')).toBeVisible({ timeout: 20000 });
   await expect(loginOverlay).toBeHidden({ timeout: 20000 });
 }
 
