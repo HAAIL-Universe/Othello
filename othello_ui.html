@@ -2768,7 +2768,9 @@
       todayPlannerGoalTasks: [],
       messagesByClientId: {},
       dismissedSuggestionIds: new Set(),
-      goalIntentSuggestions: {}
+      goalIntentSuggestions: {},
+      mobileEditorPinned: false,
+      mobileBackJustPressedAt: 0
     };
     let devResetEnabled = false;
 
@@ -7578,13 +7580,17 @@
         
         item.appendChild(titleRow);
         item.appendChild(meta);
-        item.onclick = () => selectRoutine(r.id, true);
+        item.onclick = () => {
+            othelloState.mobileEditorPinned = true;
+            selectRoutine(r.id, true);
+        };
         listEl.appendChild(item);
       });
     }
 
     // Mobile Navigation Helpers
     function openMobileEditor() {
+      if (Date.now() - (othelloState.mobileBackJustPressedAt || 0) < 750) return;
       if (window.innerWidth <= 768) {
         document.body.classList.add("routine-editor-open");
       }
@@ -7592,16 +7598,22 @@
 
     function closeMobileEditor() {
       document.body.classList.remove("routine-editor-open");
+      othelloState.mobileEditorPinned = false; // Unpin
+      othelloState.mobileBackJustPressedAt = Date.now(); // Guard against immediate reopen
       othelloState.activeRoutineId = null; // Deselect
       renderRoutineList(othelloState.routines); // Refresh list selection state
     }
     
     const mobileBackBtn = document.getElementById("routine-mobile-back-btn");
     if (mobileBackBtn) {
-      mobileBackBtn.onclick = closeMobileEditor;
+      mobileBackBtn.onclick = (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          closeMobileEditor();
+      };
     }
 
-    function selectRoutine(routineId, openOnMobile = true) {
+    function selectRoutine(routineId, openOnMobile = false) {
       othelloState.activeRoutineId = routineId;
       const routine = othelloState.routines.find(r => r.id === routineId);
       renderRoutineList(othelloState.routines); // update selection style
@@ -7610,7 +7622,8 @@
         document.getElementById("routine-empty-state").style.display = "none";
         document.getElementById("routine-editor").style.display = "flex";
         renderRoutineEditor(routine);
-        if (openOnMobile) openMobileEditor(); // Switch view on mobile
+        // Only open if explicitly requested AND pinned
+        if (openOnMobile && othelloState.mobileEditorPinned) openMobileEditor(); 
       } else {
         document.getElementById("routine-editor").style.display = "none";
         document.getElementById("routine-empty-state").style.display = "flex";
@@ -7702,7 +7715,11 @@
       
       const backBtn = document.getElementById("routine-mobile-back-btn");
       if (backBtn) {
-          backBtn.onclick = closeMobileEditor;
+          backBtn.onclick = (e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              closeMobileEditor();
+          };
       }
 
       document.getElementById("routine-delete-btn").onclick = () => deleteRoutine(routine.id);
@@ -8101,6 +8118,7 @@
         const resp = await fetch(`${ROUTINES_API}/${id}`, { method: "DELETE", credentials: "include" });
         if (resp.ok) {
           othelloState.activeRoutineId = null;
+          closeMobileEditor();
           await loadRoutinePlanner();
           showToast("Routine deleted", "success");
         } else {
@@ -8126,6 +8144,7 @@
           const data = await resp.json();
           othelloState.activeRoutineId = data.routine.id;
           await loadRoutinePlanner();
+          othelloState.mobileEditorPinned = true;
           openMobileEditor(); // Switch view on mobile
           
           // Scroll into view
@@ -8245,8 +8264,8 @@
             }
         }
         await fetchRoutines();
-        selectRoutine(newRoutine.id);
-        openMobileEditor(); // Switch view on mobile
+        othelloState.mobileEditorPinned = true;
+        selectRoutine(newRoutine.id, true);
         
         // Scroll into view
         setTimeout(() => {
