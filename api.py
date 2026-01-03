@@ -2202,7 +2202,7 @@ def v1_clear_data():
             invalid_scopes.append(scope)
             continue
         cleaned = scope.strip().lower()
-        if cleaned in ("goals", "plans", "insights", "history"):
+        if cleaned in ("goals", "plans", "insights", "history", "routines"):
             normalized_scopes.append(cleaned)
         else:
             invalid_scopes.append(scope)
@@ -2228,6 +2228,14 @@ def v1_clear_data():
                 deleted["plans"] = cursor.rowcount
                 cursor.execute("DELETE FROM goal_task_history WHERE user_id = %s", (user_id,))
                 deleted["goal_task_history"] = cursor.rowcount
+            if "routines" in normalized_scopes:
+                cursor.execute(
+                    "DELETE FROM routine_steps WHERE routine_id IN (SELECT id FROM routines WHERE user_id = %s)",
+                    (user_id,),
+                )
+                deleted["routine_steps"] = cursor.rowcount
+                cursor.execute("DELETE FROM routines WHERE user_id = %s", (user_id,))
+                deleted["routines"] = cursor.rowcount
             if "goals" in normalized_scopes:
                 if "plans" not in normalized_scopes:
                     cursor.execute(
