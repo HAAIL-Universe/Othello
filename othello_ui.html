@@ -1996,7 +1996,7 @@
             </div>
 
             <div style="flex: 1; display: flex; flex-direction: column;">
-              <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.8rem;">
+              <div id="routine-steps-header" style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.8rem;">
                 <span style="font-size: 0.95rem; font-weight: 600; color: var(--text-main);">Steps</span>
                 <button id="routine-add-step-btn" class="login-button" style="padding: 0.4rem 0.8rem; font-size: 0.85rem;">+ Add Step</button>
               </div>
@@ -7907,68 +7907,71 @@
       daysContainer.parentNode.insertBefore(extraContainer, daysContainer.nextSibling);
       
       // Steps Header
-      const stepsHeader = document.getElementById("routine-add-step-btn").parentNode;
-      stepsHeader.innerHTML = "";
-      
-      const headerLeft = document.createElement("div");
-      headerLeft.style.display = "flex";
-      headerLeft.style.alignItems = "center";
-      headerLeft.style.gap = "0.5rem";
+      const stepsHeader = document.getElementById("routine-steps-header");
+      if (stepsHeader) {
+          stepsHeader.innerHTML = "";
+          
+          const headerLeft = document.createElement("div");
+          headerLeft.style.display = "flex";
+          headerLeft.style.alignItems = "center";
+          headerLeft.style.gap = "0.5rem";
 
-      const stepsTitle = document.createElement("span");
-      stepsTitle.style.fontSize = "0.95rem";
-      stepsTitle.style.fontWeight = "600";
-      stepsTitle.style.color = "var(--text-main)";
-      stepsTitle.textContent = "Steps";
-      headerLeft.appendChild(stepsTitle);
+          const stepsTitle = document.createElement("span");
+          stepsTitle.style.fontSize = "0.95rem";
+          stepsTitle.style.fontWeight = "600";
+          stepsTitle.style.color = "var(--text-main)";
+          stepsTitle.textContent = "Steps";
+          headerLeft.appendChild(stepsTitle);
 
-      const stepCountBadge = document.createElement("span");
-      stepCountBadge.style.fontSize = "0.8rem";
-      stepCountBadge.style.color = "var(--text-soft)";
-      stepCountBadge.style.background = "var(--bg-1)";
-      stepCountBadge.style.padding = "0.1rem 0.4rem";
-      stepCountBadge.style.borderRadius = "10px";
-      stepCountBadge.textContent = (routine.steps || []).length;
-      headerLeft.appendChild(stepCountBadge);
-      
-      stepsHeader.appendChild(headerLeft);
+          const stepCountBadge = document.createElement("span");
+          stepCountBadge.style.fontSize = "0.8rem";
+          stepCountBadge.style.color = "var(--text-soft)";
+          stepCountBadge.style.background = "var(--bg-1)";
+          stepCountBadge.style.padding = "0.1rem 0.4rem";
+          stepCountBadge.style.borderRadius = "10px";
+          stepCountBadge.textContent = (routine.steps || []).length;
+          headerLeft.appendChild(stepCountBadge);
+          
+          stepsHeader.appendChild(headerLeft);
 
-      const headerRight = document.createElement("div");
-      headerRight.style.display = "flex";
-      headerRight.style.gap = "0.5rem";
-      headerRight.style.alignItems = "center";
+          const headerRight = document.createElement("div");
+          headerRight.style.display = "flex";
+          headerRight.style.gap = "0.5rem";
+          headerRight.style.alignItems = "center";
 
-      // Reorder Hint
-      if ((routine.steps || []).length > 1) {
-          const hint = document.createElement("span");
-          hint.textContent = "Use ▲/▼ to reorder";
-          hint.style.fontSize = "0.75rem";
-          hint.style.color = "var(--text-soft)";
-          hint.style.marginRight = "0.5rem";
-          headerRight.appendChild(hint);
+          // Reorder Hint
+          if ((routine.steps || []).length > 1) {
+              const hint = document.createElement("span");
+              hint.textContent = "Use ▲/▼ to reorder";
+              hint.style.fontSize = "0.75rem";
+              hint.style.color = "var(--text-soft)";
+              hint.style.marginRight = "0.5rem";
+              headerRight.appendChild(hint);
+          }
+
+          // Save Order Button
+          const saveOrderBtn = document.createElement("button");
+          saveOrderBtn.id = "routine-save-order-btn";
+          saveOrderBtn.textContent = "Save Order";
+          saveOrderBtn.className = "settings-button";
+          saveOrderBtn.style.fontSize = "0.8rem";
+          saveOrderBtn.style.padding = "0.3rem 0.6rem";
+          saveOrderBtn.style.display = "none"; // Hidden by default
+          saveOrderBtn.onclick = () => saveStepOrder(routine.id);
+          headerRight.appendChild(saveOrderBtn);
+
+          // Add Step Button (Header)
+          const addStepBtn = document.createElement("button");
+          addStepBtn.id = "routine-add-step-btn"; // Ensure ID is present for fallback
+          addStepBtn.textContent = "+ Add Step";
+          addStepBtn.className = "login-button";
+          addStepBtn.style.padding = "0.3rem 0.6rem";
+          addStepBtn.style.fontSize = "0.8rem";
+          addStepBtn.onclick = () => addStep(routine.id);
+          headerRight.appendChild(addStepBtn);
+
+          stepsHeader.appendChild(headerRight);
       }
-
-      // Save Order Button
-      const saveOrderBtn = document.createElement("button");
-      saveOrderBtn.id = "routine-save-order-btn";
-      saveOrderBtn.textContent = "Save Order";
-      saveOrderBtn.className = "settings-button";
-      saveOrderBtn.style.fontSize = "0.8rem";
-      saveOrderBtn.style.padding = "0.3rem 0.6rem";
-      saveOrderBtn.style.display = "none"; // Hidden by default
-      saveOrderBtn.onclick = () => saveStepOrder(routine.id);
-      headerRight.appendChild(saveOrderBtn);
-
-      // Add Step Button (Header)
-      const addStepBtn = document.createElement("button");
-      addStepBtn.textContent = "+ Add Step";
-      addStepBtn.className = "login-button";
-      addStepBtn.style.padding = "0.3rem 0.6rem";
-      addStepBtn.style.fontSize = "0.8rem";
-      addStepBtn.onclick = () => addStep(routine.id);
-      headerRight.appendChild(addStepBtn);
-
-      stepsHeader.appendChild(headerRight);
 
       // Steps List
       const stepsContainer = document.getElementById("routine-steps");
@@ -8507,21 +8510,21 @@
               // Sort by order_index if needed (usually new steps are last)
               routine.steps.sort((a, b) => (a.order_index || 0) - (b.order_index || 0));
               
-              renderRoutineEditor(routine);
+              // Render via selectRoutine to ensure consistent state
+              // But we can just call renderRoutineEditor if we are sure it's safe now.
+              // The user requested: "Call selectRoutine(routineId, true) (NOT renderRoutineEditor(r) directly)."
+              // This ensures we always render from othelloState.routines.
+              selectRoutine(routineId, true);
+              
               console.debug("stepCreated", { routineId, stepId: data.step.id, count: routine.steps.length });
           }
 
           // Reconcile
           await fetchRoutines();
           
-          // Re-select but respect mobile pin state (don't force open if not pinned)
+          // Re-select to ensure fresh state
           const updatedRoutine = othelloState.routines.find(r => r.id === routineId);
           if (updatedRoutine) {
-              // If we are on mobile and NOT pinned, we shouldn't force the editor open
-              // But if we just added a step, we are likely IN the editor.
-              // So we should probably keep it open.
-              // The user requirement says: "call selectRoutine(routineId, true) but respect the mobile pin rules already implemented"
-              // selectRoutine(id, true) checks mobileEditorPinned.
               selectRoutine(routineId, true);
           }
           return true;
