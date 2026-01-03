@@ -5385,6 +5385,9 @@ def get_today_plan():
             plan_date = date.fromisoformat(args.get("plan_date"))
         except ValueError:
             return api_error("VALIDATION_ERROR", "Invalid plan_date format (expected YYYY-MM-DD)", 400)
+    else:
+        plan_date = _get_local_today(user_id)
+        logger.info("API: today-plan using local_today=%s", plan_date)
 
     try:
         plan = othello_engine.day_planner.get_today_plan(
@@ -5424,11 +5427,20 @@ def get_today_brief():
         "fatigue": args.get("fatigue"),
         "time_pressure": args.get("time_pressure") in ("1", "true", "True", "yes"),
     }
+
+    plan_date = _get_local_today(user_id)
+    if args.get("plan_date"):
+        try:
+            plan_date = date.fromisoformat(args.get("plan_date"))
+        except ValueError:
+            pass
+
     try:
         plan = othello_engine.day_planner.get_today_plan(
             user_id,
             mood_context=mood_context,
             force_regen=False,
+            plan_date=plan_date,
         )
         brief = othello_engine.summarise_today_plan(plan)
         logger.info("API: Served today brief")
@@ -6164,7 +6176,7 @@ def _apply_proposal_core(user_id: str, proposal_id: int) -> tuple[bool, str, Opt
                 allowed_statuses = {"planned", "in_progress", "complete", "skipped", "rescheduled"}
                 
                 # Pre-fetch plan items to validate existence
-                plan = othello_engine.day_planner.get_today_plan(user_id, force_regen=False)
+                plan = othello_engine.day_planner.get_today_plan(user_id, force_regen=False, plan_date=local_today)
                 plan_item_ids = set()
                 if plan and "sections" in plan:
                     for items in plan["sections"].values():

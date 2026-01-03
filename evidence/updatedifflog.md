@@ -2,28 +2,28 @@
 
 Cycle Status: COMPLETE
 Todo Ledger:
-- Planned: Tighten "Clear Routines" scope to protect history and user items.
-- Completed: Implemented date-scoped deletion (today+) and strict type checking.
+- Planned: Fix "local day" time-semantics inconsistencies in api.py.
+- Completed: Updated `/api/today-plan` and `/api/today-brief` to default to `local_today`. Updated `_apply_proposal_core` to use `local_today` for plan loading.
 - Remaining: None.
 Next Action: Await user confirmation.
 
 Root-Cause Anchors:
-- `api.py:2245`: `v1_clear_data` routine deletion logic.
+- `api.py:5361`: `get_today_plan` handler used implicit default.
+- `api.py:5428`: `get_today_brief` handler used implicit default.
+- `api.py:6167`: `_apply_proposal_core` called `get_today_plan` without explicit date.
+
 Patch Summary:
-- **Scope Tightening:** Added `plan_date >= local_today` constraint to `plan_items` deletion.
-- **Predicate Tightening:** Removed `section='routines'` (unsafe). Added `type='routine_step'`.
-- **Logic:** `DELETE FROM plan_items WHERE (type='routine' OR type='routine_step' OR source_kind='routine') AND plan_id IN (plans WHERE date >= local_today)`.
-- **Backfill:** Added backfill logic to tag legacy routine items with `source_kind='routine'` before deletion.
-- **Writer Paths:** Updated `core/day_planner.py` to ensure `source_kind='routine'` is set on creation.
+- **Explicit Local Day:** `/api/today-plan` and `/api/today-brief` now explicitly compute `_get_local_today(user_id)` when `plan_date` is not provided, ensuring Europe/London consistency.
+- **Proposal Safety:** `_apply_proposal_core` now passes `plan_date=local_today` to `get_today_plan`, preventing server-time drift during proposal application.
+- **Logging:** Added info log when `today-plan` defaults to `local_today`.
 
 Verification Results (static -> runtime -> behavioral -> contract):
-- Static: `python -m py_compile api.py` (Implicitly checked via script execution).
-- Runtime: `verify_safety_tightening_v2.py` executed successfully against DB.
-- Behavioral: Confirmed that "Clear Routines" removes today's routine items but leaves user tasks in the same section alone.
-- Contract:
-    - **Historical Preservation:** Yesterday's routine items were NOT deleted.
-    - **User Data Safety:** User-authored task in "routines" section was NOT deleted.
-    - **Future Cleanup:** Tomorrow's routine items WERE deleted.
-    - **Backfill:** Legacy routine items were correctly backfilled and deleted.
+- Static: `python -m py_compile api.py ...` passed.
+- Runtime:
+    - `GET /api/today-plan` (no date) -> Returns plan for 2026-01-03 (local today).
+    - `GET /api/today-plan?plan_date=2026-01-04` -> Returns plan for 2026-01-04.
+    - `GET /api/today-brief` -> Returns brief successfully.
+- Behavioral: Confirmed endpoints function correctly with auth and return expected data.
+- Contract: All "today" paths now use `_get_local_today(user_id)` unless plan_date is explicitly provided.
 
---- EOF Phase 9.5d ---
+--- EOF Phase 9.5e ---
