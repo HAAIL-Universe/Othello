@@ -506,12 +506,89 @@ class DayPlanner:
             persisted["_plan_source"] = "generated"
             self._log_plan_structure(today, persisted, appended_goal_tasks=appended_goal_tasks, source="generated")
             plan = persisted
+        else:
+            # Phase 9.5: Merge fresh routines into existing plan
+            # This ensures newly created/enabled routines appear immediately without full regen
+            self._merge_fresh_routines(uid, today, plan)
 
         # Compute next action
         if plan:
             self._attach_next_action(plan)
             
         return plan
+
+    def _merge_fresh_routines(self, user_id: str, target_date: date, plan: Dict[str, Any]) -> None:
+        """Injects enabled routines for today that are missing from the plan."""
+        if not plan or "sections" not in plan:
+            return
+            
+        # 1. Get fresh routines for today
+        day_tag = DAY_TAGS[target_date.weekday()]
+        fresh_routines = []
+        
+        # Re-use logic from _generate_plan or similar, but simplified for DB-only
+        # We assume _PHASE1_DB_ONLY is true or we want this behavior generally
+        db_routines = routines_repository.list_routines_with_steps(user_id)
+        for r in db_routines:
+            if not r.get("enabled", True):
+                continue
+            schedule = r.get("schedule_rule") or {}
+            days = schedule.get("days")
+            if isinstance(days, list):
+                if len(days) == 0: continue
+                if day_tag not in days: continue
+            
+            fresh_routines.append(r)
+            
+        # 2. Index existing plan routines by ID
+        existing_ids = set()
+        if "routines" in plan["sections"]:
+            for r in plan["sections"]["routines"]:
+                existing_ids.add(r.get("id"))
+                
+        # 3. Append missing
+        added_count = 0
+        if "routines" not in plan["sections"]:
+            plan["sections"]["routines"] = []
+            
+        for fr in fresh_routines:
+            if fr["id"] in existing_ids:
+                continue
+                
+            # Convert to plan item shape
+            steps = []
+            total_dur = 0
+            for s in fr.get("steps", []):
+                dur = s.get("est_minutes") or 0
+                total_dur += dur
+                steps.append({
+                    "id": s["id"],
+                    "type": "routine_step",
+                    "label": s["title"],
+                    "status": "planned",
+                    "approx_duration_min": dur,
+                    "energy_cost": s.get("energy") or "low",
+                    "order_index": s.get("order_index", 0)
+                })
+                
+            item = {
+                "id": fr["id"],
+                "type": "routine",
+                "name": fr["title"],
+                "status": "planned",
+                "section_hint": fr.get("schedule_rule", {}).get("part_of_day", "any"),
+                "approx_duration_min": total_dur,
+                "steps": steps,
+                "schedule_rule": fr.get("schedule_rule"),
+                "metadata": {
+                    "schedule_rule": fr.get("schedule_rule")
+                }
+            }
+            plan["sections"]["routines"].append(item)
+            added_count += 1
+            
+        if added_count > 0:
+            self.logger.info(f"Merged {added_count} fresh routines into plan for {target_date}")
 
     def rebuild_today_plan(self, user_id: str, mood_context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         return self.get_today_plan(user_id, mood_context=mood_context, force_regen=True)
