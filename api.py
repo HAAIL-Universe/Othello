@@ -1698,7 +1698,11 @@ def _apply_suggestion_decisions(
                 order_index = None
             if order_index is None:
                 order_index = get_next_plan_item_order_index(plan_id)
+            
+            # Force status to planned for accepted suggestions
+            payload["status"] = "planned"
             payload["suggestion_id"] = suggestion_id
+            
             item = insert_plan_item_from_payload(
                 plan_id=plan_id,
                 user_id=user_id,

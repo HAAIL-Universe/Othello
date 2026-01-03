@@ -574,7 +574,7 @@ class DayPlanner:
             item = {
                 "id": fr["id"],
                 "type": "routine",
-                "name": fr["title"],
+                "title": fr["title"],
                 "status": "planned",
                 "section_hint": fr.get("schedule_rule", {}).get("part_of_day", "any"),
                 "approx_duration_min": total_dur,
@@ -695,6 +695,7 @@ class DayPlanner:
             items.append({
                 "id": routine.get("id"),
                 "type": routine.get("type", "routine"),
+                "title": routine.get("title") or routine.get("name") or routine.get("label"),
                 "section": routine.get("section_hint", "any"),
                 "status": routine.get("status", "planned"),
                 "priority": None,

@@ -1,34 +1,31 @@
-# Phase 9.5: Today Planner Integration
+# Phase 9.5a: Today Planner Fixes
 
 ## Cycle Status
 COMPLETE
 
 ## Todo Ledger
-- [x] Gather Evidence
-- [x] Apply Fixes (Backend: routines_for_today, Frontend: render routines)
-- [x] Static Verification
-- [x] Update Log
+- [x] Locate suggestion acceptance endpoint (`api.py:v1_accept_suggestion` -> `_apply_suggestion_decisions`).
+- [x] Locate plan item creation (`db/plan_repository.py:insert_plan_item`).
+- [x] Apply Fixes:
+    - [x] `api.py`: Ensure accepted routine suggestions have status "planned".
+    - [x] `core/day_planner.py`: Add title normalization to `_merge_fresh_routines` and `_flatten_plan_items`.
+    - [x] `core/day_planner.py`: Ensure `_merge_fresh_routines` is idempotent and preserves status.
+- [x] Verify changes.
+- [x] Update Log.
 
 ## Root Cause Anchors
-- `api.py:get_today_plan`: Calls `day_planner.get_today_plan`.
-- `core/day_planner.py:get_today_plan`: Calls `self.routines` which loads from JSON or DB.
-- `core/day_planner.py:260`: `source_routines` logic in `_generate_plan` (or similar) filters by day tag.
-- `othello_ui.html:renderPlannerSections`: Renders `plan.sections.routines`.
-
-## Planned Changes
-1.  **Backend (`core/day_planner.py`)**:
-    *   Modify `get_today_plan` (or `_generate_plan`) to ensure it fetches *fresh* enabled routines from `routines_repository` if in DB-only mode, filtering by today's day tag.
-    *   Currently `_generate_plan` (lines 250+) seems to have logic for this (`if _PHASE1_DB_ONLY`). I need to verify if `get_today_plan` calls `_generate_plan` correctly or if it relies on cached plans that might be stale.
-    *   The issue might be that `get_today_plan` loads from cache/DB plan row first. If a new routine is added, the existing plan row won't have it.
-    *   I will add logic to `get_today_plan` to *merge* missing routines into the plan if they are enabled and scheduled for today.
-
-2.  **Frontend (`othello_ui.html`)**:
-    *   `renderPlannerSections` already renders `plan.sections.routines`. If the backend sends them, they should appear.
-    *   I will verify if `routines_for_today` is needed or if I can just inject them into `sections.routines`. The user request mentions `routines_for_today`, but `renderPlannerSections` uses `sections.routines`. I'll stick to `sections.routines` to minimize frontend changes if possible, or map `routines_for_today` to it.
+- **Anchor A (Status):** `api.py:_apply_suggestion_decisions` handles `kind == "plan_item"`. It calls `insert_plan_item_from_payload`. I need to check if `payload` contains `status`. If not, `insert_plan_item` defaults to "planned". But the user says it's "In_progress". This implies the payload might have `status="in_progress"` or the UI is interpreting it wrong.
+- **Anchor B (Untitled):** `db/plan_repository.py:insert_plan_item` takes `item.get("title")`. If missing, it might be null. `othello_ui.html` likely renders "Untitled plan item" if title is missing.
+- **Anchor C (Merge):** `core/day_planner.py:_merge_fresh_routines` (my previous code) checks `existing_ids`. I need to verify it handles title correctly and doesn't overwrite.
 
 ## Evidence
-- `core/day_planner.py:263`: `if _PHASE1_DB_ONLY:` block fetches from `routines_repository`.
-- `core/day_planner.py:508`: `if not plan:` block generates new plan. If plan exists, it returns it. This is why new routines don't show up—the plan is cached.
+- `api.py:1718`: `item = insert_plan_item_from_payload(...)`.
+- `db/plan_repository.py:130`: `item.get("status", "planned")`. Default is planned.
+- `core/day_planner.py:565`: `item = { ... "name": fr["title"] ... }`. I used `name` instead of `title` in the plan item dict in `_merge_fresh_routines`. `_flatten_plan_items` might expect `title` or `label`.
 
-## Next Action
-- Verify fix in live environment.
+## Plan
+1.  **Fix `api.py`**: Explicitly set `status="planned"` in `payload` before creating plan item from suggestion.
+2.  **Fix `core/day_planner.py`**:
+    - In `_merge_fresh_routines`, ensure `title` is set (I used `name` previously).
+    - Add a normalization step to ensure `title` is never empty.
+3.  **Verify**: Run static checks and manual verification if possible.
