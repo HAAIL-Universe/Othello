@@ -2236,6 +2236,41 @@ def v1_clear_data():
                 deleted["routine_steps"] = cursor.rowcount
                 cursor.execute("DELETE FROM routines WHERE user_id = %s", (user_id,))
                 deleted["routines"] = cursor.rowcount
+                
+                # SAFE DELETION: Only delete routine items from today onwards to preserve history
+                # Use local_today to match plan generation semantics
+                local_today = _get_local_today(user_id)
+                
+                # Backfill legacy items (scoped to today+) so we can rely on source_kind
+                cursor.execute(
+                    """
+                    UPDATE plan_items 
+                    SET source_kind = 'routine' 
+                    WHERE user_id = %s 
+                    AND source_kind IS NULL 
+                    AND type IN ('routine', 'routine_step')
+                    AND plan_id IN (
+                        SELECT id FROM plans 
+                        WHERE user_id = %s AND plan_date >= %s
+                    )
+                    """,
+                    (user_id, user_id, local_today),
+                )
+                
+                # Delete strictly by source_kind='routine'
+                cursor.execute(
+                    """
+                    DELETE FROM plan_items 
+                    WHERE user_id = %s 
+                    AND source_kind = 'routine'
+                    AND plan_id IN (
+                        SELECT id FROM plans 
+                        WHERE user_id = %s AND plan_date >= %s
+                    )
+                    """,
+                    (user_id, user_id, local_today),
+                )
+                deleted["routine_plan_items"] = cursor.rowcount
             if "goals" in normalized_scopes:
                 if "plans" not in normalized_scopes:
                     cursor.execute(

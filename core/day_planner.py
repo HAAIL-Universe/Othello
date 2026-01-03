@@ -568,7 +568,8 @@ class DayPlanner:
                     "status": "planned",
                     "approx_duration_min": dur,
                     "energy_cost": s.get("energy") or "low",
-                    "order_index": s.get("order_index", 0)
+                    "order_index": s.get("order_index", 0),
+                    "source_kind": "routine"
                 })
                 
             item = {
@@ -580,6 +581,7 @@ class DayPlanner:
                 "approx_duration_min": total_dur,
                 "steps": steps,
                 "schedule_rule": fr.get("schedule_rule"),
+                "source_kind": "routine",
                 "metadata": {
                     "schedule_rule": fr.get("schedule_rule")
                 }
@@ -703,6 +705,7 @@ class DayPlanner:
                 "energy": routine.get("energy_profile"),
                 "metadata": {k: v for k, v in routine.items() if k != "steps"},
                 "schedule_rule": routine.get("schedule_rule"),
+                "source_kind": routine.get("source_kind", "routine"),
             })
             for step in routine.get("steps", []):
                 metadata = dict(step)
@@ -719,6 +722,7 @@ class DayPlanner:
                     "reschedule_to": step.get("reschedule_to"),
                     "reason": step.get("reason"),
                     "order_index": step.get("order_index", 0),
+                    "source_kind": step.get("source_kind", "routine"),
                 })
 
         # Goal tasks and optional/backlog entries
