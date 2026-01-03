@@ -1,66 +1,56 @@
-# Phase 6.0 Update Log: Routine Planner Mobile Layout
+# Phase 9.0 Update Log: Routine Editor Fixes
 
 ## Cycle Status
 - **Status**: COMPLETE
-- **Next Action**: Proceed to Phase 7 (Refinement & Polish).
+- **Next Action**: Await user feedback.
 
 ## Todo Ledger
-- [x] CSS: Added mobile breakpoint (max-width: 768px) for single-column layout.
-- [x] CSS: Implemented `.routine-editor-open` class toggle for view switching.
-- [x] JS: Added `openMobileEditor()` and `closeMobileEditor()` navigation helpers.
-- [x] JS: Updated `selectRoutine`, `addRoutine`, and `duplicateRoutine` to auto-open editor on mobile.
-- [x] UI: Added "Back" button to Routine Editor header (visible only on mobile).
+- [x] UI: Added "Save" button to Routine Editor header.
+- [x] JS: Implemented `saveRoutine` to explicitly PATCH routine updates.
+- [x] JS: Fixed `addStepInline` to return success boolean.
+- [x] JS: Updated add-step handlers to only clear input on success.
+- [x] JS: Verified mobile back button logic (`closeMobileEditor`).
 - [x] Static Verification: `python -m py_compile ...` (Exit Code 0).
-
-## UX Changes Summary
-
-### 1. Mobile Layout (Single Column)
-- **Before**: Split-pane layout (List | Editor) squashed on small screens, unusable.
-- **After**:
-    - **Default**: Shows full-width Routine List. Editor is hidden.
-    - **Editing**: Shows full-width Routine Editor. List is hidden.
-    - **Transition**: Controlled by `body.routine-editor-open` class.
-
-### 2. Navigation Flow
-- **Selecting a Routine**: Automatically switches view to Editor on mobile.
-- **Creating/Duplicating**: Automatically switches view to Editor on mobile after creation.
-- **Back Button**: New "←" button in Editor header (mobile only) returns to List view.
 
 ## Evidence: Code Anchors (othello_ui.html)
 
-### CSS Breakpoint & View Switching
-**Anchor**: Line 1850 (approx, inserted in `<style>`)
-**Proof**:
-```css
-@media (max-width: 768px) {
-  .routine-planner-layout { display: block !important; }
-  body.routine-editor-open .routine-list-panel { display: none !important; }
-  body.routine-editor-open .routine-editor-panel { display: flex !important; }
-}
-```
-
-### Navigation Helpers
-**Function**: `openMobileEditor`, `closeMobileEditor`
-**Anchor**: Line 7800 (approx, inserted before `selectRoutine`)
+### Save Button & Handler
+**Anchor**: `saveRoutine` (approx line 7580)
 **Proof**:
 ```javascript
-function openMobileEditor() {
-  if (window.innerWidth <= 768) {
-    document.body.classList.add("routine-editor-open");
-  }
+async function saveRoutine(routineId) {
+    // ... gathers inputs ...
+    await updateRoutine(routineId, patch, true);
+    showToast("Routine saved", "success");
+}
+```
+**Anchor**: `renderRoutineEditor` (approx line 7630)
+**Proof**:
+```javascript
+const saveBtn = document.getElementById("routine-save-btn");
+if (saveBtn) {
+    saveBtn.onclick = () => saveRoutine(routine.id);
 }
 ```
 
-### Selection Logic Update
-**Function**: `selectRoutine`
-**Anchor**: Line 7820 (approx)
-**Change**: Added `openMobileEditor()` call after rendering editor.
-
-### Back Button Markup
-**Location**: Routine Editor Header
+### Reliable Add Step
+**Anchor**: `addStepInline` (approx line 8230)
 **Proof**:
-```html
-<button id="routine-mobile-back-btn" class="icon-button" ...>←</button>
+```javascript
+if (resp.ok) {
+    // ...
+    return true;
+}
+```
+**Anchor**: `handleAdd` (approx line 7950)
+**Proof**:
+```javascript
+const success = await addStepInline(routine.id, val);
+if (success) {
+    addInput.value = "";
+} else {
+    addInput.focus();
+}
 ```
 
 ## Evidence: Static Verification

@@ -2,6 +2,61 @@
 <html lang="en">
 <head>
     <style>
+      /* Toast Notification */
+      #toast-container {
+        position: fixed;
+        bottom: 20px;
+        right: 20px;
+        z-index: 9999;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+        pointer-events: none;
+      }
+      .toast {
+        background: var(--bg-2);
+        border: 1px solid var(--border);
+        color: var(--text-main);
+        padding: 12px 16px;
+        border-radius: 8px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        font-size: 0.9rem;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        animation: slideIn 0.3s ease-out forwards;
+        pointer-events: auto;
+        max-width: 300px;
+      }
+      .toast.error { border-left: 4px solid #fca5a5; }
+      .toast.success { border-left: 4px solid #86efac; }
+      @keyframes slideIn {
+        from { transform: translateX(100%); opacity: 0; }
+        to { transform: translateX(0); opacity: 1; }
+      }
+      @keyframes fadeOut {
+        to { opacity: 0; transform: translateY(10px); }
+      }
+
+      /* Routine Planner Polish */
+      .routine-list-item.selected {
+        background: var(--card-bg) !important;
+        border-left: 3px solid var(--accent) !important;
+      }
+      .routine-loader {
+        display: flex;
+        justify-content: center;
+        padding: 2rem;
+        color: var(--text-soft);
+        font-style: italic;
+      }
+      .routine-empty-placeholder {
+        text-align: center;
+        padding: 2rem;
+        color: var(--text-soft);
+        font-size: 0.9rem;
+      }
+
       /* Mobile Routine Planner Styles */
       @media (max-width: 768px) {
         .routine-planner-layout {
@@ -1893,7 +1948,7 @@
 
       <!-- ROUTINE PLANNER VIEW -->
       <div id="routine-planner-view" class="view">
-        <div class="view-header" style="display: flex; justify-content: space-between; align-items: center;">
+        <div class="view-header" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5rem;">
           <h2 class="view-title">Routine Planner</h2>
           <button id="routine-preview-plan-btn" class="settings-button" style="font-size: 0.85rem; padding: 0.4rem 0.8rem;">
             Preview Today Plan
@@ -1923,8 +1978,9 @@
                 </div>
                 <input type="text" id="routine-title-input" class="login-input" style="width: 100%; font-size: 1.1rem; font-weight: 600;">
               </div>
-              <div style="display: flex; flex-direction: column; align-items: flex-end;">
-                <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer; margin-bottom: 0.5rem;">
+              <div style="display: flex; flex-direction: column; align-items: flex-end; gap: 0.5rem;">
+                <button id="routine-save-btn" class="login-button" style="padding: 0.3rem 0.8rem; font-size: 0.85rem;">Save</button>
+                <label style="display: flex; align-items: center; gap: 0.5rem; cursor: pointer;">
                   <input type="checkbox" id="routine-enabled-toggle">
                   <span style="font-size: 0.9rem; color: var(--text-main);">Active</span>
                 </label>
@@ -1950,8 +2006,8 @@
             </div>
           </div>
           
-          <div id="routine-empty-state" style="display: flex; align-items: center; justify-content: center; color: var(--text-soft); background: var(--bg-2); border: 1px solid var(--border); border-radius: 12px;">
-            Select a routine to edit
+          <div id="routine-empty-state" class="routine-empty-placeholder" style="display: flex; align-items: center; justify-content: center; background: var(--bg-2); border: 1px solid var(--border); border-radius: 12px;">
+            No routines yet — tap + to create your first routine.
           </div>
         </div>
       </div>
@@ -1971,6 +2027,8 @@
       </div>
 
     </div>
+
+    <div id="toast-container"></div>
 
     <!-- INPUT BAR (only visible in Chat view) -->
     <div class="input-bar" id="input-bar">
@@ -7377,7 +7435,25 @@
       };
     }
 
+    function showToast(message, type = "info") {
+      const container = document.getElementById("toast-container");
+      if (!container) return;
+      const toast = document.createElement("div");
+      toast.className = `toast ${type}`;
+      toast.textContent = message;
+      container.appendChild(toast);
+      setTimeout(() => {
+        toast.style.animation = "fadeOut 0.3s ease-out forwards";
+        setTimeout(() => toast.remove(), 300);
+      }, 3000);
+    }
+
     async function fetchRoutines() {
+      const listEl = document.getElementById("routine-list");
+      // Only show loader if we don't have data yet to avoid flicker on refresh
+      if (listEl && othelloState.routines.length === 0) {
+         listEl.innerHTML = '<div class="routine-loader">Loading routines...</div>';
+      }
       try {
         const resp = await fetch(ROUTINES_API, { credentials: "include" });
         if (!resp.ok) throw new Error("Failed to fetch routines");
@@ -7387,6 +7463,10 @@
         }
       } catch (err) {
         console.error("fetchRoutines error:", err);
+        showToast("Failed to load routines", "error");
+        if (listEl && othelloState.routines.length === 0) {
+            listEl.innerHTML = '<div class="planner-error" style="padding:1rem; text-align:center;">Failed to load routines.</div>';
+        }
       }
     }
 
@@ -7406,14 +7486,30 @@
     function renderRoutineList(routines) {
       const listEl = document.getElementById("routine-list");
       listEl.innerHTML = "";
+
+      // Update empty state text
+      const emptyState = document.getElementById("routine-empty-state");
+      if (emptyState) {
+        if (routines.length === 0) {
+            emptyState.textContent = "No routines yet — tap + to create your first routine.";
+        } else if (!othelloState.activeRoutineId) {
+            emptyState.textContent = "Select a routine to edit";
+        }
+      }
+
       routines.forEach(r => {
         const item = document.createElement("div");
         item.className = "routine-list-item";
+        if (r.id === othelloState.activeRoutineId) item.classList.add("selected");
+        item.dataset.routineId = r.id;
+
         item.style.padding = "0.8rem";
         item.style.borderBottom = "1px solid var(--border)";
         item.style.cursor = "pointer";
-        item.style.background = r.id === othelloState.activeRoutineId ? "var(--card-bg)" : "transparent";
-        item.style.borderLeft = r.id === othelloState.activeRoutineId ? "3px solid var(--accent)" : "3px solid transparent";
+        if (r.id !== othelloState.activeRoutineId) {
+            item.style.background = "transparent";
+            item.style.borderLeft = "3px solid transparent";
+        }
         item.style.position = "relative";
         
         const titleRow = document.createElement("div");
@@ -7521,6 +7617,73 @@
       }
     }
 
+    async function saveRoutine(routineId) {
+        const titleInput = document.getElementById("routine-title-input");
+        const enabledToggle = document.getElementById("routine-enabled-toggle");
+        const daysContainer = document.getElementById("routine-days");
+        
+        if (!titleInput || !enabledToggle || !daysContainer) return;
+        
+        // Gather days
+        const days = [];
+        daysContainer.querySelectorAll("input[type=checkbox]").forEach((cb, idx) => {
+            const dayNames = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+            if (cb.checked) days.push(dayNames[idx]);
+        });
+        
+        // Gather extra schedule info (part_of_day, time_window)
+        // Note: These are updated via onchange in the UI, but we can re-read them if we want to be sure.
+        // However, the DOM elements for them are dynamically created in renderRoutineEditor.
+        // For simplicity, we'll trust the state or re-read if we can find them.
+        // Since updateRoutine is called on change for these, the state *should* be consistent.
+        // But the user wants "Save" to be the primary action or at least reliable.
+        // Let's just send the title and enabled state and days explicitly, 
+        // and rely on the fact that other fields triggered their own updates.
+        // OR, better: read everything from the DOM to be sure.
+        
+        const extraContainer = document.getElementById("routine-schedule-extra");
+        let part_of_day = "any";
+        let time_window = { start: "", end: "" };
+        
+        if (extraContainer) {
+            const selects = extraContainer.querySelectorAll("select");
+            if (selects.length > 0) part_of_day = selects[0].value;
+            
+            const inputs = extraContainer.querySelectorAll("input[type=time]");
+            if (inputs.length > 0) time_window.start = inputs[0].value;
+            if (inputs.length > 1) time_window.end = inputs[1].value;
+        }
+
+        const patch = {
+            title: titleInput.value,
+            enabled: enabledToggle.checked,
+            schedule_rule: {
+                days: days,
+                part_of_day: part_of_day,
+                time_window: time_window
+            }
+        };
+        
+        const btn = document.getElementById("routine-save-btn");
+        const originalText = btn ? btn.textContent : "Save";
+        if (btn) {
+            btn.textContent = "Saving...";
+            btn.disabled = true;
+        }
+
+        try {
+            await updateRoutine(routineId, patch, true);
+            showToast("Routine saved", "success");
+        } catch (err) {
+            showToast("Save failed", "error");
+        } finally {
+            if (btn) {
+                btn.textContent = originalText;
+                btn.disabled = false;
+            }
+        }
+    }
+
     function renderRoutineEditor(routine) {
       const debouncedUpdateRoutine = debounce((patch) => updateRoutine(routine.id, patch, false), 500);
 
@@ -7532,6 +7695,11 @@
       enabledToggle.checked = routine.enabled;
       enabledToggle.onchange = (e) => updateRoutine(routine.id, { enabled: e.target.checked });
       
+      const saveBtn = document.getElementById("routine-save-btn");
+      if (saveBtn) {
+          saveBtn.onclick = () => saveRoutine(routine.id);
+      }
+
       document.getElementById("routine-delete-btn").onclick = () => deleteRoutine(routine.id);
       
       // Schedule days
@@ -7657,14 +7825,45 @@
       
       // Steps Header
       const stepsHeader = document.getElementById("routine-add-step-btn").parentNode;
-      // Hide the old "Add Step" button if it exists, or just clear the header content
       stepsHeader.innerHTML = "";
+      
+      const headerLeft = document.createElement("div");
+      headerLeft.style.display = "flex";
+      headerLeft.style.alignItems = "center";
+      headerLeft.style.gap = "0.5rem";
+
       const stepsTitle = document.createElement("span");
       stepsTitle.style.fontSize = "0.95rem";
       stepsTitle.style.fontWeight = "600";
       stepsTitle.style.color = "var(--text-main)";
       stepsTitle.textContent = "Steps";
-      stepsHeader.appendChild(stepsTitle);
+      headerLeft.appendChild(stepsTitle);
+
+      const stepCountBadge = document.createElement("span");
+      stepCountBadge.style.fontSize = "0.8rem";
+      stepCountBadge.style.color = "var(--text-soft)";
+      stepCountBadge.style.background = "var(--bg-1)";
+      stepCountBadge.style.padding = "0.1rem 0.4rem";
+      stepCountBadge.style.borderRadius = "10px";
+      stepCountBadge.textContent = (routine.steps || []).length;
+      headerLeft.appendChild(stepCountBadge);
+      
+      stepsHeader.appendChild(headerLeft);
+
+      const headerRight = document.createElement("div");
+      headerRight.style.display = "flex";
+      headerRight.style.gap = "0.5rem";
+      headerRight.style.alignItems = "center";
+
+      // Reorder Hint
+      if ((routine.steps || []).length > 1) {
+          const hint = document.createElement("span");
+          hint.textContent = "Use ▲/▼ to reorder";
+          hint.style.fontSize = "0.75rem";
+          hint.style.color = "var(--text-soft)";
+          hint.style.marginRight = "0.5rem";
+          headerRight.appendChild(hint);
+      }
 
       // Save Order Button
       const saveOrderBtn = document.createElement("button");
@@ -7675,11 +7874,31 @@
       saveOrderBtn.style.padding = "0.3rem 0.6rem";
       saveOrderBtn.style.display = "none"; // Hidden by default
       saveOrderBtn.onclick = () => saveStepOrder(routine.id);
-      stepsHeader.appendChild(saveOrderBtn);
+      headerRight.appendChild(saveOrderBtn);
+
+      // Add Step Button (Header)
+      const addStepBtn = document.createElement("button");
+      addStepBtn.textContent = "+ Add Step";
+      addStepBtn.className = "login-button";
+      addStepBtn.style.padding = "0.3rem 0.6rem";
+      addStepBtn.style.fontSize = "0.8rem";
+      addStepBtn.onclick = () => addStep(routine.id);
+      headerRight.appendChild(addStepBtn);
+
+      stepsHeader.appendChild(headerRight);
 
       // Steps List
       const stepsContainer = document.getElementById("routine-steps");
       stepsContainer.innerHTML = "";
+      
+      if (!routine.steps || routine.steps.length === 0) {
+          const emptySteps = document.createElement("div");
+          emptySteps.className = "routine-empty-placeholder";
+          emptySteps.style.padding = "1rem";
+          emptySteps.textContent = "No steps yet — add your first step below.";
+          stepsContainer.appendChild(emptySteps);
+      }
+
       (routine.steps || []).forEach((step, idx) => {
         const debouncedUpdateStep = debounce((patch) => updateStep(step.id, patch, false), 500);
         const row = document.createElement("div");
@@ -7788,10 +8007,44 @@
       addInput.style.flex = "1";
       addInput.style.padding = "0.4rem 0.6rem";
       addInput.style.fontSize = "0.9rem";
+      
+      const handleAdd = async () => {
+        const val = addInput.value.trim();
+        if (!val) return;
+        
+        addInput.disabled = true;
+        addBtn.disabled = true;
+        addBtn.textContent = "...";
+        
+        const success = await addStepInline(routine.id, val);
+        
+        addInput.disabled = false;
+        addBtn.disabled = false;
+        addBtn.textContent = "Add";
+        
+        if (success) {
+            addInput.value = "";
+            // Focus is lost because of re-render, but that's acceptable for now.
+            // If we wanted to keep focus, we'd need to find the new input after render.
+            setTimeout(() => {
+                const newInputs = document.querySelectorAll("#routine-steps input[type=text]");
+                // The last one is the add input, but we want to focus it? 
+                // Actually renderRoutineEditor re-creates the DOM.
+                // So we need to find the add input in the new DOM.
+                // But this function (renderRoutineEditor) has finished.
+                // The re-render happens inside addStepInline -> fetchRoutines -> selectRoutine -> renderRoutineEditor.
+                // So the DOM is fresh.
+                // We can try to auto-focus the add input if we can identify it.
+                // For now, just clearing it is enough improvement.
+            }, 100);
+        } else {
+            addInput.focus();
+        }
+      };
+
       addInput.onkeydown = (e) => {
         if (e.key === "Enter") {
-            addStepInline(routine.id, addInput.value);
-            addInput.value = "";
+            handleAdd();
         }
       };
       
@@ -7799,12 +8052,7 @@
       addBtn.textContent = "Add";
       addBtn.className = "settings-button";
       addBtn.style.padding = "0.4rem 0.8rem";
-      addBtn.onclick = () => {
-        if (addInput.value.trim()) {
-            addStepInline(routine.id, addInput.value);
-            addInput.value = "";
-        }
-      };
+      addBtn.onclick = handleAdd;
       
       addRow.appendChild(addInput);
       addRow.appendChild(addBtn);
@@ -7833,8 +8081,13 @@
                  }
              }
           }
+        } else {
+            throw new Error("Failed to update routine");
         }
-      } catch (err) { console.error(err); }
+      } catch (err) { 
+          console.error(err);
+          showToast("Failed to update routine", "error");
+      }
     }
 
     async function deleteRoutine(id) {
@@ -7844,8 +8097,14 @@
         if (resp.ok) {
           othelloState.activeRoutineId = null;
           await loadRoutinePlanner();
+          showToast("Routine deleted", "success");
+        } else {
+            throw new Error("Failed to delete routine");
         }
-      } catch (err) { console.error(err); }
+      } catch (err) { 
+          console.error(err);
+          showToast("Failed to delete routine", "error");
+      }
     }
 
     async function addRoutine() {
@@ -7863,8 +8122,21 @@
           othelloState.activeRoutineId = data.routine.id;
           await loadRoutinePlanner();
           openMobileEditor(); // Switch view on mobile
+          
+          // Scroll into view
+          setTimeout(() => {
+              const item = document.querySelector(`.routine-list-item[data-routine-id="${data.routine.id}"]`);
+              if (item) item.scrollIntoView({ behavior: "smooth", block: "center" });
+          }, 100);
+          
+          showToast("Routine created", "success");
+        } else {
+            throw new Error("Failed to create routine");
         }
-      } catch (err) { console.error(err); }
+      } catch (err) { 
+          console.error(err);
+          showToast("Failed to create routine", "error");
+      }
     }
     document.getElementById("routine-add-btn").onclick = addRoutine;
 
@@ -7879,8 +8151,13 @@
         if (resp.ok) {
           await fetchRoutines();
           selectRoutine(routineId);
+        } else {
+            throw new Error("Failed to add step");
         }
-      } catch (err) { console.error(err); }
+      } catch (err) { 
+          console.error(err);
+          showToast("Failed to add step", "error");
+      }
     }
 
     async function updateStep(stepId, patch, refresh = true) {
@@ -7905,8 +8182,13 @@
                  if (s) Object.assign(s, patch);
              }
           }
+        } else {
+            throw new Error("Failed to update step");
         }
-      } catch (err) { console.error(err); }
+      } catch (err) { 
+          console.error(err);
+          showToast("Failed to update step", "error");
+      }
     }
 
     async function deleteStep(stepId) {
@@ -7916,8 +8198,13 @@
         if (resp.ok) {
           await fetchRoutines();
           selectRoutine(othelloState.activeRoutineId);
+        } else {
+            throw new Error("Failed to delete step");
         }
-      } catch (err) { console.error(err); }
+      } catch (err) { 
+          console.error(err);
+          showToast("Failed to delete step", "error");
+      }
     }
 
     async function duplicateRoutine(routineId) {
@@ -7955,9 +8242,17 @@
         await fetchRoutines();
         selectRoutine(newRoutine.id);
         openMobileEditor(); // Switch view on mobile
+        
+        // Scroll into view
+        setTimeout(() => {
+            const item = document.querySelector(`.routine-list-item[data-routine-id="${newRoutine.id}"]`);
+            if (item) item.scrollIntoView({ behavior: "smooth", block: "center" });
+        }, 100);
+        
+        showToast("Routine duplicated", "success");
       } catch (err) {
         console.error("Duplicate routine error:", err);
-        alert("Failed to duplicate routine.");
+        showToast("Failed to duplicate routine", "error");
       }
     }
 
@@ -8005,8 +8300,10 @@
                 saveBtn.style.display = "none";
             }
             await fetchRoutines(); // Sync with server
+            showToast("Order saved", "success");
         } catch (err) {
             console.error("Save order error:", err);
+            showToast("Failed to save order", "error");
             if (saveBtn) {
                 saveBtn.textContent = "Error";
                 setTimeout(() => {
@@ -8028,8 +8325,15 @@
         if (resp.ok) {
           await fetchRoutines();
           selectRoutine(routineId);
+          return true;
+        } else {
+            throw new Error("Failed to add step");
         }
-      } catch (err) { console.error(err); }
+      } catch (err) { 
+          console.error(err);
+          showToast("Failed to add step", "error");
+          return false;
+      }
     }
 
     // Preview Plan Logic
@@ -8062,31 +8366,93 @@
 
     function renderPlanPreview(plan) {
         if (!planPreviewContent) return;
-        if (!plan || !plan.items || plan.items.length === 0) {
+        
+        const sections = (plan && plan.sections) || {};
+        const routines = sections.routines || [];
+        const goalTasks = sections.goal_tasks || [];
+        const optional = sections.optional || [];
+        
+        const allItems = [];
+        
+        // Flatten routines
+        routines.forEach(r => {
+            const rName = r.name || r.label || "Routine";
+            (r.steps || []).forEach(s => {
+                allItems.push({
+                    title: s.label || s.title || "Step",
+                    section: s.section_hint || r.section_hint || "any",
+                    source: rName,
+                    effort: s.approx_duration_min ? `${s.approx_duration_min}m` : "",
+                    status: s.status || "planned"
+                });
+            });
+        });
+        
+        // Goal tasks
+        goalTasks.forEach(t => {
+            allItems.push({
+                title: t.label || t.description || "Task",
+                section: t.section_hint || "any",
+                source: "Goal Task",
+                effort: t.effort || "",
+                status: t.status || "planned"
+            });
+        });
+        
+        // Optional
+        optional.forEach(o => {
+            allItems.push({
+                title: o.label || o.description || "Optional",
+                section: "Optional",
+                source: "Backlog",
+                effort: o.effort || "",
+                status: o.status || "planned"
+            });
+        });
+
+        if (allItems.length === 0) {
             planPreviewContent.innerHTML = '<div class="planner-empty">No items in plan.</div>';
             return;
         }
         
-        let html = `<div style="margin-bottom: 1rem; font-weight: 600; color: var(--accent);">Plan Date: ${plan.date}</div>`;
+        let html = `<div style="margin-bottom: 1rem; font-weight: 600; color: var(--accent);">Plan Date: ${plan.date || "Today"}</div>`;
         html += '<div class="planner-blocks">';
         
         // Group by section
-        const sections = {};
-        plan.items.forEach(item => {
-            const sec = item.section || "Uncategorized";
-            if (!sections[sec]) sections[sec] = [];
-            sections[sec].push(item);
+        const grouped = {};
+        const sectionOrder = ["morning", "afternoon", "evening", "night", "any", "Optional"];
+        
+        allItems.forEach(item => {
+            let sec = item.section || "any";
+            // Capitalize
+            sec = sec.charAt(0).toUpperCase() + sec.slice(1);
+            if (!grouped[sec]) grouped[sec] = [];
+            grouped[sec].push(item);
         });
         
-        for (const [sec, items] of Object.entries(sections)) {
+        // Sort sections
+        const sortedKeys = Object.keys(grouped).sort((a, b) => {
+            const ia = sectionOrder.indexOf(a.toLowerCase());
+            const ib = sectionOrder.indexOf(b.toLowerCase());
+            return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
+        });
+        
+        for (const sec of sortedKeys) {
+            const items = grouped[sec];
             html += `<div class="planner-block">
                 <div class="planner-block__header"><div class="planner-block__title">${sec}</div></div>
                 <div class="planner-steps">`;
             
             items.forEach(item => {
                 html += `<div class="planner-step">
-                    <div class="planner-step__label">${item.title}</div>
-                    <div class="planner-step__meta">${item.effort || ''}</div>
+                    <div class="planner-step__body">
+                        <div class="planner-step__label">${escapeHtml(item.title)}</div>
+                        <div class="planner-step__meta" style="font-size: 0.75rem; color: var(--text-soft);">
+                           ${item.source ? `<span style="opacity:0.8">${escapeHtml(item.source)}</span>` : ""}
+                           ${item.effort ? ` • ${item.effort}` : ""}
+                        </div>
+                    </div>
+                    <div class="planner-step__status">${item.status}</div>
                 </div>`;
             });
             
