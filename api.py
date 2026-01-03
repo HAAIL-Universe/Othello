@@ -50,6 +50,29 @@ def _is_phase1_enabled() -> bool:
         return True
     return _is_truthy_env(os.environ.get("OTHELLO_PHASE1"))
 
+def _parse_env_csv(name: str) -> List[str]:
+    raw = os.environ.get(name)
+    if not raw:
+        return []
+    return [entry.strip() for entry in str(raw).split(",") if entry.strip()]
+
+def _get_beta_allowlist() -> set:
+    return set(_parse_env_csv("BETA_ALLOWLIST"))
+
+def _get_beta_user_cap() -> int:
+    raw = os.environ.get("BETA_USER_CAP")
+    if raw is None:
+        return 0
+    raw_text = str(raw).strip()
+    if not raw_text:
+        return 0
+    try:
+        cap = int(raw_text)
+    except ValueError:
+        logging.getLogger("API.Auth").warning("Invalid BETA_USER_CAP value '%s'; ignoring.", raw_text)
+        return 0
+    return max(cap, 0)
+
 _PHASE1_ENABLED = _is_phase1_enabled()
 if _PHASE1_ENABLED:
     os.environ["OTHELLO_PHASE1_DB_ONLY"] = "1"
@@ -1435,10 +1458,7 @@ def get_current_user_id() -> str:
     return str(user_id)
 
 
-def ensure_user_exists(user_id: str) -> None:
-    user_id = str(user_id or "").strip()
-    if not user_id:
-        raise ValueError("user_id is required")
+def _ensure_users_table_exists() -> None:
     from db.database import execute_query
     execute_query(
         """
@@ -1451,6 +1471,46 @@ def ensure_user_exists(user_id: str) -> None:
         )
         """
     )
+
+
+def _beta_gate_check(user_id: str) -> Optional[Any]:
+    user_id = str(user_id or "").strip()
+    if not user_id:
+        return api_error("BETA_GATE_FAILED", "Missing user identifier", 500)
+    allowlist = _get_beta_allowlist()
+    cap = _get_beta_user_cap()
+    if allowlist and user_id not in allowlist:
+        return api_error("BETA_ALLOWLIST_BLOCKED", "Beta access denied", 403)
+    if cap > 0:
+        logger = logging.getLogger("API.Auth")
+        try:
+            _ensure_users_table_exists()
+            from db.database import fetch_one
+            existing = fetch_one("SELECT 1 FROM users WHERE user_id = %s", (user_id,))
+            if existing:
+                return None
+            count_row = fetch_one("SELECT COUNT(*) AS count FROM users")
+            count = int((count_row or {}).get("count") or 0)
+            # Only block new users when cap is reached.
+            if count >= cap:
+                return api_error("BETA_USER_CAP_REACHED", "Beta user cap reached", 403)
+        except Exception as exc:
+            logger.error("Beta gate check failed: %s", exc, exc_info=True)
+            return api_error(
+                "BETA_GATE_FAILED",
+                "Failed to validate beta access",
+                500,
+                details=type(exc).__name__,
+            )
+    return None
+
+
+def ensure_user_exists(user_id: str) -> None:
+    user_id = str(user_id or "").strip()
+    if not user_id:
+        raise ValueError("user_id is required")
+    from db.database import execute_query
+    _ensure_users_table_exists()
     execute_query(
         """
         INSERT INTO users (user_id)
@@ -1526,6 +1586,17 @@ def ready_check():
             "message": "Service not ready",
             "details": "ready_check_exception",
         }), 503
+
+
+@app.route("/api/capabilities", methods=["GET"])
+def api_capabilities():
+    allowlist_enabled = bool(_get_beta_allowlist())
+    cap_enabled = _get_beta_user_cap() > 0
+    return jsonify({
+        "beta_gate_enabled": allowlist_enabled or cap_enabled,
+        "allowlist_enabled": allowlist_enabled,
+        "cap_enabled": cap_enabled,
+    })
 
 
 def _v1_envelope(*, data: Optional[Dict[str, Any]] = None, error: Optional[Dict[str, Any]] = None, status: int = 200):
@@ -2690,6 +2761,9 @@ def auth_login():
                 break
         if not matched_user_id:
             return api_error("AUTH_INVALID", "Invalid access code", 401, extra={"auth_mode": "login_keys"})
+        gate_error = _beta_gate_check(matched_user_id)
+        if gate_error:
+            return gate_error
         return _login_success(matched_user_id, "login_keys")
 
     if not pin_hash and not login_key and not plain_pwd:
@@ -2723,6 +2797,9 @@ def auth_login():
     if pin_hash:
         try:
             if bcrypt.verify(password, pin_hash):
+                gate_error = _beta_gate_check(default_user_id)
+                if gate_error:
+                    return gate_error
                 return _login_success(default_user_id, auth_mode)
             return api_error("AUTH_INVALID", "Invalid access code", 401, extra={"auth_mode": auth_mode})
         except Exception:
@@ -2738,12 +2815,18 @@ def auth_login():
     if login_key:
         import hmac
         if hmac.compare_digest(password, login_key):
+            gate_error = _beta_gate_check(default_user_id)
+            if gate_error:
+                return gate_error
             return _login_success(default_user_id, auth_mode)
         return api_error("AUTH_INVALID", "Invalid access code", 401, extra={"auth_mode": auth_mode})
 
     # Legacy plaintext password
     logger.warning("plaintext password mode enabled; set OTHELLO_PIN_HASH or OTHELLO_LOGIN_KEY to harden")
     if password == plain_pwd:
+        gate_error = _beta_gate_check(default_user_id)
+        if gate_error:
+            return gate_error
         return _login_success(default_user_id, auth_mode)
     return api_error("AUTH_INVALID", "Invalid access code", 401, extra={"auth_mode": auth_mode})
 
