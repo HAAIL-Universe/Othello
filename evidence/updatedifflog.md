@@ -1,75 +1,53 @@
-# Phase 9.4d: Routine Planner State Sync Fix
+# Phase 9.4e: Routine Planner Optimistic UI Sync
 
 ## Cycle Status
 COMPLETE
 
 ## Todo Ledger
 - [x] Gather Evidence
-- [x] Apply Fixes (State management, Render logic, Handlers)
+- [x] Apply Fixes (Optimistic updates for Create/Delete/Duplicate)
 - [x] Static Verification
 - [x] Update Log
 
-## Next Action
-- Verify fix in live environment.
+## Root Cause Anchors
+- `othello_ui.html:addStepInline`: Currently awaits `fetchRoutines` before updating UI, causing lag.
+- `othello_ui.html:deleteRoutine`: Awaits `loadRoutinePlanner` (fetch) before updating UI.
+- `othello_ui.html:duplicateRoutine`: Awaits `fetchRoutines` before selecting new routine.
 
-## Changes
-- **othello_ui.html**:
-  - Updated `fetchRoutines` to validate `activeRoutineId` against the fresh data.
-  - Updated `loadRoutinePlanner` to use deterministic selection logic (try to keep active, else select first, else empty).
-  - Updated `selectRoutine` to always pull the routine object from `othelloState.routines` (the source of truth) instead of relying on potentially stale arguments or state.
-  - Updated `deleteRoutine` to correctly clear `activeRoutineId` only if the deleted routine was active, and then reload.
-  - Updated `duplicateRoutine` to fetch routines and then select the new routine from the fresh state.
-  - Added `renderEmptyState` helper for consistency.
+## Planned Changes
+1. **addStepInline**: Parse response, push step to `othelloState.routines`, call `renderRoutineEditor`, then reconcile.
+2. **deleteRoutine**: Filter out routine from `othelloState.routines`, update selection/UI, then reconcile.
+3. **duplicateRoutine**: Push new routine to `othelloState.routines`, update UI, then reconcile.
+4. **Defensive Rendering**: Ensure `renderRoutineEditor` handles null steps.
 
 ## Evidence
 
-### 1) Anchor: Deterministic Selection (loadRoutinePlanner)
+### 1) Anchor: Optimistic Step Create
 ```javascript
-    async function loadRoutinePlanner() {
-      await fetchRoutines();
-      renderRoutineList(othelloState.routines);
-      
-      // Deterministic selection logic
-      if (othelloState.activeRoutineId) {
-          // Try to select the previously active routine
-          const exists = othelloState.routines.find(r => r.id === othelloState.activeRoutineId);
-          if (exists) {
-              selectRoutine(othelloState.activeRoutineId, true);
-          } else {
-              othelloState.activeRoutineId = null;
-              if (othelloState.routines.length > 0) {
-                  selectRoutine(othelloState.routines[0].id, false);
-              } else {
-                  renderEmptyState();
-              }
+          // Optimistic update
+          const routine = othelloState.routines.find(r => r.id === routineId);
+          if (routine && data.step) {
+              if (!routine.steps) routine.steps = [];
+              routine.steps.push(data.step);
+              renderRoutineEditor(routine);
           }
 ```
 
-### 2) Anchor: Source of Truth (selectRoutine)
+### 2) Anchor: Optimistic Delete
 ```javascript
-    function selectRoutine(routineId, openOnMobile = false) {
-      othelloState.activeRoutineId = routineId;
-      // Always find the routine from the latest state
-      const routine = othelloState.routines.find(r => r.id === routineId);
-      renderRoutineList(othelloState.routines); // update selection style
+          // Optimistic remove
+          const wasActive = (othelloState.activeRoutineId === id);
+          othelloState.routines = othelloState.routines.filter(r => r.id !== id);
+          if (wasActive) { ... select next ... }
+          renderRoutineList(othelloState.routines);
 ```
 
-### 3) Anchor: Duplicate Routine Sync
+### 3) Anchor: Optimistic Duplicate
 ```javascript
-        // Refresh and select
-        await fetchRoutines();
-        
-        // Ensure we find the new routine in the fresh state
-        const freshNewRoutine = othelloState.routines.find(r => r.id === newRoutine.id);
-        if (freshNewRoutine) {
-            othelloState.mobileEditorPinned = true;
-            selectRoutine(freshNewRoutine.id, true);
+        // Optimistic insert (without steps initially)
+        othelloState.routines.push(newRoutine);
+        renderRoutineList(othelloState.routines);
 ```
 
-### 4) Static Verification
-```text
-python -m py_compile api.py core/day_planner.py db/plan_repository.py
-(No output, exit code 0)
-```
-
---- EOF Phase 9.4d ---
+## Next Action
+- Verify fix in live environment.

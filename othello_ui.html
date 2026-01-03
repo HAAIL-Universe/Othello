@@ -8178,11 +8178,24 @@
       try {
         const resp = await fetch(`${ROUTINES_API}/${id}`, { method: "DELETE", credentials: "include" });
         if (resp.ok) {
-          // Clear selection if we deleted the active routine
-          if (othelloState.activeRoutineId === id) {
+          // Optimistic remove
+          const wasActive = (othelloState.activeRoutineId === id);
+          othelloState.routines = othelloState.routines.filter(r => r.id !== id);
+          
+          if (wasActive) {
               othelloState.activeRoutineId = null;
               closeMobileEditor();
+              // Select next or empty
+              if (othelloState.routines.length > 0) {
+                  selectRoutine(othelloState.routines[0].id, false);
+              } else {
+                  renderEmptyState();
+              }
           }
+          renderRoutineList(othelloState.routines);
+          console.debug("routineDeleted", { routineId: id, wasActive, remaining: othelloState.routines.length });
+
+          // Reconcile
           await loadRoutinePlanner();
           showToast("Routine deleted", "success");
         } else {
@@ -8359,6 +8372,10 @@
         const data = await resp.json();
         const newRoutine = data.routine;
         
+        // Optimistic insert (without steps initially)
+        othelloState.routines.push(newRoutine);
+        renderRoutineList(othelloState.routines);
+        
         // Copy steps
         if (routine.steps && routine.steps.length > 0) {
             for (const step of routine.steps) {
@@ -8393,6 +8410,7 @@
             }, 100);
             
             showToast("Routine duplicated", "success");
+            console.debug("routineDuplicated", { sourceId: routineId, newId: newRoutine.id });
         } else {
             showToast("Routine duplicated but not found in list", "warning");
         }
@@ -8479,6 +8497,21 @@
         console.debug("createStep response", { status: resp.status });
 
         if (resp.ok) {
+          const data = await resp.json();
+          
+          // Optimistic update
+          const routine = othelloState.routines.find(r => r.id === routineId);
+          if (routine && data.step) {
+              if (!routine.steps) routine.steps = [];
+              routine.steps.push(data.step);
+              // Sort by order_index if needed (usually new steps are last)
+              routine.steps.sort((a, b) => (a.order_index || 0) - (b.order_index || 0));
+              
+              renderRoutineEditor(routine);
+              console.debug("stepCreated", { routineId, stepId: data.step.id, count: routine.steps.length });
+          }
+
+          // Reconcile
           await fetchRoutines();
           
           // Re-select but respect mobile pin state (don't force open if not pinned)
