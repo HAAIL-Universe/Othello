@@ -2548,20 +2548,16 @@
             if (scopes.includes("routines")) {
               othelloState.routines = [];
               if (typeof loadRoutinePlanner === "function") {
-                  await loadRoutinePlanner();
+                await loadRoutinePlanner();
               }
               // Clear week view cache to prevent stale routine counts
-              if (typeof weekViewCache !== 'undefined') {
-                  for (const key in weekViewCache) delete weekViewCache[key];
+              if (typeof weekViewCache !== "undefined") {
+                for (const key in weekViewCache) delete weekViewCache[key];
               }
               // Refresh week view if open
-              const weekView = document.getElementById('week-view-container');
-              if (weekView && weekView.style.display !== 'none' && typeof openWeekView === 'function') {
-                  openWeekView();
-              }
-              refreshPlanner = true;
-            }
-                await loadRoutinePlanner();
+              const weekView = document.getElementById("week-view-container");
+              if (weekView && weekView.style.display !== "none" && typeof openWeekView === "function") {
+                openWeekView();
               }
               refreshPlanner = true;
             }

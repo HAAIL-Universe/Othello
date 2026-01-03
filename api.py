@@ -5378,23 +5378,33 @@ def get_today_plan():
         "fatigue": args.get("fatigue"),
         "time_pressure": args.get("time_pressure") in ("1", "true", "True", "yes"),
     }
-    
-    plan_date = None
-    if args.get("plan_date"):
-        try:
-            plan_date = date.fromisoformat(args.get("plan_date"))
-        except ValueError:
-            return api_error("VALIDATION_ERROR", "Invalid plan_date format (expected YYYY-MM-DD)", 400)
-    else:
-        plan_date = _get_local_today(user_id)
-        logger.info("API: today-plan using local_today=%s", plan_date)
 
     # Peek mode: Read-only, no generation, no merging, no persistence
     peek_mode = args.get("peek") == "1"
+    plan_date = None
     if peek_mode:
-        if not args.get("plan_date"):
-             return api_error("VALIDATION_ERROR", "peek_requires_plan_date", 400)
-        
+        plan_date_str = args.get("plan_date")
+        if not plan_date_str:
+            return api_error("VALIDATION_ERROR", "peek_requires_plan_date", 400)
+        try:
+            plan_date = date.fromisoformat(plan_date_str)
+        except ValueError:
+            return api_error("VALIDATION_ERROR", "invalid_plan_date", 400)
+    else:
+        if args.get("plan_date"):
+            try:
+                plan_date = date.fromisoformat(args.get("plan_date"))
+            except ValueError:
+                return api_error(
+                    "VALIDATION_ERROR",
+                    "Invalid plan_date format (expected YYYY-MM-DD)",
+                    400,
+                )
+        else:
+            plan_date = _get_local_today(user_id)
+            logger.info("API: today-plan using local_today=%s", plan_date)
+
+    if peek_mode:
         # Try to load existing plan row
         plan_repo = comps["plan_repository"]
         plan_row = plan_repo.get_plan_by_date(user_id, plan_date)
