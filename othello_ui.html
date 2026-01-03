@@ -7463,6 +7463,14 @@
         const data = await resp.json();
         if (data.ok) {
           othelloState.routines = data.routines || [];
+          // If we have an active routine, ensure we have the latest version of it
+          if (othelloState.activeRoutineId) {
+              const active = othelloState.routines.find(r => r.id === othelloState.activeRoutineId);
+              if (!active) {
+                  // Active routine disappeared (deleted elsewhere?)
+                  othelloState.activeRoutineId = null;
+              }
+          }
         }
       } catch (err) {
         console.error("fetchRoutines error:", err);
@@ -7476,14 +7484,32 @@
     async function loadRoutinePlanner() {
       await fetchRoutines();
       renderRoutineList(othelloState.routines);
-      if (othelloState.routines.length > 0 && !othelloState.activeRoutineId) {
+      
+      // Deterministic selection logic
+      if (othelloState.activeRoutineId) {
+          // Try to select the previously active routine
+          const exists = othelloState.routines.find(r => r.id === othelloState.activeRoutineId);
+          if (exists) {
+              selectRoutine(othelloState.activeRoutineId, true);
+          } else {
+              othelloState.activeRoutineId = null;
+              if (othelloState.routines.length > 0) {
+                  selectRoutine(othelloState.routines[0].id, false);
+              } else {
+                  renderEmptyState();
+              }
+          }
+      } else if (othelloState.routines.length > 0) {
         selectRoutine(othelloState.routines[0].id, false);
-      } else if (othelloState.activeRoutineId) {
-        selectRoutine(othelloState.activeRoutineId, true);
       } else {
+        renderEmptyState();
+      }
+    }
+
+    function renderEmptyState() {
         document.getElementById("routine-editor").style.display = "none";
         document.getElementById("routine-empty-state").style.display = "flex";
-      }
+        if (window.innerWidth <= 768) setRoutineMobileView("list");
     }
 
     function renderRoutineList(routines) {
@@ -7634,6 +7660,7 @@
 
     function selectRoutine(routineId, openOnMobile = false) {
       othelloState.activeRoutineId = routineId;
+      // Always find the routine from the latest state
       const routine = othelloState.routines.find(r => r.id === routineId);
       renderRoutineList(othelloState.routines); // update selection style
       
@@ -7660,9 +7687,7 @@
 
         renderRoutineEditor(routine);
       } else {
-        document.getElementById("routine-editor").style.display = "none";
-        document.getElementById("routine-empty-state").style.display = "flex";
-        if (window.innerWidth <= 768) setRoutineMobileView("list");
+        renderEmptyState();
       }
     }
 
@@ -8153,8 +8178,11 @@
       try {
         const resp = await fetch(`${ROUTINES_API}/${id}`, { method: "DELETE", credentials: "include" });
         if (resp.ok) {
-          othelloState.activeRoutineId = null;
-          closeMobileEditor();
+          // Clear selection if we deleted the active routine
+          if (othelloState.activeRoutineId === id) {
+              othelloState.activeRoutineId = null;
+              closeMobileEditor();
+          }
           await loadRoutinePlanner();
           showToast("Routine deleted", "success");
         } else {
@@ -8348,17 +8376,26 @@
                 });
             }
         }
+        
+        // Refresh and select
         await fetchRoutines();
-        othelloState.mobileEditorPinned = true;
-        selectRoutine(newRoutine.id, true);
         
-        // Scroll into view
-        setTimeout(() => {
-            const item = document.querySelector(`.routine-list-item[data-routine-id="${newRoutine.id}"]`);
-            if (item) item.scrollIntoView({ behavior: "smooth", block: "center" });
-        }, 100);
-        
-        showToast("Routine duplicated", "success");
+        // Ensure we find the new routine in the fresh state
+        const freshNewRoutine = othelloState.routines.find(r => r.id === newRoutine.id);
+        if (freshNewRoutine) {
+            othelloState.mobileEditorPinned = true;
+            selectRoutine(freshNewRoutine.id, true);
+            
+            // Scroll into view
+            setTimeout(() => {
+                const item = document.querySelector(`.routine-list-item[data-routine-id="${freshNewRoutine.id}"]`);
+                if (item) item.scrollIntoView({ behavior: "smooth", block: "center" });
+            }, 100);
+            
+            showToast("Routine duplicated", "success");
+        } else {
+            showToast("Routine duplicated but not found in list", "warning");
+        }
       } catch (err) {
         console.error("Duplicate routine error:", err);
         showToast("Failed to duplicate routine", "error");
