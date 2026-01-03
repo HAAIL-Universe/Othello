@@ -2770,7 +2770,8 @@
       dismissedSuggestionIds: new Set(),
       goalIntentSuggestions: {},
       mobileEditorPinned: false,
-      mobileBackJustPressedAt: 0
+      mobileBackJustPressedAt: 0,
+      creatingRoutine: false
     };
     let devResetEnabled = false;
 
@@ -7589,15 +7590,33 @@
     }
 
     // Mobile Navigation Helpers
+    function setRoutineMobileView(view) {
+      // Single source of truth for mobile view switching
+      // view: "list" | "editor"
+      const isMobile = window.innerWidth <= 768;
+      const editor = document.getElementById("routine-editor");
+      const listPanel = document.querySelector(".routine-list-panel");
+      
+      if (view === "editor") {
+        document.body.classList.add("routine-editor-open");
+        if (editor) editor.style.display = "flex";
+        if (listPanel && isMobile) listPanel.style.display = "none";
+      } else {
+        document.body.classList.remove("routine-editor-open");
+        if (editor && isMobile) editor.style.display = "none";
+        if (listPanel) listPanel.style.display = "flex";
+      }
+    }
+
     function openMobileEditor() {
       if (Date.now() - (othelloState.mobileBackJustPressedAt || 0) < 750) return;
       if (window.innerWidth <= 768) {
-        document.body.classList.add("routine-editor-open");
+        setRoutineMobileView("editor");
       }
     }
 
     function closeMobileEditor() {
-      document.body.classList.remove("routine-editor-open");
+      setRoutineMobileView("list");
       othelloState.mobileEditorPinned = false; // Unpin
       othelloState.mobileBackJustPressedAt = Date.now(); // Guard against immediate reopen
       othelloState.activeRoutineId = null; // Deselect
@@ -7620,13 +7639,30 @@
       
       if (routine) {
         document.getElementById("routine-empty-state").style.display = "none";
-        document.getElementById("routine-editor").style.display = "flex";
+        
+        // Logic to determine if editor should be visible
+        const isMobile = window.innerWidth <= 768;
+        const shouldShow = !isMobile || (openOnMobile && othelloState.mobileEditorPinned);
+        
+        if (shouldShow) {
+            document.getElementById("routine-editor").style.display = "flex";
+            if (isMobile) setRoutineMobileView("editor");
+        } else {
+            // Pre-render but keep hidden on mobile if not pinned
+            if (isMobile) {
+                document.getElementById("routine-editor").style.display = "none";
+                // Ensure list is visible
+                document.querySelector(".routine-list-panel").style.display = "flex";
+            } else {
+                document.getElementById("routine-editor").style.display = "flex";
+            }
+        }
+
         renderRoutineEditor(routine);
-        // Only open if explicitly requested AND pinned
-        if (openOnMobile && othelloState.mobileEditorPinned) openMobileEditor(); 
       } else {
         document.getElementById("routine-editor").style.display = "none";
         document.getElementById("routine-empty-state").style.display = "flex";
+        if (window.innerWidth <= 768) setRoutineMobileView("list");
       }
     }
 
@@ -8131,8 +8167,22 @@
     }
 
     async function addRoutine() {
+      if (othelloState.creatingRoutine) {
+          showToast("Creating routine...", "info");
+          return;
+      }
+
       const title = prompt("Routine Name:");
       if (!title) return;
+
+      othelloState.creatingRoutine = true;
+      const btn = document.getElementById("routine-add-btn");
+      if (btn) {
+          btn.disabled = true;
+          btn.style.opacity = "0.5";
+      }
+      showToast("Creating routine...", "info");
+
       try {
         const resp = await fetch(ROUTINES_API, {
           method: "POST",
@@ -8142,24 +8192,59 @@
         });
         if (resp.ok) {
           const data = await resp.json();
-          othelloState.activeRoutineId = data.routine.id;
-          await loadRoutinePlanner();
-          othelloState.mobileEditorPinned = true;
-          openMobileEditor(); // Switch view on mobile
           
-          // Scroll into view
-          setTimeout(() => {
-              const item = document.querySelector(`.routine-list-item[data-routine-id="${data.routine.id}"]`);
-              if (item) item.scrollIntoView({ behavior: "smooth", block: "center" });
-          }, 100);
+          // Refresh list immediately
+          await fetchRoutines();
           
-          showToast("Routine created", "success");
+          // Robust ID extraction
+          const createdId = (data?.routine?.id) || data?.id || data?.routine_id || data?.routineId || null;
+          
+          // Find the new routine (by ID or fallback to title/last)
+          let newRoutine = null;
+          if (createdId) {
+              newRoutine = othelloState.routines.find(r => r.id === createdId);
+          }
+          
+          if (!newRoutine) {
+              // Fallback: look for title match (newest first) or just take the last one
+              newRoutine = othelloState.routines.slice().reverse().find(r => r.title === title) || othelloState.routines[othelloState.routines.length - 1];
+          }
+          
+          if (newRoutine) {
+              othelloState.activeRoutineId = newRoutine.id;
+              renderRoutineList(othelloState.routines);
+              
+              // Mobile navigation logic
+              othelloState.mobileEditorPinned = true;
+              selectRoutine(newRoutine.id, true);
+              
+              // Scroll into view
+              setTimeout(() => {
+                  const item = document.querySelector(`.routine-list-item[data-routine-id="${newRoutine.id}"]`);
+                  if (item) item.scrollIntoView({ behavior: "smooth", block: "center" });
+              }, 100);
+              
+              showToast("Routine created", "success");
+          } else {
+              showToast("Routine created but not found after refresh", "warning");
+          }
         } else {
-            throw new Error("Failed to create routine");
+            let msg = "Failed to create routine";
+            try {
+                const errData = await resp.json();
+                if (errData.message) msg += `: ${errData.message}`;
+            } catch (e) {}
+            throw new Error(msg);
         }
       } catch (err) { 
           console.error(err);
-          showToast("Failed to create routine", "error");
+          showToast(err.message || "Failed to create routine", "error");
+      } finally {
+          othelloState.creatingRoutine = false;
+          if (btn) {
+              btn.disabled = false;
+              btn.style.opacity = "1";
+          }
       }
     }
     document.getElementById("routine-add-btn").onclick = addRoutine;
@@ -8338,24 +8423,51 @@
         }
     }
 
+    function routineStepsUrl(routineId) {
+        return `${ROUTINES_API}/${encodeURIComponent(routineId)}/steps`;
+    }
+
     async function addStepInline(routineId, title) {
+      const url = routineStepsUrl(routineId);
+      console.debug("createStep", { routineId, url });
+      
       try {
-        const resp = await fetch(`${ROUTINES_API}/${routineId}/steps`, {
+        const resp = await fetch(url, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ title: title, est_minutes: 15, energy: "medium" }),
           credentials: "include"
         });
+        
+        console.debug("createStep response", { status: resp.status });
+
         if (resp.ok) {
           await fetchRoutines();
-          selectRoutine(routineId);
+          
+          // Re-select but respect mobile pin state (don't force open if not pinned)
+          const updatedRoutine = othelloState.routines.find(r => r.id === routineId);
+          if (updatedRoutine) {
+              // If we are on mobile and NOT pinned, we shouldn't force the editor open
+              // But if we just added a step, we are likely IN the editor.
+              // So we should probably keep it open.
+              // The user requirement says: "call selectRoutine(routineId, true) but respect the mobile pin rules already implemented"
+              // selectRoutine(id, true) checks mobileEditorPinned.
+              selectRoutine(routineId, true);
+          }
           return true;
         } else {
-            throw new Error("Failed to add step");
+            let msg = "Failed to add step";
+            try {
+                const errData = await resp.json();
+                console.error("createStep error data:", errData);
+                if (errData.message) msg += `: ${errData.message}`;
+                if (errData.request_id) msg += ` (Req: ${errData.request_id})`;
+            } catch (e) {}
+            throw new Error(msg);
         }
       } catch (err) { 
           console.error(err);
-          showToast("Failed to add step", "error");
+          showToast(err.message || "Failed to add step", "error");
           return false;
       }
     }
