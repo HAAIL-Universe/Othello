@@ -2,28 +2,27 @@
 
 Cycle Status: COMPLETE
 Todo Ledger:
-- Planned: Fix "local day" time-semantics inconsistencies in api.py.
-- Completed: Updated `/api/today-plan` and `/api/today-brief` to default to `local_today`. Updated `_apply_proposal_core` to use `local_today` for plan loading.
+- Planned: Stop Week View from accidentally generating/persisting day plans.
+- Completed: Added `peek=1` mode to `/api/today-plan`. Updated Week View to use `peek=1`. Cleared week cache on routine clear.
 - Remaining: None.
 Next Action: Await user confirmation.
 
 Root-Cause Anchors:
-- `api.py:5361`: `get_today_plan` handler used implicit default.
-- `api.py:5428`: `get_today_brief` handler used implicit default.
-- `api.py:6167`: `_apply_proposal_core` called `get_today_plan` without explicit date.
+- `api.py:5361`: `get_today_plan` handler always called `day_planner.get_today_plan` which generates/persists.
+- `othello_ui.html:4606`: `fetchPlanForDate` called API without peek mode.
+- `othello_ui.html:2500`: Clear Routines success handler didn't clear week cache.
 
 Patch Summary:
-- **Explicit Local Day:** `/api/today-plan` and `/api/today-brief` now explicitly compute `_get_local_today(user_id)` when `plan_date` is not provided, ensuring Europe/London consistency.
-- **Proposal Safety:** `_apply_proposal_core` now passes `plan_date=local_today` to `get_today_plan`, preventing server-time drift during proposal application.
-- **Logging:** Added info log when `today-plan` defaults to `local_today`.
+- **Backend Peek Mode:** `/api/today-plan` now accepts `peek=1`. If set, it loads existing plans by date (read-only) or returns an empty stub without generating/persisting.
+- **Frontend Week View:** `fetchPlanForDate` now uses `peek=1` to prevent side-effects when browsing weeks.
+- **Cache Invalidation:** "Clear Routines" now clears `weekViewCache` and refreshes the week view to prevent stale data.
 
 Verification Results (static -> runtime -> behavioral -> contract):
-- Static: `python -m py_compile api.py ...` passed.
+- Static: `python -m py_compile api.py` passed.
 - Runtime:
-    - `GET /api/today-plan` (no date) -> Returns plan for 2026-01-03 (local today).
-    - `GET /api/today-plan?plan_date=2026-01-04` -> Returns plan for 2026-01-04.
-    - `GET /api/today-brief` -> Returns brief successfully.
-- Behavioral: Confirmed endpoints function correctly with auth and return expected data.
-- Contract: All "today" paths now use `_get_local_today(user_id)` unless plan_date is explicitly provided.
+    - `GET /api/today-plan?plan_date=2026-01-05&peek=1` (future) -> Returns empty stub `_plan_source="empty_stub"`.
+    - `GET /api/today-plan?plan_date=2026-01-03&peek=1` (today, existing) -> Returns existing plan `_plan_source="db_peek"`.
+- Behavioral: Week View browsing no longer triggers plan generation. Clear Routines updates week view immediately.
+- Contract: Week View is now side-effect free.
 
---- EOF Phase 9.5e ---
+--- EOF Phase 9.5g ---

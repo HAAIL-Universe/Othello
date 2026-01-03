@@ -5389,6 +5389,65 @@ def get_today_plan():
         plan_date = _get_local_today(user_id)
         logger.info("API: today-plan using local_today=%s", plan_date)
 
+    # Peek mode: Read-only, no generation, no merging, no persistence
+    peek_mode = args.get("peek") == "1"
+    if peek_mode:
+        if not args.get("plan_date"):
+             return api_error("VALIDATION_ERROR", "peek_requires_plan_date", 400)
+        
+        # Try to load existing plan row
+        plan_repo = comps["plan_repository"]
+        plan_row = plan_repo.get_plan_by_date(user_id, plan_date)
+        
+        if not plan_row:
+            # Return empty stub
+            return jsonify({
+                "plan": {
+                    "date": plan_date.isoformat(),
+                    "sections": {"routines": [], "goal_tasks": [], "optional": []},
+                    "mood_context": {},
+                    "_plan_source": "empty_stub"
+                }
+            })
+            
+        # Load full plan with items
+        # Reuse day_planner logic but bypass generation/merging
+        # We can use get_today_plan with force_regen=False, but we must ensure it doesn't generate if missing.
+        # However, get_today_plan WILL generate if missing.
+        # So we manually construct the response from the row + items.
+        
+        # Re-fetch with items using repository helper if available, or manual construction
+        # Since we don't have a clean "load full plan" repo method exposed here easily without duplicating logic,
+        # we will use a lightweight reconstruction similar to what DayPlanner does, but strictly read-only.
+        
+        items = plan_repo.get_plan_items(plan_row["id"])
+        # Group items
+        sections = {"routines": [], "goal_tasks": [], "optional": []}
+        for item in items:
+            sec = item.get("section_hint") or "routines"
+            # Map 'any' to routines for legacy compat, or keep as is? 
+            # DayPlanner logic: routines go to 'routines', goal_tasks to 'goal_tasks'
+            # We'll just map by type/source_kind for safety
+            kind = item.get("type")
+            source_kind = item.get("source_kind")
+            
+            # Simple mapping matching DayPlanner.get_today_plan logic roughly
+            if kind == "routine" or kind == "routine_step" or source_kind == "routine":
+                sections["routines"].append(item)
+            elif kind == "goal_task" or source_kind == "goal_task":
+                sections["goal_tasks"].append(item)
+            else:
+                sections["optional"].append(item)
+                
+        plan_data = {
+            "id": plan_row["id"],
+            "date": plan_row["plan_date"].isoformat(),
+            "sections": sections,
+            "mood_context": plan_row.get("mood_context") or {},
+            "_plan_source": "db_peek"
+        }
+        return jsonify({"plan": plan_data})
+
     try:
         plan = othello_engine.day_planner.get_today_plan(
             user_id,
@@ -6593,9 +6652,15 @@ def rebuild_today_plan():
         return error
     data = request.get_json() or {}
     mood_context = data.get("mood_context") or data
+    local_today = _get_local_today(user_id)
     try:
-        plan = othello_engine.day_planner.rebuild_today_plan(user_id, mood_context=mood_context)
-        logger.info("API: Rebuilt today plan on demand")
+        plan = othello_engine.day_planner.get_today_plan(
+            user_id,
+            mood_context=mood_context,
+            force_regen=True,
+            plan_date=local_today,
+        )
+        logger.info("API: Rebuilt today plan on demand for %s", local_today)
         return jsonify({"plan": plan})
     except Exception as exc:
         logger.error(f"API: Failed to rebuild plan: {exc}", exc_info=True)
@@ -7423,16 +7488,17 @@ def _ensure_today_plan_id(user_id: str) -> Optional[int]:
     comps = get_agent_components()
     othello_engine = comps["othello_engine"]
     plan_repository = comps["plan_repository"]
+    local_today = _get_local_today(user_id)
 
     def _fetch_plan_row() -> Optional[Dict[str, Any]]:
-        return plan_repository.get_plan_by_date(user_id, date.today())
+        return plan_repository.get_plan_by_date(user_id, local_today)
 
     # Try existing row
     today_row = _fetch_plan_row()
     if not today_row:
         # Generate (or rebuild) and persist a plan row for today
         try:
-            othello_engine.day_planner.rebuild_today_plan(user_id)
+            othello_engine.day_planner.get_today_plan(user_id, force_regen=True, plan_date=local_today)
         except Exception as exc:
             logger.warning("API: failed to rebuild plan before applying insight: %s", exc)
         today_row = _fetch_plan_row()
@@ -7501,10 +7567,12 @@ def _append_goal_task_to_plan(user_id: str, plan_item: dict) -> bool:
     Returns True if appended, False if skipped (e.g., duplicate).
     """
     logger = logging.getLogger("API.Insights")
+    local_today = _get_local_today(user_id)
     try:
         plan = othello_engine.day_planner.get_today_plan(
             user_id,
             force_regen=False,
+            plan_date=local_today,
         )
     except Exception as exc:
         logger.warning("API: failed to load plan before appending insight task: %s", exc, exc_info=True)
@@ -7524,7 +7592,7 @@ def _append_goal_task_to_plan(user_id: str, plan_item: dict) -> bool:
 
     goal_tasks.append(plan_item)
     try:
-        othello_engine.day_planner._persist_plan(user_id, date.today(), plan)  # type: ignore[attr-defined]
+        othello_engine.day_planner._persist_plan(user_id, local_today, plan)  # type: ignore[attr-defined]
     except Exception as exc:
         logger.warning("API: failed to persist plan after appending insight task: %s", exc, exc_info=True)
         return False
@@ -7534,7 +7602,7 @@ def _append_goal_task_to_plan(user_id: str, plan_item: dict) -> bool:
         label = meta.get("label") or plan_item.get("label") or item_id
         goal_task_history_repository.upsert_goal_task(
             user_id=str(user_id),
-            plan_date=date.today(),
+            plan_date=local_today,
             item_id=item_id,
             label=label,
             status=plan_item.get("status") or meta.get("status"),
