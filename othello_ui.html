@@ -984,7 +984,7 @@
       padding-bottom: calc(var(--input-height) + max(var(--safe-bottom), 0.5rem));
       position: relative;
       isolation: isolate;
-      overflow: hidden;
+      overflow-x: hidden;
     }
 
     #chat-view::before {
@@ -992,6 +992,7 @@
       position: absolute;
       inset: 0;
       z-index: -2;
+      pointer-events: none;
       background: 
         radial-gradient(circle at 15% 50%, rgba(99, 102, 241, 0.08), transparent 25%),
         radial-gradient(circle at 85% 30%, rgba(124, 58, 237, 0.08), transparent 25%),
@@ -1006,6 +1007,7 @@
       position: absolute;
       inset: -50%;
       z-index: -1;
+      pointer-events: none;
       background: repeating-radial-gradient(
         circle at 50% 50%,
         transparent 0,
@@ -5742,15 +5744,16 @@
       const log = document.getElementById("chat-log");
       if (!log) return;
       
-      const hasGoal = othelloState.activeGoalId !== null;
-      const hasRoutine = !!othelloState.pendingRoutineSuggestionId;
+      const kind = typeof getActiveFocusKind === "function" 
+        ? getActiveFocusKind(othelloState) 
+        : (othelloState.pendingRoutineSuggestionId ? "routine_draft" : (othelloState.activeGoalId ? "goal" : null));
       
       log.classList.remove("focus-mode", "focus-goal", "focus-routine");
       
-      if (hasGoal || hasRoutine) {
+      if (kind === "goal" || kind === "routine_draft") {
         log.classList.add("focus-mode");
-        if (hasGoal) log.classList.add("focus-goal");
-        if (hasRoutine) log.classList.add("focus-routine");
+        if (kind === "goal") log.classList.add("focus-goal");
+        if (kind === "routine_draft") log.classList.add("focus-routine");
       }
     }
 
