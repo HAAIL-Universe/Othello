@@ -2109,6 +2109,15 @@ def _apply_suggestion_decisions(
 
         kind = suggestion.get("kind")
         payload = suggestion.get("payload") or {}
+        status = (suggestion.get("status") or "").strip().lower()
+        if action == "accept" and status and status != "pending":
+            results.append({
+                "ok": True,
+                "action": "noop",
+                "suggestion": suggestion,
+                "reason": "already_decided",
+            })
+            continue
 
         if action == "reject":
             updated = update_suggestion_status(user_id, suggestion_id, "rejected", decided_reason=reason)

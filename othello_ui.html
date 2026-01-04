@@ -7137,6 +7137,30 @@
       return fallback ? [{ index: 1, text: fallback }] : [];
     }
 
+    async function confirmGoalPlanSuggestion(suggestionId) {
+      if (!suggestionId) return null;
+      const payload = await v1Request(
+        `/v1/suggestions/${suggestionId}/accept`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({ reason: "confirm" })
+        },
+        "Confirm goal plan"
+      );
+      const results = payload && payload.data && Array.isArray(payload.data.results)
+        ? payload.data.results
+        : [];
+      const result = results[0] || null;
+      if (result && result.ok === false) {
+        const err = new Error(result.error || "Failed to confirm plan.");
+        err.requestId = payload && payload.request_id ? payload.request_id : null;
+        throw err;
+      }
+      return result;
+    }
+
     async function postPlanFromText(planText) {
       const goalId = othelloState.activeGoalId;
       if (goalId == null) throw new Error("No focused goal.");
@@ -7170,7 +7194,15 @@
         }
         throw new Error(errMsg);
       }
-      return res.json();
+      const data = await res.json();
+      const pendingId = data && data.meta ? data.meta.pending_suggestion_id : null;
+      if (pendingId) {
+        await confirmGoalPlanSuggestion(pendingId);
+        data.meta = data.meta || {};
+        data.meta.intent = "plan_steps_added";
+        data.meta.confirmed_suggestion_id = pendingId;
+      }
+      return data;
     }
 
     async function postPlanFromIntent(goalId, intentIndex, intentText) {
@@ -7207,7 +7239,19 @@
         }
         throw new Error(errMsg);
       }
-      return res.json();
+      const data = await res.json();
+      const pendingId = data && data.meta ? data.meta.pending_suggestion_id : null;
+      if (pendingId) {
+        await confirmGoalPlanSuggestion(pendingId);
+        data.meta = data.meta || {};
+        data.meta.intent = "plan_steps_added";
+        data.meta.confirmed_suggestion_id = pendingId;
+        if (typeof data.reply === "string") {
+          const cleaned = data.reply.replace(/\n?\s*Confirm to apply these steps\.?\s*$/i, "").trim();
+          data.reply = cleaned ? `${cleaned}\n\nSaved to Current Plan.` : "Saved to Current Plan.";
+        }
+      }
+      return data;
     }
 
     function formatStepStatus(status) {
