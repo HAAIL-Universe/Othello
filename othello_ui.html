@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <link rel="stylesheet" href="/static/othello.css">
+    <link rel="stylesheet" href="/static/othello.css?v=2">
   <meta charset="UTF-8" />
   <title>Othello — Personal Goal Architect</title>
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
@@ -4171,8 +4171,16 @@
             const text = msg && msg.transcript ? String(msg.transcript) : "";
             if (!text.trim()) return;
             const role = msg && msg.source === "assistant" ? "bot" : "user";
-            addMessage(role, text);
+            // Skip individual scrolls during history load to prevent drift
+            addMessage(role, text, { skipScroll: true });
           });
+          // Final instant scroll to bottom after history load
+          const chatView = document.getElementById("chat-view");
+          if (chatView) {
+            requestAnimationFrame(() => {
+              chatView.scrollTop = chatView.scrollHeight;
+            });
+          }
         };
         if (renderedCount > 0) {
           renderMessages(messages);
@@ -4277,16 +4285,22 @@
         refreshSecondarySuggestionUI(othelloState.messagesByClientId[clientMessageId]);
       }
 
-      // Scroll to latest message
-      requestAnimationFrame(() => {
+      // Smart Scroll: Only scroll if user is near bottom or it's their own message.
+      // Avoids "drift" from repeated smooth scrolls.
+      if (!options.skipScroll) {
         const chatView = document.getElementById("chat-view");
         if (chatView) {
-          chatView.scrollTo({
-            top: chatView.scrollHeight,
-            behavior: "smooth"
-          });
+          const nearBottom = (chatView.scrollTop + chatView.clientHeight) >= (chatView.scrollHeight - 120);
+          if (role === "user" || nearBottom) {
+            requestAnimationFrame(() => {
+              chatView.scrollTo({
+                top: chatView.scrollHeight,
+                behavior: options.smoothScroll ? "smooth" : "auto"
+              });
+            });
+          }
         }
-      });
+      }
       return { row, bubble };
     }
 

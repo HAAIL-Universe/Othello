@@ -976,6 +976,7 @@ header {
   position: relative;
   isolation: isolate;
   overflow-x: hidden;
+  overflow-y: auto;
 }
 
 #chat-view::before {
