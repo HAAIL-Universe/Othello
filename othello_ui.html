@@ -2790,7 +2790,8 @@
       goalIntentSuggestions: {},
       mobileEditorPinned: false,
       mobileBackJustPressedAt: 0,
-      creatingRoutine: false
+      creatingRoutine: false,
+      needsRoutineRefresh: false
     };
     let devResetEnabled = false;
 
@@ -5554,6 +5555,7 @@
         loadInsightsInbox();
       } else if (viewName === "routine-planner") {
         loadRoutinePlanner();
+        othelloState.needsRoutineRefresh = false;
       }
     }
 
@@ -6348,6 +6350,188 @@
       suggestions.forEach(handleGoalIntentSuggestion);
     }
 
+    function formatRoutineDays(days) {
+      if (!Array.isArray(days) || days.length === 0) return "Every day";
+      const labels = {
+        mon: "Mon",
+        tue: "Tue",
+        wed: "Wed",
+        thu: "Thu",
+        fri: "Fri",
+        sat: "Sat",
+        sun: "Sun"
+      };
+      return days.map((day) => labels[day] || day).join(", ");
+    }
+
+    function formatRoutineTime(draft) {
+      if (!draft) return "Time TBD";
+      return draft.time_local || draft.time_text || "Time TBD";
+    }
+
+    function formatRoutineDuration(minutes) {
+      if (!Number.isFinite(minutes)) return "";
+      return `${Math.trunc(minutes)} min`;
+    }
+
+    function requestRoutineRefresh() {
+      if (othelloState.currentView === "routine-planner" && typeof loadRoutinePlanner === "function") {
+        loadRoutinePlanner();
+      } else {
+        othelloState.needsRoutineRefresh = true;
+      }
+    }
+
+    function sendQuickReply(text) {
+      if (!input) return;
+      input.value = text;
+      sendMessage();
+    }
+
+    async function fetchRoutineSuggestionById(suggestionId) {
+      if (!suggestionId) return null;
+      const payload = await v1Request(
+        "/v1/suggestions?status=pending&kind=routine&limit=20",
+        { credentials: "include" },
+        "Routine suggestions"
+      );
+      const suggestions = Array.isArray(payload?.data?.suggestions) ? payload.data.suggestions : [];
+      return suggestions.find((s) => String(s.id) === String(suggestionId)) || null;
+    }
+
+    function buildRoutineClarifyPanel(entry, suggestionId) {
+      if (!entry || !entry.row) return null;
+      const panel = document.createElement("div");
+      panel.className = "ux-goal-intent-panel";
+      panel.dataset.suggestionType = "routine";
+      panel.dataset.suggestionId = suggestionId || "";
+
+      const title = document.createElement("div");
+      title.className = "ux-goal-intent-panel__title";
+      title.textContent = "Routine clarification";
+      panel.appendChild(title);
+
+      const actions = document.createElement("div");
+      actions.className = "ux-goal-intent-panel__actions";
+
+      const amBtn = document.createElement("button");
+      amBtn.className = "ux-goal-intent-btn secondary";
+      amBtn.textContent = "7am";
+      amBtn.addEventListener("click", () => {
+        amBtn.disabled = true;
+        pmBtn.disabled = true;
+        sendQuickReply("7am");
+      });
+
+      const pmBtn = document.createElement("button");
+      pmBtn.className = "ux-goal-intent-btn secondary";
+      pmBtn.textContent = "7pm";
+      pmBtn.addEventListener("click", () => {
+        amBtn.disabled = true;
+        pmBtn.disabled = true;
+        sendQuickReply("7pm");
+      });
+
+      actions.appendChild(amBtn);
+      actions.appendChild(pmBtn);
+      panel.appendChild(actions);
+
+      entry.row.appendChild(panel);
+      return panel;
+    }
+
+    function buildRoutineReadyPanel(entry, suggestion, suggestionId) {
+      if (!entry || !entry.row) return null;
+      const panel = document.createElement("div");
+      panel.className = "ux-goal-intent-panel";
+      panel.dataset.suggestionType = "routine";
+      panel.dataset.suggestionId = suggestionId || "";
+
+      const draft = suggestion && suggestion.payload && suggestion.payload.draft
+        ? suggestion.payload.draft
+        : {};
+      const title = document.createElement("div");
+      title.className = "ux-goal-intent-panel__title";
+      title.textContent = draft.title || "Routine draft";
+      panel.appendChild(title);
+
+      const subtitle = document.createElement("div");
+      subtitle.className = "ux-goal-intent-panel__subtitle";
+      const details = [
+        formatRoutineDays(draft.days_of_week),
+        formatRoutineTime(draft)
+      ];
+      const durationText = formatRoutineDuration(draft.duration_minutes);
+      if (durationText) details.push(durationText);
+      subtitle.textContent = details.filter(Boolean).join(" · ");
+      panel.appendChild(subtitle);
+
+      const actions = document.createElement("div");
+      actions.className = "ux-goal-intent-panel__actions";
+
+      const confirmBtn = document.createElement("button");
+      confirmBtn.className = "ux-goal-intent-btn primary";
+      confirmBtn.textContent = "Confirm & Save";
+
+      const status = document.createElement("div");
+      status.className = "ux-goal-intent-status";
+
+      confirmBtn.addEventListener("click", async () => {
+        if (!suggestionId) return;
+        confirmBtn.disabled = true;
+        status.textContent = "Saving...";
+        try {
+          const confirmPayload = { reason: "confirm" };
+          await v1Request(
+            `/v1/suggestions/${suggestionId}/accept`,
+            {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              credentials: "include",
+              body: JSON.stringify(confirmPayload)
+            },
+            "Confirm routine suggestion"
+          );
+          status.textContent = "Saved";
+          requestRoutineRefresh();
+        } catch (err) {
+          if (err && (err.status === 401 || err.status === 403)) {
+            await handleUnauthorized("routine-accept");
+            return;
+          }
+          status.textContent = err && err.message ? err.message : "Save failed.";
+          confirmBtn.disabled = false;
+        }
+      });
+
+      actions.appendChild(confirmBtn);
+      panel.appendChild(actions);
+      panel.appendChild(status);
+
+      entry.row.appendChild(panel);
+      return panel;
+    }
+
+    async function applyRoutineMeta(meta, entry) {
+      if (!meta || !entry || !entry.row) return;
+      const intent = meta.intent || "";
+      const suggestionId = meta.routine_suggestion_id;
+      if (!suggestionId) return;
+      if (intent === "routine_clarify") {
+        buildRoutineClarifyPanel(entry, suggestionId);
+        return;
+      }
+      if (intent === "routine_ready") {
+        let suggestion = null;
+        try {
+          suggestion = await fetchRoutineSuggestionById(suggestionId);
+        } catch (err) {
+          console.warn("[Othello UI] routine suggestion fetch failed:", err);
+        }
+        buildRoutineReadyPanel(entry, suggestion, suggestionId);
+      }
+    }
+
     function getLatestGoalIntentEntry() {
       const entries = Object.entries(othelloState.messagesByClientId || {});
       let latest = null;
@@ -6505,7 +6689,12 @@
         }
 
         const data = await res.json();
-        addMessage("bot", data.reply || "[no reply]", { sourceClientMessageId: clientMessageId });
+        const botEntry = addMessage("bot", data.reply || "[no reply]", { sourceClientMessageId: clientMessageId });
+        try {
+          await applyRoutineMeta(data.meta, botEntry);
+        } catch (err) {
+          console.warn("[Othello UI] routine meta render failed:", err);
+        }
         
         // Update agent status display
         if (data.agent_status) {
