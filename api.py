@@ -1020,11 +1020,30 @@ def _detect_goal_intent_suggestion(
     }
 
 
+def _has_schedule_cues(text: Optional[str]) -> bool:
+    if not text:
+        return False
+    lower = str(text).lower()
+    day_match = re.search(
+        r"\b(mon(day)?|tue(sday)?|wed(nesday)?|thu(rsday)?|fri(day)?|sat(urday)?|sun(day)?)\b",
+        lower,
+    )
+    if not day_match:
+        return False
+    time_match = re.search(
+        r"\b([01]?\d|2[0-3]):[0-5]\d\b|\b([1-9]|1[0-2])\s*(a\.?m\.?|p\.?m\.?)\b|\b(o\W?clock)\b|\bmorning\b|\bevening\b",
+        lower,
+    )
+    return bool(time_match)
+
+
 def _get_goal_intent_suggestion(
     user_input: str,
     client_message_id: Optional[str],
     user_id: Optional[str],
 ) -> Optional[Dict[str, Any]]:
+    if _has_schedule_cues(user_input):
+        return None
     suggestion = _detect_goal_intent_suggestion(user_input, client_message_id)
     if not suggestion:
         return None
@@ -4068,7 +4087,11 @@ def handle_message():
         routine_response = None
         if user_id:
             try:
-                from db.suggestions_repository import list_suggestions, update_suggestion_payload
+                from db.suggestions_repository import (
+                    create_suggestion,
+                    list_suggestions,
+                    update_suggestion_payload,
+                )
                 pending = list_suggestions(user_id=user_id, status="pending", kind="routine", limit=1)
                 if pending:
                     suggestion = pending[0]
@@ -4099,10 +4122,56 @@ def handle_message():
                                 "reply": _format_routine_summary(payload.get("draft") or {}),
                                 "request_id": request_id,
                                 "meta": {
-                                    "intent": "routine_ready",
-                                    "routine_suggestion_id": suggestion.get("id"),
-                                },
-                            }
+                                "intent": "routine_ready",
+                                "routine_suggestion_id": suggestion.get("id"),
+                            },
+                        }
+                if not routine_response:
+                    from core.conversation_parser import ConversationParser
+                    from db.plan_repository import get_user_timezone
+                    routine_parser = ConversationParser()
+                    routine_candidates = routine_parser.extract_routines(user_input) or []
+                    routine_drafts = [
+                        routine for routine in routine_candidates
+                        if isinstance(routine, dict) and routine.get("draft_type") == "schedule"
+                    ]
+                    if routine_drafts:
+                        draft = dict(routine_drafts[0])
+                        draft["timezone"] = get_user_timezone(user_id)
+                        missing_fields = list(draft.get("missing_fields") or [])
+                        ambiguous_fields = list(draft.get("ambiguous_fields") or [])
+                        payload = _build_routine_suggestion_payload(draft, missing_fields, ambiguous_fields)
+                        provenance = {
+                            "source": "api_message_routine",
+                            "detector": "routine_schedule_parser",
+                            "request_id": request_id,
+                        }
+                        created = create_suggestion(
+                            user_id=user_id,
+                            kind="routine",
+                            payload=payload,
+                            provenance=provenance,
+                        )
+                        if created:
+                            if payload.get("status") == "incomplete":
+                                question = payload.get("clarifying_question") or "Do you mean am or pm?"
+                                routine_response = {
+                                    "reply": question,
+                                    "request_id": request_id,
+                                    "meta": {
+                                        "intent": "routine_clarify",
+                                        "routine_suggestion_id": created.get("id"),
+                                    },
+                                }
+                            else:
+                                routine_response = {
+                                    "reply": _format_routine_summary(payload.get("draft") or {}),
+                                    "request_id": request_id,
+                                    "meta": {
+                                        "intent": "routine_ready",
+                                        "routine_suggestion_id": created.get("id"),
+                                    },
+                                }
             except Exception as exc:
                 logger.warning("API: routine clarification failed: %s", exc, exc_info=True)
 

@@ -264,11 +264,32 @@ class ConversationParser:
 
     def _extract_routine_action(self, text: str) -> str:
         cleaned = (text or "").strip()
-        if ":" in cleaned:
-            action = cleaned.split(":", 1)[1].strip()
+        if not cleaned:
+            return ""
+        # Only treat ":" as a delimiter when followed by whitespace to avoid splitting time tokens like "7:00".
+        delimiter = re.search(r":\s+", cleaned)
+        if delimiter:
+            action = cleaned[delimiter.end():].strip()
         else:
             match = re.search(r"\broutine\b.*?\b(?:to|for)\b\s+([^.;\n]+)", cleaned, flags=re.IGNORECASE)
             action = match.group(1).strip() if match else ""
+            if not action:
+                candidate = re.sub(
+                    r"^(hey othello|hey|hi|hello|ok|okay|please)\s*,?\s*",
+                    "",
+                    cleaned,
+                    flags=re.IGNORECASE,
+                )
+                candidate = re.sub(
+                    r"^(i want to|i'm going to|im going to|i am going to|i will|we will|let's|lets)\s+",
+                    "",
+                    candidate,
+                    flags=re.IGNORECASE,
+                )
+                cue_match = re.search(r"\b(on|at)\b", candidate, flags=re.IGNORECASE)
+                if cue_match:
+                    candidate = candidate[:cue_match.start()].strip()
+                action = candidate.strip()
         return action.rstrip(".").strip()
 
     def _extract_scheduled_routine(self, text: str) -> Optional[Dict[str, Any]]:
