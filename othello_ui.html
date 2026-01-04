@@ -6388,6 +6388,29 @@
       othelloState.pendingRoutineSuggestionId = null;
       othelloState.pendingRoutineAcceptFn = null;
     }
+    function isElementVisible(el) {
+      if (!el) return false;
+      const style = window.getComputedStyle(el);
+      if (!style || style.display === "none" || style.visibility === "hidden") return false;
+      return el.offsetParent !== null;
+    }
+
+    function findVisiblePendingRoutinePanel() {
+      const panels = Array.from(
+        document.querySelectorAll('.ux-goal-intent-panel[data-suggestion-type="routine"]')
+      );
+      const visible = panels.filter(isElementVisible).pop() || null;
+      if (!visible && othelloState.pendingRoutineSuggestionId) {
+        clearPendingRoutineSuggestion();
+      }
+      return visible;
+    }
+
+    function isGoalIntentDecisionPending() {
+      const latest = getLatestGoalIntentEntry();
+      if (!latest || !latest.entry || !latest.entry.panelEl) return false;
+      return isElementVisible(latest.entry.panelEl);
+    }
 
     async function acceptRoutineSuggestion(suggestionId, uiRefs) {
       if (!suggestionId) return false;
@@ -6721,17 +6744,34 @@
       statusEl.textContent = "Thinking…";
 
       const normalizedText = text.toLowerCase().replace(/[.!?]+$/, "").trim();
-      if ((normalizedText === "confirm" || normalizedText === "save") &&
-          typeof othelloState.pendingRoutineAcceptFn === "function") {
-        statusEl.textContent = "Saving...";
-        try {
-          const accepted = await othelloState.pendingRoutineAcceptFn();
-          statusEl.textContent = accepted ? "Online" : "Error";
-        } catch (err) {
-          console.warn("[Othello UI] routine typed confirm failed:", err);
-          statusEl.textContent = "Error";
+      const isConfirmSave = normalizedText === "confirm" || normalizedText === "save";
+      if (isConfirmSave && !isGoalIntentDecisionPending()) {
+        const routinePanel = findVisiblePendingRoutinePanel();
+        const panelId = routinePanel ? routinePanel.dataset.suggestionId : null;
+        const pendingId = othelloState.pendingRoutineSuggestionId;
+        const canAcceptRoutine = routinePanel &&
+          typeof othelloState.pendingRoutineAcceptFn === "function" &&
+          pendingId && panelId &&
+          String(pendingId) === String(panelId);
+        if (canAcceptRoutine) {
+          const previousStatus = statusEl.textContent;
+          statusEl.textContent = "Saving...";
+          try {
+            const accepted = await othelloState.pendingRoutineAcceptFn();
+            if (accepted) {
+              statusEl.textContent = "Saved";
+              window.setTimeout(() => {
+                statusEl.textContent = previousStatus;
+              }, 800);
+            } else {
+              statusEl.textContent = previousStatus;
+            }
+          } catch (err) {
+            console.warn("[Othello UI] routine typed confirm failed:", err);
+            statusEl.textContent = previousStatus;
+          }
+          return;
         }
-        return;
       }
 
       const goalIntentResolved = await resolveGoalIntentDecision(text);
