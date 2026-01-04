@@ -2788,7 +2788,6 @@
       messagesByClientId: {},
       dismissedSuggestionIds: new Set(),
       goalIntentSuggestions: {},
-      pendingGoalIntent: null,
       mobileEditorPinned: false,
       mobileBackJustPressedAt: 0,
       creatingRoutine: false,
@@ -3666,7 +3665,7 @@
 
       // Insert after brief
       const brief = document.getElementById("planner-brief");
-      if (brief && brief.nextSibling) {
+      if (brief && brief.parentNode === container && brief.nextSibling) {
          container.insertBefore(strip, brief.nextSibling);
       } else {
          container.prepend(strip);
@@ -4366,7 +4365,7 @@
 
       // Insert after brief
       const brief = document.getElementById("planner-brief");
-      if (brief && brief.nextSibling) {
+      if (brief && brief.parentNode === container && brief.nextSibling) {
         container.insertBefore(card, brief.nextSibling);
       } else {
         container.prepend(card);
@@ -6062,13 +6061,7 @@
       return trimmed.length > 60 ? trimmed.slice(0, 60).trim() : trimmed;
     }
 
-    function clearPendingGoalIntent(clientMessageId) {
-      const pending = othelloState.pendingGoalIntent;
-      if (pending && (!clientMessageId || pending.clientMessageId === clientMessageId)) othelloState.pendingGoalIntent = null;
-    }
-
     function clearGoalIntentUI(clientMessageId) {
-      clearPendingGoalIntent(clientMessageId);
       const entry = othelloState.messagesByClientId[clientMessageId];
       if (!entry) return;
       if (entry.bubbleEl) {
@@ -6089,7 +6082,7 @@
     }
 
     async function createGoalFromSuggestion(opts) {
-      const { title, description, clientMessageId, statusEl, panelEl, onSuccess } = opts;
+      const { title, description, clientMessageId, statusEl, panelEl, onSuccess, suggestionId } = opts;
       const trimmedTitle = (title || "").trim();
       const trimmedDesc = (description || "").trim();
       if (trimmedTitle.length < 3) {
@@ -6099,30 +6092,58 @@
       disablePanelButtons(panelEl, true);
       if (statusEl) statusEl.textContent = "Saving goal...";
       try {
-        const res = await fetch(GOALS_API, {
-          method: "POST",
-          headers: {"Content-Type": "application/json"},
-          credentials: "include",
-          body: JSON.stringify({
-            title: trimmedTitle,
-            description: trimmedDesc,
-            source_client_message_id: clientMessageId
-          })
-        });
-        if (!res.ok) {
-          const contentType = res.headers.get("content-type") || "";
-          let errMsg = "Unable to create goal.";
-          if (contentType.includes("application/json")) {
-            const data = await res.json();
-            errMsg = (data && (data.message || data.error)) || errMsg;
+        let goal = null;
+        let goalId = null;
+        if (suggestionId) {
+          const payload = await v1Request(
+            `/v1/suggestions/${suggestionId}/accept`,
+            {
+              method: "POST",
+              headers: {"Content-Type": "application/json"},
+              credentials: "include",
+              body: JSON.stringify({
+                reason: "confirm",
+                payload: {
+                  title: trimmedTitle,
+                  body: trimmedDesc,
+                  description: trimmedDesc
+                }
+              })
+            },
+            "Confirm goal suggestion"
+          );
+          const results = payload && payload.data && Array.isArray(payload.data.results)
+            ? payload.data.results
+            : [];
+          const result = results[0] || null;
+          goal = result && result.goal ? result.goal : null;
+          goalId = goal && typeof goal.id === "number" ? goal.id : null;
+        } else {
+          const res = await fetch(GOALS_API, {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            credentials: "include",
+            body: JSON.stringify({
+              title: trimmedTitle,
+              description: trimmedDesc,
+              source_client_message_id: clientMessageId
+            })
+          });
+          if (!res.ok) {
+            const contentType = res.headers.get("content-type") || "";
+            let errMsg = "Unable to create goal.";
+            if (contentType.includes("application/json")) {
+              const data = await res.json();
+              errMsg = (data && (data.message || data.error)) || errMsg;
+            }
+            if (statusEl) statusEl.textContent = errMsg;
+            disablePanelButtons(panelEl, false);
+            return false;
           }
-          if (statusEl) statusEl.textContent = errMsg;
-          disablePanelButtons(panelEl, false);
-          return false;
+          const data = await res.json();
+          goal = data && data.goal ? data.goal : null;
+          goalId = goal && typeof goal.id === "number" ? goal.id : data.goal_id;
         }
-        const data = await res.json();
-        const goal = data && data.goal ? data.goal : null;
-        const goalId = goal && typeof goal.id === "number" ? goal.id : data.goal_id;
         clearGoalIntentUI(clientMessageId);
         showToast("Saved as goal");
         await refreshGoals();
@@ -6138,7 +6159,7 @@
         return true;
       } catch (err) {
         console.error("[Othello UI] create goal failed:", err);
-        if (statusEl) statusEl.textContent = "Network error.";
+        if (statusEl) statusEl.textContent = err && err.message ? err.message : "Network error.";
         disablePanelButtons(panelEl, false);
         return false;
       }
@@ -6194,10 +6215,14 @@
 
     function buildGoalIntentPanel(suggestion, entry) {
       const clientMessageId = suggestion.source_client_message_id;
+      const suggestionId = suggestion.suggestion_id || suggestion.id || null;
       const panel = document.createElement("div");
       panel.className = "ux-goal-intent-panel";
       panel.dataset.clientMessageId = clientMessageId;
       panel.dataset.suggestionType = suggestion.type;
+      if (suggestionId != null) {
+        panel.dataset.suggestionId = String(suggestionId);
+      }
 
       const title = document.createElement("div");
       title.className = "ux-goal-intent-panel__title";
@@ -6317,7 +6342,8 @@
           description: bodyInput.value,
           clientMessageId,
           statusEl: status,
-          panelEl: panel
+          panelEl: panel,
+          suggestionId
         });
       });
 
@@ -6342,17 +6368,21 @@
     }
 
     function handleGoalIntentSuggestion(suggestion) {
-      if (!suggestion || suggestion.type !== "goal_intent") return;
-      const clientMessageId = suggestion.source_client_message_id;
+      if (!suggestion) return;
+      const suggestionType = suggestion.type || suggestion.kind;
+      if (suggestionType !== "goal_intent" && suggestionType !== "goal") return;
+      const normalizedSuggestion = suggestionType === "goal"
+        ? { ...suggestion, type: "goal_intent" }
+        : suggestion;
+      const clientMessageId = normalizedSuggestion.source_client_message_id;
       if (!clientMessageId) return;
-      if (isSuggestionDismissed(suggestion.type, clientMessageId)) return;
-      othelloState.goalIntentSuggestions[clientMessageId] = suggestion;
+      if (isSuggestionDismissed(normalizedSuggestion.type, clientMessageId)) return;
+      othelloState.goalIntentSuggestions[clientMessageId] = normalizedSuggestion;
       const entry = othelloState.messagesByClientId[clientMessageId] || null;
-      othelloState.pendingGoalIntent = { clientMessageId, createdAt: Date.now(), acceptFn: () => createGoalFromSuggestion({ title: pickSuggestionTitle(suggestion, entry ? entry.text : ""), description: pickSuggestionBody(suggestion, entry ? entry.text : ""), clientMessageId, statusEl: null, panelEl: null }) };
       if (!entry || !entry.bubbleEl || !entry.rowEl) return;
       if (entry.panelEl) return;
       entry.bubbleEl.classList.add("ux-goal-intent");
-      const panel = buildGoalIntentPanel(suggestion, entry);
+      const panel = buildGoalIntentPanel(normalizedSuggestion, entry);
       entry.panelEl = panel;
       entry.rowEl.appendChild(panel);
     }
@@ -6669,6 +6699,40 @@
       return latest;
     }
 
+    function findVisibleGoalIntentEntry() {
+      const latest = getLatestGoalIntentEntry();
+      if (!latest || !latest.entry || !latest.entry.panelEl) return null;
+      if (!isElementVisible(latest.entry.panelEl)) return null;
+      return latest;
+    }
+
+    async function acceptVisibleGoalIntentSuggestion() {
+      const latest = findVisibleGoalIntentEntry();
+      if (!latest || !latest.entry) return { handled: false, accepted: false };
+      const { clientMessageId, entry } = latest;
+      const suggestion = othelloState.goalIntentSuggestions[clientMessageId];
+      if (!suggestion) return { handled: false, accepted: false };
+      const panelEl = entry.panelEl;
+      const statusEl = panelEl ? panelEl.querySelector(".ux-goal-intent-status") : null;
+      const title = pickSuggestionTitle(suggestion, entry.text);
+      const description = pickSuggestionBody(suggestion, entry.text);
+      const suggestionId = suggestion.suggestion_id || suggestion.id || null;
+      try {
+        const accepted = await createGoalFromSuggestion({
+          title,
+          description,
+          clientMessageId,
+          statusEl,
+          panelEl,
+          suggestionId
+        });
+        return { handled: true, accepted: !!accepted };
+      } catch (err) {
+        console.warn("[Othello UI] goal typed confirm failed:", err);
+        return { handled: true, accepted: false };
+      }
+    }
+
     function parseGoalIntentDecision(text) {
       const normalized = String(text || "")
         .toLowerCase()
@@ -6693,6 +6757,7 @@
       const statusEl = panelEl ? panelEl.querySelector(".ux-goal-intent-status") : null;
       const title = pickSuggestionTitle(suggestion, entry.text);
       const description = pickSuggestionBody(suggestion, entry.text);
+      const suggestionId = suggestion.suggestion_id || suggestion.id || null;
 
       if (decision === "save") {
         await createGoalFromSuggestion({
@@ -6700,7 +6765,8 @@
           description,
           clientMessageId,
           statusEl,
-          panelEl
+          panelEl,
+          suggestionId
         });
         return true;
       }
@@ -6764,13 +6830,9 @@
       let sendUiState = beginSendUI({ label: isConfirmSave ? "Saving..." : "Thinking…", disableSend: true });
       try {
         if (isConfirmSave) {
-          const pendingGoal = othelloState.pendingGoalIntent;
-          if (pendingGoal && typeof pendingGoal.acceptFn === "function") {
-            try {
-              if (await pendingGoal.acceptFn()) addMessage("bot", "Confirmed.");
-            } catch (err) {
-              console.warn("[Othello UI] goal typed confirm failed:", err);
-            }
+          const goalDecision = await acceptVisibleGoalIntentSuggestion();
+          if (goalDecision.handled) {
+            if (goalDecision.accepted) addMessage("bot", "Confirmed.");
             return;
           }
 

@@ -1198,6 +1198,28 @@ def _get_goal_intent_suggestion(
     return suggestion
 
 
+def _build_goal_intent_fallback(
+    user_input: str,
+    client_message_id: Optional[str],
+    user_id: Optional[str],
+) -> Optional[Dict[str, Any]]:
+    if not user_input or not client_message_id:
+        return None
+    raw = str(user_input).strip()
+    if not raw:
+        return None
+    if _is_suggestion_dismissed(user_id, "goal_intent", client_message_id):
+        return None
+    title_suggestion = _extract_goal_title_suggestion(raw)
+    return {
+        "type": "goal_intent",
+        "source_client_message_id": client_message_id,
+        "confidence": 0.45,
+        "title_suggestion": title_suggestion,
+        "body_suggestion": raw,
+    }
+
+
 def _normalize_reply_text(text: str) -> str:
     raw = (text or "").strip().lower()
     normalized = re.sub(r"\s+", " ", raw)
@@ -1331,6 +1353,41 @@ def _attach_goal_intent_suggestion(
         suggestion = _get_goal_intent_suggestion(user_input, client_message_id, user_id)
     if not suggestion:
         return False
+    suggestion_id = suggestion.get("suggestion_id") or suggestion.get("id")
+    if suggestion_id is None and user_id:
+        title = suggestion.get("title_suggestion") or _extract_goal_title_suggestion(user_input)
+        body = suggestion.get("body_suggestion") or (user_input or "").strip()
+        payload = {
+            "title": title,
+            "body": body,
+            "description": body,
+            "confidence": suggestion.get("confidence"),
+        }
+        provenance = {
+            "source": "api_message_goal_intent",
+            "request_id": request_id,
+            "client_message_id": client_message_id,
+        }
+        try:
+            created = suggestions_repository.create_suggestion(
+                user_id=user_id,
+                kind="goal",
+                payload=payload,
+                provenance=provenance,
+            )
+            if isinstance(created, dict):
+                suggestion_id = created.get("id")
+        except Exception:
+            logger.warning(
+                "API: goal suggestion create failed request_id=%s client_message_id=%s",
+                request_id,
+                client_message_id,
+                exc_info=True,
+            )
+    if suggestion_id is not None:
+        suggestion = dict(suggestion)
+        suggestion["suggestion_id"] = suggestion_id
+        suggestion.setdefault("kind", "goal")
     meta = response.setdefault("meta", {})
     suggestions = meta.setdefault("suggestions", [])
     suggestions.append(suggestion)
@@ -2077,7 +2134,8 @@ def _apply_suggestion_decisions(
 
         if kind == "goal":
             title = payload.get("title") or payload.get("body") or "Untitled Goal"
-            goal = create_goal({"title": title}, user_id)
+            description = payload.get("description") or payload.get("body") or ""
+            goal = create_goal({"title": title, "description": description}, user_id)
             if not goal:
                 results.append({"ok": False, "error": "goal_create_failed", "suggestion_id": suggestion_id})
                 continue
@@ -2433,10 +2491,26 @@ def v1_accept_suggestion(suggestion_id: int):
     if error:
         return error
     reason = None
+    payload_override = None
     if request.is_json:
         payload = request.get_json(silent=True)
         if isinstance(payload, dict):
             reason = payload.get("reason")
+            payload_override = payload.get("payload")
+    if payload_override and isinstance(payload_override, dict):
+        try:
+            existing = suggestions_repository.get_suggestion(user_id, suggestion_id)
+            if isinstance(existing, dict):
+                merged = dict(existing.get("payload") or {})
+                merged.update(payload_override)
+                suggestions_repository.update_suggestion_payload(user_id, suggestion_id, merged)
+        except Exception:
+            logger.warning(
+                "API: suggestion payload update failed request_id=%s suggestion_id=%s",
+                request_id,
+                suggestion_id,
+                exc_info=True,
+            )
     results = _apply_suggestion_decisions(
         user_id,
         [{"suggestion_id": suggestion_id, "action": "accept", "reason": reason}],
@@ -4756,6 +4830,12 @@ def handle_message():
                 client_message_id,
                 user_id,
             )
+            if not suggestion and effective_channel == "companion":
+                suggestion = _build_goal_intent_fallback(
+                    user_input,
+                    client_message_id,
+                    user_id,
+                )
             goal_intent_detected = _attach_goal_intent_suggestion(
                 response,
                 user_input=user_input,
@@ -5785,6 +5865,13 @@ def handle_message():
             ):
                 if effective_channel == "companion":
                     agentic_reply = _goal_intent_prompt(active_goal.get("id"))
+                    if not goal_intent_suggestion:
+                        goal_intent_suggestion = _build_goal_intent_fallback(
+                            user_input,
+                            client_message_id,
+                            user_id,
+                        )
+                        goal_intent_detected = bool(goal_intent_suggestion)
                 else:
                     agentic_reply = "Please share a bit more detail so I can help you plan."
                 reply_source = "fallback"
@@ -5843,6 +5930,13 @@ def handle_message():
             ):
                 if effective_channel == "companion":
                     agentic_reply = _goal_intent_prompt(None)
+                    if not goal_intent_suggestion:
+                        goal_intent_suggestion = _build_goal_intent_fallback(
+                            user_input,
+                            client_message_id,
+                            user_id,
+                        )
+                        goal_intent_detected = bool(goal_intent_suggestion)
                 else:
                     agentic_reply = "Please share a bit more detail so I can help you plan."
                 reply_source = "fallback"
