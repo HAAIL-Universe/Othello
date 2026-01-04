@@ -2788,6 +2788,7 @@
       messagesByClientId: {},
       dismissedSuggestionIds: new Set(),
       goalIntentSuggestions: {},
+      pendingGoalIntent: null,
       mobileEditorPinned: false,
       mobileBackJustPressedAt: 0,
       creatingRoutine: false,
@@ -6061,7 +6062,13 @@
       return trimmed.length > 60 ? trimmed.slice(0, 60).trim() : trimmed;
     }
 
+    function clearPendingGoalIntent(clientMessageId) {
+      const pending = othelloState.pendingGoalIntent;
+      if (pending && (!clientMessageId || pending.clientMessageId === clientMessageId)) othelloState.pendingGoalIntent = null;
+    }
+
     function clearGoalIntentUI(clientMessageId) {
+      clearPendingGoalIntent(clientMessageId);
       const entry = othelloState.messagesByClientId[clientMessageId];
       if (!entry) return;
       if (entry.bubbleEl) {
@@ -6087,7 +6094,7 @@
       const trimmedDesc = (description || "").trim();
       if (trimmedTitle.length < 3) {
         if (statusEl) statusEl.textContent = "Title is too short.";
-        return;
+        return false;
       }
       disablePanelButtons(panelEl, true);
       if (statusEl) statusEl.textContent = "Saving goal...";
@@ -6111,7 +6118,7 @@
           }
           if (statusEl) statusEl.textContent = errMsg;
           disablePanelButtons(panelEl, false);
-          return;
+          return false;
         }
         const data = await res.json();
         const goal = data && data.goal ? data.goal : null;
@@ -6128,10 +6135,12 @@
             showGoalDetail(goalId);
           }
         }
+        return true;
       } catch (err) {
         console.error("[Othello UI] create goal failed:", err);
         if (statusEl) statusEl.textContent = "Network error.";
         disablePanelButtons(panelEl, false);
+        return false;
       }
     }
 
@@ -6338,7 +6347,8 @@
       if (!clientMessageId) return;
       if (isSuggestionDismissed(suggestion.type, clientMessageId)) return;
       othelloState.goalIntentSuggestions[clientMessageId] = suggestion;
-      const entry = othelloState.messagesByClientId[clientMessageId];
+      const entry = othelloState.messagesByClientId[clientMessageId] || null;
+      othelloState.pendingGoalIntent = { clientMessageId, createdAt: Date.now(), acceptFn: () => createGoalFromSuggestion({ title: pickSuggestionTitle(suggestion, entry ? entry.text : ""), description: pickSuggestionBody(suggestion, entry ? entry.text : ""), clientMessageId, statusEl: null, panelEl: null }) };
       if (!entry || !entry.bubbleEl || !entry.rowEl) return;
       if (entry.panelEl) return;
       entry.bubbleEl.classList.add("ux-goal-intent");
@@ -6404,12 +6414,6 @@
         clearPendingRoutineSuggestion();
       }
       return visible;
-    }
-
-    function isGoalIntentDecisionPending() {
-      const latest = getLatestGoalIntentEntry();
-      if (!latest || !latest.entry || !latest.entry.panelEl) return false;
-      return isElementVisible(latest.entry.panelEl);
     }
 
     async function acceptRoutineSuggestion(suggestionId, uiRefs) {
@@ -6731,6 +6735,21 @@
       othelloState.goalUpdateCounts[gid] = (othelloState.goalUpdateCounts[gid] || 0) + 1;
     }
 
+    function beginSendUI(options = {}) {
+      const previousStatus = statusEl ? statusEl.textContent : "", label = options.label || "Thinking…", disableSend = options.disableSend !== false;
+      if (disableSend && sendBtn) sendBtn.disabled = true;
+      if (statusEl) statusEl.textContent = label;
+      return { previousStatus, label, disableSend };
+    }
+
+    function endSendUI(state) {
+      if (!state) return;
+      if (state.disableSend !== false && sendBtn) sendBtn.disabled = false;
+      if (statusEl && (!statusEl.textContent || statusEl.textContent === state.label)) {
+        statusEl.textContent = state.previousStatus || "Online";
+      }
+    }
+
     async function sendMessage() {
       const text = input.value.trim();
       if (!text) return;
@@ -6738,55 +6757,53 @@
       const pendingEdit = othelloState.pendingGoalEdit;
       const metaNote = pendingEdit ? `Editing goal #${pendingEdit.goal_id}` : "";
       const clientMessageId = generateClientMessageId();
+      const normalizedText = text.toLowerCase().replace(/[.!?]+$/, "").trim(), isConfirmSave = normalizedText === "confirm" || normalizedText === "save";
       addMessage("user", text, { metaNote, clientMessageId });
       input.value = "";
       input.focus();
-      statusEl.textContent = "Thinking…";
-
-      const normalizedText = text.toLowerCase().replace(/[.!?]+$/, "").trim();
-      const isConfirmSave = normalizedText === "confirm" || normalizedText === "save";
-      if (isConfirmSave && !isGoalIntentDecisionPending()) {
-        const routinePanel = findVisiblePendingRoutinePanel();
-        const panelId = routinePanel ? routinePanel.dataset.suggestionId : null;
-        const pendingId = othelloState.pendingRoutineSuggestionId;
-        const canAcceptRoutine = routinePanel &&
-          typeof othelloState.pendingRoutineAcceptFn === "function" &&
-          pendingId && panelId &&
-          String(pendingId) === String(panelId);
-        if (canAcceptRoutine) {
-          const previousStatus = statusEl.textContent;
-          statusEl.textContent = "Saving...";
-          try {
-            const accepted = await othelloState.pendingRoutineAcceptFn();
-            if (accepted) {
-              statusEl.textContent = "Saved";
-              window.setTimeout(() => {
-                statusEl.textContent = previousStatus;
-              }, 800);
-            } else {
-              statusEl.textContent = previousStatus;
-            }
-          } catch (err) {
-            console.warn("[Othello UI] routine typed confirm failed:", err);
-            statusEl.textContent = previousStatus;
-          }
-          return;
-        }
-      }
-
-      const goalIntentResolved = await resolveGoalIntentDecision(text);
-      if (goalIntentResolved) {
-        fetch(V1_MESSAGES_API, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          credentials: "include",
-          body: JSON.stringify({ transcript: text, source: "text" })
-        }).catch(() => {});
-        statusEl.textContent = "Online";
-        return;
-      }
-
+      let sendUiState = beginSendUI({ label: isConfirmSave ? "Saving..." : "Thinking…", disableSend: true });
       try {
+        if (isConfirmSave) {
+          const pendingGoal = othelloState.pendingGoalIntent;
+          if (pendingGoal && typeof pendingGoal.acceptFn === "function") {
+            try {
+              if (await pendingGoal.acceptFn()) addMessage("bot", "Confirmed.");
+            } catch (err) {
+              console.warn("[Othello UI] goal typed confirm failed:", err);
+            }
+            return;
+          }
+
+          const routinePanel = findVisiblePendingRoutinePanel(), panelId = routinePanel ? routinePanel.dataset.suggestionId : null;
+          const pendingId = othelloState.pendingRoutineSuggestionId;
+          const canAcceptRoutine = routinePanel &&
+            typeof othelloState.pendingRoutineAcceptFn === "function" &&
+            pendingId && panelId &&
+            String(pendingId) === String(panelId);
+          if (canAcceptRoutine) {
+            try {
+              if (await othelloState.pendingRoutineAcceptFn()) addMessage("bot", "Confirmed.");
+            } catch (err) {
+              console.warn("[Othello UI] routine typed confirm failed:", err);
+            }
+            return;
+          }
+        }
+
+        if (!isConfirmSave) {
+          const goalIntentResolved = await resolveGoalIntentDecision(text);
+          if (goalIntentResolved) {
+            fetch(V1_MESSAGES_API, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              credentials: "include",
+              body: JSON.stringify({ transcript: text, source: "text" })
+            }).catch(() => {});
+            statusEl.textContent = "Online";
+            return;
+          }
+        }
+
         const mode = (othelloState.currentMode || "companion").toLowerCase();
         const channel = mode === "companion" ? "companion" : "planner";
         console.debug(`[Othello UI] sendMessage mode=${mode} channel=${channel} view=${othelloState.currentView}`);
@@ -6938,6 +6955,8 @@
         console.error("[Othello UI] sendMessage error:", err);
         addMessage("bot", "[Connection error: backend unreachable]");
         statusEl.textContent = "Offline";
+      } finally {
+        endSendUI(sendUiState);
       }
     }
 
