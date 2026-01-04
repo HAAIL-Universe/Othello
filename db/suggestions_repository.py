@@ -55,6 +55,20 @@ def update_suggestion_status(
     return execute_and_fetch_one(query, (status, decided_reason, suggestion_id, user_id))
 
 
+def update_suggestion_payload(
+    user_id: str,
+    suggestion_id: int,
+    payload: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    query = """
+        UPDATE suggestions
+        SET payload = %s
+        WHERE id = %s AND user_id = %s
+        RETURNING id, user_id, kind, status, payload, provenance, created_at, decided_at, decided_reason
+    """
+    return execute_and_fetch_one(query, (Json(payload), suggestion_id, user_id))
+
+
 def list_suggestions(
     *,
     user_id: str,

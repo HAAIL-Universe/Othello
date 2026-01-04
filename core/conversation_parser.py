@@ -157,8 +157,149 @@ class ConversationParser:
 
     # === Routine Extraction ===
 
+    def _normalize_title(self, text: str) -> str:
+        cleaned = re.sub(r"\s+", " ", text or "").strip()
+        if not cleaned:
+            return ""
+        return cleaned[0].upper() + cleaned[1:]
+
+    def _extract_days_of_week(self, text: str) -> List[str]:
+        lower = (text or "").lower()
+        days: List[str] = []
+        if "every day" in lower or "each day" in lower or "daily" in lower:
+            return ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+        if "weekday" in lower:
+            days.extend(["mon", "tue", "wed", "thu", "fri"])
+        if "weekend" in lower:
+            days.extend(["sat", "sun"])
+        day_patterns = [
+            ("mon", r"\bmon(day)?\b"),
+            ("tue", r"\btue(sday)?\b"),
+            ("wed", r"\bwed(nesday)?\b"),
+            ("thu", r"\bthu(rsday)?\b"),
+            ("fri", r"\bfri(day)?\b"),
+            ("sat", r"\bsat(urday)?\b"),
+            ("sun", r"\bsun(day)?\b"),
+        ]
+        for day_key, pattern in day_patterns:
+            if re.search(pattern, lower):
+                days.append(day_key)
+        seen = set()
+        ordered: List[str] = []
+        for day in days:
+            if day in seen:
+                continue
+            seen.add(day)
+            ordered.append(day)
+        return ordered
+
+    def _parse_time_from_text(self, text: str) -> Dict[str, Any]:
+        lower = (text or "").lower()
+        missing_fields: List[str] = []
+        ambiguous_fields: List[str] = []
+        time_text: Optional[str] = None
+        time_local: Optional[str] = None
+
+        match = re.search(r"\b([01]?\d|2[0-3]):([0-5]\d)\b", lower)
+        if match:
+            hour = int(match.group(1))
+            minute = int(match.group(2))
+            time_local = f"{hour:02d}:{minute:02d}"
+            time_text = match.group(0)
+            return {
+                "time_text": time_text,
+                "time_local": time_local,
+                "missing_fields": missing_fields,
+                "ambiguous_fields": ambiguous_fields,
+            }
+
+        match = re.search(r"\b([1-9]|1[0-2])\s*(a\.?m\.?|p\.?m\.?)\b", lower)
+        if match:
+            hour = int(match.group(1))
+            ampm_raw = match.group(2).replace(".", "")
+            is_pm = ampm_raw.startswith("p")
+            if is_pm and hour != 12:
+                hour += 12
+            if not is_pm and hour == 12:
+                hour = 0
+            time_local = f"{hour:02d}:00"
+            time_text = match.group(0).replace(" ", "")
+            return {
+                "time_text": time_text,
+                "time_local": time_local,
+                "missing_fields": missing_fields,
+                "ambiguous_fields": ambiguous_fields,
+            }
+
+        if "morning" in lower:
+            time_text = "morning"
+            time_local = "07:00"
+        elif "evening" in lower:
+            time_text = "evening"
+            time_local = "19:00"
+
+        if time_local is None:
+            match = re.search(r"\b([1-9]|1[0-2])\s*(?:o\W?clock)?\b", lower)
+            if match:
+                time_text = match.group(0).strip()
+                missing_fields.append("time_ampm")
+                ambiguous_fields.append("time_local")
+
+        return {
+            "time_text": time_text,
+            "time_local": time_local,
+            "missing_fields": missing_fields,
+            "ambiguous_fields": ambiguous_fields,
+        }
+
+    def _parse_duration_minutes(self, text: str) -> Optional[int]:
+        lower = (text or "").lower()
+        match = re.search(r"\b(\d{1,3})\s*(?:-?\s*)?(?:minutes?|mins?|min)\b", lower)
+        if not match:
+            return None
+        try:
+            return int(match.group(1))
+        except (TypeError, ValueError):
+            return None
+
+    def _extract_routine_action(self, text: str) -> str:
+        cleaned = (text or "").strip()
+        if ":" in cleaned:
+            action = cleaned.split(":", 1)[1].strip()
+        else:
+            match = re.search(r"\broutine\b.*?\b(?:to|for)\b\s+([^.;\n]+)", cleaned, flags=re.IGNORECASE)
+            action = match.group(1).strip() if match else ""
+        return action.rstrip(".").strip()
+
+    def _extract_scheduled_routine(self, text: str) -> Optional[Dict[str, Any]]:
+        lower = (text or "").lower()
+        if "routine" not in lower and "every" not in lower and "daily" not in lower:
+            return None
+        action = self._extract_routine_action(text)
+        if not action:
+            return None
+        time_info = self._parse_time_from_text(text)
+        if not time_info.get("time_text") and not time_info.get("time_local"):
+            return None
+        days = self._extract_days_of_week(text)
+        duration_minutes = self._parse_duration_minutes(text)
+        return {
+            "draft_type": "schedule",
+            "title": self._normalize_title(action),
+            "days_of_week": days,
+            "time_text": time_info.get("time_text"),
+            "time_local": time_info.get("time_local"),
+            "duration_minutes": duration_minutes,
+            "timezone": None,
+            "missing_fields": time_info.get("missing_fields") or [],
+            "ambiguous_fields": time_info.get("ambiguous_fields") or [],
+        }
+
     def extract_routines(self, text: str) -> list:
         routines = []
+        draft = self._extract_scheduled_routine(text)
+        if draft:
+            routines.append(draft)
         # Wake up
         if self._detect_keywords(text, [
             "wake", "woke", "got up", "morning", "rise", "out of bed", "slept in", "alarm", "up early", "late night"

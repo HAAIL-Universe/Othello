@@ -1187,6 +1187,122 @@ def _attach_goal_intent_suggestion(
     return True
 
 
+def _extract_hour_hint(text: Optional[str]) -> Optional[int]:
+    if not text:
+        return None
+    match = re.search(r"\b([1-9]|1[0-2])\b", str(text))
+    if not match:
+        return None
+    try:
+        return int(match.group(1))
+    except (TypeError, ValueError):
+        return None
+
+
+def _routine_status_from_fields(
+    draft: Dict[str, Any],
+    missing_fields: List[str],
+    ambiguous_fields: List[str],
+) -> str:
+    if missing_fields or ambiguous_fields:
+        return "incomplete"
+    if not draft.get("title"):
+        return "incomplete"
+    if not draft.get("time_local"):
+        return "incomplete"
+    return "complete"
+
+
+def _build_routine_clarifying_question(
+    draft: Dict[str, Any],
+    missing_fields: List[str],
+    ambiguous_fields: List[str],
+) -> Optional[str]:
+    if "time_ampm" in missing_fields or "time_local" in ambiguous_fields:
+        time_text = draft.get("time_text") or "that time"
+        hour = _extract_hour_hint(time_text)
+        if hour is None:
+            return f"For {time_text}, do you mean am or pm?"
+        return f"For {time_text} - do you mean {hour}am or {hour}pm?"
+    return None
+
+
+def _build_routine_suggestion_payload(
+    draft: Dict[str, Any],
+    missing_fields: List[str],
+    ambiguous_fields: List[str],
+) -> Dict[str, Any]:
+    status = _routine_status_from_fields(draft, missing_fields, ambiguous_fields)
+    clarifying_question = None
+    if status == "incomplete":
+        clarifying_question = _build_routine_clarifying_question(draft, missing_fields, ambiguous_fields)
+    return {
+        "draft": draft,
+        "missing_fields": missing_fields,
+        "ambiguous_fields": ambiguous_fields,
+        "clarifying_question": clarifying_question,
+        "status": status,
+    }
+
+
+def _parse_routine_time_answer(text: str, draft: Dict[str, Any]) -> Optional[str]:
+    lower = (text or "").lower()
+    match = re.search(r"\b([01]?\d|2[0-3]):([0-5]\d)\b", lower)
+    if match:
+        hour = int(match.group(1))
+        minute = int(match.group(2))
+        return f"{hour:02d}:{minute:02d}"
+    match = re.search(r"\b([1-9]|1[0-2])\s*(a\.?m\.?|p\.?m\.?)\b", lower)
+    if match:
+        hour = int(match.group(1))
+        ampm_raw = match.group(2).replace(".", "")
+        is_pm = ampm_raw.startswith("p")
+        if is_pm and hour != 12:
+            hour += 12
+        if not is_pm and hour == 12:
+            hour = 0
+        return f"{hour:02d}:00"
+    hour_hint = _extract_hour_hint(draft.get("time_text"))
+    if "morning" in lower:
+        hour = hour_hint or 7
+        if hour == 12:
+            hour = 0
+        return f"{hour:02d}:00"
+    if "evening" in lower:
+        hour = hour_hint or 7
+        if hour != 12:
+            hour += 12
+        return f"{hour:02d}:00"
+    if "am" in lower or "pm" in lower:
+        hour = _extract_hour_hint(lower) or hour_hint
+        if hour is None:
+            return None
+        is_pm = "pm" in lower or "p.m" in lower
+        if is_pm and hour != 12:
+            hour += 12
+        if not is_pm and hour == 12:
+            hour = 0
+        return f"{hour:02d}:00"
+    return None
+
+
+def _format_routine_summary(draft: Dict[str, Any]) -> str:
+    title = draft.get("title") or "Routine"
+    days = draft.get("days_of_week") or []
+    day_labels = {
+        "mon": "Mon",
+        "tue": "Tue",
+        "wed": "Wed",
+        "thu": "Thu",
+        "fri": "Fri",
+        "sat": "Sat",
+        "sun": "Sun",
+    }
+    day_text = ", ".join(day_labels.get(day, day) for day in days) if days else "every day"
+    time_text = draft.get("time_local") or draft.get("time_text") or "unspecified time"
+    return f"Routine draft ready: {title} on {day_text} at {time_text}. Confirm to save."
+
+
 def _normalize_goal_title(title: str) -> str:
     if not isinstance(title, str):
         title = str(title or "")
@@ -1737,6 +1853,7 @@ def _apply_suggestion_decisions(
     from db.goals_repository import create_goal, update_goal_meta
     from db.goal_events_repository import safe_append_goal_event
     from db.db_goal_manager import DbGoalManager
+    from db.routines_repository import create_routine_from_draft
     from db.plan_repository import (
         get_next_plan_item_order_index,
         insert_plan_item_from_payload,
@@ -1936,6 +2053,20 @@ def _apply_suggestion_decisions(
                 "step_count": len(steps),
                 "suggestion": updated,
             })
+            continue
+
+        if kind == "routine":
+            status = payload.get("status")
+            draft = payload.get("draft") or {}
+            if status != "complete":
+                results.append({"ok": False, "error": "routine_incomplete", "suggestion_id": suggestion_id})
+                continue
+            routine = create_routine_from_draft(user_id, draft)
+            if not routine:
+                results.append({"ok": False, "error": "routine_create_failed", "suggestion_id": suggestion_id})
+                continue
+            updated = update_suggestion_status(user_id, suggestion_id, "accepted", decided_reason=reason)
+            results.append({"ok": True, "action": "accepted", "routine": routine, "suggestion": updated})
             continue
 
         results.append({"ok": False, "error": "unsupported_kind", "suggestion_id": suggestion_id})
@@ -2623,10 +2754,57 @@ def v1_analyze():
         }
 
     created = []
+    routine_parser = None
+    routine_timezone = None
+    try:
+        from core.conversation_parser import ConversationParser
+        from db.plan_repository import get_user_timezone
+        routine_parser = ConversationParser()
+        routine_timezone = get_user_timezone(user_id)
+    except Exception as exc:
+        logging.getLogger("API").warning(
+            "API: routine parser unavailable: %s",
+            exc,
+            exc_info=True,
+        )
     for row in rows:
         transcript = (row.get("transcript") or "").strip()
         if not transcript:
             continue
+        if routine_parser is not None:
+            try:
+                routine_candidates = routine_parser.extract_routines(transcript) or []
+            except Exception as exc:
+                logging.getLogger("API").warning(
+                    "API: routine extraction failed: %s",
+                    exc,
+                    exc_info=True,
+                )
+                routine_candidates = []
+            routine_drafts = [
+                routine for routine in routine_candidates
+                if isinstance(routine, dict) and routine.get("draft_type") == "schedule"
+            ]
+            if routine_drafts:
+                for routine_draft in routine_drafts:
+                    draft = dict(routine_draft)
+                    draft["timezone"] = routine_timezone
+                    missing_fields = list(draft.get("missing_fields") or [])
+                    ambiguous_fields = list(draft.get("ambiguous_fields") or [])
+                    payload = _build_routine_suggestion_payload(draft, missing_fields, ambiguous_fields)
+                    provenance = {
+                        "message_ids": [row.get("id")],
+                        "source": "v1_analyze_routine",
+                        "detector": "routine_schedule_parser",
+                    }
+                    created.append(
+                        create_suggestion(
+                            user_id=user_id,
+                            kind="routine",
+                            payload=payload,
+                            provenance=provenance,
+                        )
+                    )
         suggestion = _detect_goal_intent_suggestion(transcript, str(row.get("id")))
         if suggestion:
             payload = {
@@ -3886,6 +4064,50 @@ def handle_message():
             persist_enabled,
             len(companion_context or []),
         )
+
+        routine_response = None
+        if user_id:
+            try:
+                from db.suggestions_repository import list_suggestions, update_suggestion_payload
+                pending = list_suggestions(user_id=user_id, status="pending", kind="routine", limit=1)
+                if pending:
+                    suggestion = pending[0]
+                    payload = suggestion.get("payload") or {}
+                    if payload.get("status") == "incomplete":
+                        draft = payload.get("draft") or {}
+                        missing_fields = list(payload.get("missing_fields") or [])
+                        ambiguous_fields = list(payload.get("ambiguous_fields") or [])
+                        time_local = _parse_routine_time_answer(user_input, draft)
+                        if time_local:
+                            draft["time_local"] = time_local
+                            missing_fields = [f for f in missing_fields if f != "time_ampm"]
+                            ambiguous_fields = [f for f in ambiguous_fields if f != "time_local"]
+                            payload = _build_routine_suggestion_payload(draft, missing_fields, ambiguous_fields)
+                            update_suggestion_payload(user_id, suggestion.get("id"), payload)
+                        if payload.get("status") == "incomplete":
+                            question = payload.get("clarifying_question") or "Do you mean am or pm?"
+                            routine_response = {
+                                "reply": question,
+                                "request_id": request_id,
+                                "meta": {
+                                    "intent": "routine_clarify",
+                                    "routine_suggestion_id": suggestion.get("id"),
+                                },
+                            }
+                        else:
+                            routine_response = {
+                                "reply": _format_routine_summary(payload.get("draft") or {}),
+                                "request_id": request_id,
+                                "meta": {
+                                    "intent": "routine_ready",
+                                    "routine_suggestion_id": suggestion.get("id"),
+                                },
+                            }
+            except Exception as exc:
+                logger.warning("API: routine clarification failed: %s", exc, exc_info=True)
+
+        if routine_response:
+            return _respond(routine_response)
 
         if effective_channel == "companion" and companion_context:
             last_assistant = next(

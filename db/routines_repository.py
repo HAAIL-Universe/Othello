@@ -36,6 +36,58 @@ def create_routine(user_id: str, title: str, schedule_rule: Dict, enabled: bool)
     """
     return execute_and_fetch_one(query, (routine_id, user_id, title, Json(schedule_rule), enabled))
 
+
+def create_routine_from_draft(user_id: str, draft_payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    title = draft_payload.get("title") or "Untitled Routine"
+    raw_days = draft_payload.get("days_of_week") or []
+    if not isinstance(raw_days, list):
+        raw_days = []
+    valid_days = {"mon", "tue", "wed", "thu", "fri", "sat", "sun"}
+    days = [
+        str(day).strip().lower()[:3]
+        for day in raw_days
+        if str(day).strip().lower()[:3] in valid_days
+    ]
+    if not days:
+        days = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+    schedule_rule: Dict[str, Any] = {"days": days}
+    time_local = draft_payload.get("time_local")
+    if isinstance(time_local, str) and time_local.strip():
+        schedule_rule["time_window"] = {"start": time_local.strip(), "end": ""}
+    timezone = draft_payload.get("timezone")
+    if isinstance(timezone, str) and timezone.strip():
+        schedule_rule["timezone"] = timezone.strip()
+    duration_minutes = draft_payload.get("duration_minutes")
+    if isinstance(duration_minutes, (int, float)):
+        schedule_rule["duration_minutes"] = int(duration_minutes)
+
+    routine = create_routine(user_id, title, schedule_rule, True)
+    if not routine:
+        return None
+
+    steps = draft_payload.get("steps") or []
+    if isinstance(steps, list) and steps:
+        for index, step in enumerate(steps):
+            if not isinstance(step, dict):
+                continue
+            step_title = (step.get("title") or step.get("name") or "").strip()
+            if not step_title:
+                continue
+            order_index = step.get("order_index")
+            if not isinstance(order_index, int):
+                order_index = index
+            create_step(
+                user_id,
+                routine.get("id"),
+                step_title,
+                est_minutes=step.get("est_minutes"),
+                energy=step.get("energy"),
+                tags=step.get("tags"),
+                order_index=order_index,
+            )
+
+    return routine
+
 def update_routine(user_id: str, routine_id: str, patch: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     fields = []
     values = []
