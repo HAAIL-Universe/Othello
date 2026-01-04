@@ -1,12 +1,12 @@
 Cycle Status: STOPPED:ENVIRONMENT_LIMITATION
 Todo Ledger:
 Planned: Establish focus lock signal; add secondary suggestion capture + badge UI; wire focus lock into goal/routine panels; tighten routine draft guard messaging; update evidence log
-Completed: Implemented secondary suggestions storage and UI; wired focus lock to goal/routine handlers; updated routine draft guard to capture secondary suggestions; updated routine confirm label
+Completed: Implemented secondary suggestions storage and UI; wired focus lock to goal/routine handlers; updated routine draft guard to capture secondary suggestions; updated routine confirm label; FIXED ReferenceError: refreshSecondarySuggestionUI is not defined
 Remaining: Runtime verification (deploy-required)
-Next Action: Verify changes in runtime environment and commit with message "UI: focus-safe secondary suggestions for goal/routine intents"
+Next Action: Verify changes in runtime environment (specifically that the ReferenceError is gone and secondary suggestions work) and commit with message "UI: focus-safe secondary suggestions for goal/routine intents"
 
 diff --git a/othello_ui.html b/othello_ui.html
-index 86b201a3..7d515595 100644
+index 86b201a3..6242c4e7 100644
 --- a/othello_ui.html
 +++ b/othello_ui.html
 @@ -2788,6 +2788,7 @@
@@ -31,7 +31,7 @@ index 86b201a3..7d515595 100644
        }
  
        // Scroll to latest message
-@@ -6039,6 +6042,223 @@
+@@ -6039,6 +6042,227 @@
        }
      }
  
@@ -69,6 +69,10 @@ index 86b201a3..7d515595 100644
 +      if (entry.secondaryPanelEl && entry.secondaryPanelEl.style.display === "flex") {
 +        renderSecondarySuggestionPanel(entry);
 +      }
++    }
++
++    function refreshSecondarySuggestionUI(entry) {
++      updateSecondaryBadge(entry);
 +    }
 +
 +    function addSecondarySuggestion(clientMessageId, suggestion) {
@@ -255,7 +259,7 @@ index 86b201a3..7d515595 100644
      function pickSuggestionBody(suggestion, fallbackText) {
        const raw = suggestion && typeof suggestion.body_suggestion === "string"
          ? suggestion.body_suggestion.trim()
-@@ -6388,9 +6608,9 @@
+@@ -6388,9 +6612,9 @@
        const routineSignals = /\b(every day|each day|daily|weekly|remind me|alarm|routine|habit|meet at)\b/.test(text);
        const timeSignals = /(\b([01]?\d|2[0-3]):([0-5]\d)\b|\b([1-9]|1[0-2])\s*(a\.?m\.?|p\.?m\.?)\b|\b(at|around|by)\s+([1-9]|1[0-2])\b)/.test(text);
        if (routineSignals || timeSignals) return false;
@@ -267,7 +271,7 @@ index 86b201a3..7d515595 100644
        return explicitGoal;
      }
  
-@@ -6407,6 +6627,11 @@
+@@ -6407,6 +6631,11 @@
        const entryText = entry && typeof entry.text === "string" ? entry.text : "";
        if (!shouldSuggestGoalDraft(entryText, normalizedSuggestion, othelloState)) return;
        if (isSuggestionDismissed(normalizedSuggestion.type, clientMessageId)) return;
@@ -279,7 +283,7 @@ index 86b201a3..7d515595 100644
        othelloState.goalIntentSuggestions[clientMessageId] = normalizedSuggestion;
        if (!entry || !entry.bubbleEl || !entry.rowEl) return;
        if (entry.panelEl) return;
-@@ -6417,9 +6642,6 @@
+@@ -6417,9 +6646,6 @@
      }
  
      function applySuggestionMeta(meta) {
@@ -289,7 +293,7 @@ index 86b201a3..7d515595 100644
        const suggestions = meta && Array.isArray(meta.suggestions) ? meta.suggestions : [];
        suggestions.forEach(handleGoalIntentSuggestion);
      }
-@@ -6809,11 +7031,22 @@
+@@ -6809,11 +7035,22 @@
        return panel;
      }
  
@@ -313,7 +317,7 @@ index 86b201a3..7d515595 100644
        if (intent === "routine_clarify") {
          await buildRoutineClarifyPanel(entry, suggestionId);
          return;
-@@ -7025,6 +7258,13 @@
+@@ -7025,6 +7262,13 @@
              }
              return;
            }
@@ -327,7 +331,7 @@ index 86b201a3..7d515595 100644
            addMessage(
              "bot",
              "You have an unsaved routine draft. Confirm, Edit, Add another, or Dismiss before continuing."
-@@ -7131,7 +7371,7 @@
+@@ -7131,7 +7375,7 @@
          }
          const botEntry = addMessage("bot", replyText, { sourceClientMessageId: clientMessageId });
          try {

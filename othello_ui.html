@@ -6078,6 +6078,10 @@
       }
     }
 
+    function refreshSecondarySuggestionUI(entry) {
+      updateSecondaryBadge(entry);
+    }
+
     function addSecondarySuggestion(clientMessageId, suggestion) {
       if (!clientMessageId || !suggestion) return false;
       if (!othelloState.secondarySuggestionsByClientId) {
