@@ -2789,6 +2789,7 @@
       dismissedSuggestionIds: new Set(),
       goalIntentSuggestions: {},
       secondarySuggestionsByClientId: {},
+      intentHintsByClientId: {},
       mobileEditorPinned: false,
       mobileBackJustPressedAt: 0,
       creatingRoutine: false,
@@ -7197,6 +7198,25 @@
       othelloState.goalUpdateCounts[gid] = (othelloState.goalUpdateCounts[gid] || 0) + 1;
     }
 
+    function detectUserRoutineHint(text) {
+      if (!text) return false;
+      const t = text.toLowerCase();
+      const signals = ["routine", "remind me", "every day", "each day", "daily", "weekly", "habit", "alarm"];
+      return signals.some(s => t.includes(s));
+    }
+
+    function detectUserGoalHint(text) {
+      if (!text) return false;
+      const t = text.toLowerCase();
+      // Disqualify questions
+      if (t.includes("?")) return false;
+      const qWords = ["what", "how", "why", "when", "where", "who", "can", "should", "do", "is", "are"];
+      if (qWords.some(w => t.startsWith(w + " ") || t === w)) return false;
+      
+      const signals = ["goal:", "my goal is", "new goal", "i want to", "i'm going to", "i will", "working towards"];
+      return signals.some(s => t.includes(s));
+    }
+
     function beginSendUI(options = {}) {
       const previousStatus = statusEl ? statusEl.textContent : "", label = options.label || "Thinking…", disableSend = options.disableSend !== false;
       if (disableSend && sendBtn) sendBtn.disabled = true;
@@ -7219,6 +7239,13 @@
       const pendingEdit = othelloState.pendingGoalEdit;
       const metaNote = pendingEdit ? `Editing goal #${pendingEdit.goal_id}` : "";
       const clientMessageId = generateClientMessageId();
+      
+      // Capture intent hints immediately
+      const hint = { goal: detectUserGoalHint(text), routine: detectUserRoutineHint(text) };
+      if (hint.goal || hint.routine) {
+        othelloState.intentHintsByClientId[clientMessageId] = hint;
+      }
+
       const normalizedText = text.toLowerCase().replace(/[.!?]+$/, "").trim(), isConfirmSave = normalizedText === "confirm" || normalizedText === "save";
       addMessage("user", text, { metaNote, clientMessageId });
       input.value = "";
@@ -7393,19 +7420,31 @@
 
         // Compute intent markers
         const intentMarkers = [];
-        const hasGoalIntent = !!(
+        const hint = othelloState.intentHintsByClientId[clientMessageId] || {};
+        
+        const hasGoalIntentFromServer = !!(
           data.goal_intent_detected ||
           data.goal_intent_suggestion ||
           (Array.isArray(meta && meta.suggestions) && meta.suggestions.some(s => (s.type || "").toLowerCase() === "goal_intent"))
         );
-        const hasRoutineIntent = !!(
+        const hasRoutineIntentFromServer = !!(
           (meta && typeof meta.intent === "string" && meta.intent.toLowerCase().startsWith("routine")) ||
           (meta && meta.routine_suggestion_id)
         );
+
+        const hasGoalIntent = hasGoalIntentFromServer || hint.goal;
+        const hasRoutineIntent = hasRoutineIntentFromServer || hint.routine;
+
         if (hasGoalIntent) intentMarkers.push("🎯 Goal");
         if (hasRoutineIntent) intentMarkers.push("🔁 Routine");
 
         const botEntry = addMessage("bot", replyText, { sourceClientMessageId: clientMessageId, intentMarkers });
+        
+        // Clear hint to prevent reuse
+        if (othelloState.intentHintsByClientId[clientMessageId]) {
+          delete othelloState.intentHintsByClientId[clientMessageId];
+        }
+
         try {
           await applyRoutineMeta(meta, botEntry, clientMessageId);
         } catch (err) {
