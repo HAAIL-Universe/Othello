@@ -204,8 +204,20 @@ class ConversationParser:
         if match:
             hour = int(match.group(1))
             minute = int(match.group(2))
-            time_local = f"{hour:02d}:{minute:02d}"
             time_text = match.group(0)
+            has_ampm = re.search(r"\b(a\.?m\.?|p\.?m\.?)\b", lower) is not None
+            has_daypart = "morning" in lower or "evening" in lower
+            if 1 <= hour <= 11 and not has_ampm and not has_daypart:
+                # Prefer ambiguity for bare 7:00-style times so we don't persist until clarified.
+                missing_fields.append("time_ampm")
+                ambiguous_fields.append("time_local")
+                return {
+                    "time_text": time_text,
+                    "time_local": None,
+                    "missing_fields": missing_fields,
+                    "ambiguous_fields": ambiguous_fields,
+                }
+            time_local = f"{hour:02d}:{minute:02d}"
             return {
                 "time_text": time_text,
                 "time_local": time_local,

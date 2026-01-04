@@ -6399,7 +6399,28 @@
       return suggestions.find((s) => String(s.id) === String(suggestionId)) || null;
     }
 
-    function buildRoutineClarifyPanel(entry, suggestionId) {
+    function extractRoutineHourHint(draft) {
+      const fallback = 7;
+      if (!draft) return fallback;
+      const timeText = typeof draft.time_text === "string" ? draft.time_text : "";
+      const timeLocal = typeof draft.time_local === "string" ? draft.time_local : "";
+      let hour = null;
+      const textMatch = timeText.match(/\b([01]?\d|2[0-3])(?::[0-5]\d)?\b/);
+      if (textMatch) {
+        hour = parseInt(textMatch[1], 10);
+      } else if (timeLocal) {
+        const localMatch = timeLocal.match(/^([01]\d|2[0-3]):/);
+        if (localMatch) {
+          hour = parseInt(localMatch[1], 10);
+        }
+      }
+      if (!Number.isFinite(hour)) return fallback;
+      if (hour === 0) return 12;
+      if (hour > 12) return hour - 12;
+      return hour;
+    }
+
+    async function buildRoutineClarifyPanel(entry, suggestionId) {
       if (!entry || !entry.row) return null;
       const panel = document.createElement("div");
       panel.className = "ux-goal-intent-panel";
@@ -6420,7 +6441,7 @@
       amBtn.addEventListener("click", () => {
         amBtn.disabled = true;
         pmBtn.disabled = true;
-        sendQuickReply("7am");
+        sendQuickReply(amBtn.dataset.reply || amBtn.textContent);
       });
 
       const pmBtn = document.createElement("button");
@@ -6429,14 +6450,36 @@
       pmBtn.addEventListener("click", () => {
         amBtn.disabled = true;
         pmBtn.disabled = true;
-        sendQuickReply("7pm");
+        sendQuickReply(pmBtn.dataset.reply || pmBtn.textContent);
       });
+
+      const applyHourHint = (hour) => {
+        const normalized = Number.isFinite(hour) ? hour : 7;
+        const amLabel = `${normalized}am`;
+        const pmLabel = `${normalized}pm`;
+        amBtn.textContent = amLabel;
+        pmBtn.textContent = pmLabel;
+        amBtn.dataset.reply = amLabel;
+        pmBtn.dataset.reply = pmLabel;
+      };
+      applyHourHint(7);
 
       actions.appendChild(amBtn);
       actions.appendChild(pmBtn);
       panel.appendChild(actions);
 
       entry.row.appendChild(panel);
+
+      if (suggestionId) {
+        try {
+          const suggestion = await fetchRoutineSuggestionById(suggestionId);
+          const draft = suggestion && suggestion.payload ? suggestion.payload.draft : null;
+          const hourHint = extractRoutineHourHint(draft);
+          applyHourHint(hourHint);
+        } catch (err) {
+          console.warn("[Othello UI] routine clarify fetch failed:", err);
+        }
+      }
       return panel;
     }
 
@@ -6493,6 +6536,9 @@
             "Confirm routine suggestion"
           );
           status.textContent = "Saved";
+          confirmBtn.disabled = true;
+          actions.innerHTML = "";
+          actions.appendChild(status);
           requestRoutineRefresh();
         } catch (err) {
           if (err && (err.status === 401 || err.status === 403)) {
@@ -6518,7 +6564,7 @@
       const suggestionId = meta.routine_suggestion_id;
       if (!suggestionId) return;
       if (intent === "routine_clarify") {
-        buildRoutineClarifyPanel(entry, suggestionId);
+        await buildRoutineClarifyPanel(entry, suggestionId);
         return;
       }
       if (intent === "routine_ready") {
