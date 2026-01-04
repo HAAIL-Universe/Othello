@@ -1,115 +1,154 @@
-Cycle Status: COMPLETE
+Cycle Status: IN_PROGRESS
 Todo Ledger:
-Planned: Fix plural weekday parsing; prevent weekday-only title; replace blank routine_ready bubble; verification; commit checkpoint
-Completed: Added plural weekday detection; added weekday-only action fallback; updated routine_ready prompt; static + parser sanity verification
-Remaining: None
-Next Action: None
-Paths Read: build_docs/theexecutor.md; build_docs/othello_blueprint.md; build_docs/othello_manifesto.md; build_docs/othello_directive.md; core/conversation_parser.py; othello_ui.html
+Planned: Deploy + runtime verification; mark COMPLETE if PASS
+Completed: Implemented typed confirm/save shortcut; manual static review
+Remaining: Runtime verification on deployed env + any hotfix if FAIL
+Next Action: Deploy this commit and test typed confirm/save on routine cards; report PASS/FAIL + screenshot/console.
+Paths Read: build_docs/theexecutor.md; build_docs/othello_blueprint.md; build_docs/othello_manifesto.md; build_docs/othello_directive.md; othello_ui.html
 Anchors:
-- _extract_days_of_week: core/conversation_parser.py:166
-- _extract_routine_action: core/conversation_parser.py:296
-- _extract_scheduled_routine: core/conversation_parser.py:367
-- routine_ready reply handling: othello_ui.html:6757
+- acceptRoutineSuggestion: othello_ui.html:6392
+- buildRoutineReadyPanel: othello_ui.html:6553
+- sendMessage: othello_ui.html:6711
 Verification:
-- Static: python -m py_compile core/conversation_parser.py (pass)
-- Runtime:
-  - python - <<'PY' (extract_routines) -> title "Feed the cat", days ['fri'], time_local '18:00'
-  - python - <<'PY' (_parse_time_from_text) -> missing_fields ['time_ampm'], ambiguous_fields ['time_local']
+- Static: manual review (UI-only)
+- Runtime: Not run (pending deploy)
 
-diff --git a/core/conversation_parser.py b/core/conversation_parser.py
-index e4ae01be..b229fa43 100644
---- a/core/conversation_parser.py
-+++ b/core/conversation_parser.py
-@@ -173,13 +173,13 @@ class ConversationParser:
-         if "weekend" in lower:
-             days.extend(["sat", "sun"])
-         day_patterns = [
--            ("mon", r"\bmon(day)?\b"),
--            ("tue", r"\btue(sday)?\b"),
--            ("wed", r"\bwed(nesday)?\b"),
--            ("thu", r"\bthu(rsday)?\b"),
--            ("fri", r"\bfri(day)?\b"),
--            ("sat", r"\bsat(urday)?\b"),
--            ("sun", r"\bsun(day)?\b"),
-+            ("mon", r"\bmon(day)?s?\b"),
-+            ("tue", r"\btue(sday)?s?\b"),
-+            ("wed", r"\bwed(nesday)?s?\b"),
-+            ("thu", r"\bthu(rsday)?s?\b"),
-+            ("fri", r"\bfri(day)?s?\b"),
-+            ("sat", r"\bsat(urday)?s?\b"),
-+            ("sun", r"\bsun(day)?s?\b"),
-         ]
-         for day_key, pattern in day_patterns:
-             if re.search(pattern, lower):
-@@ -321,7 +321,48 @@ class ConversationParser:
-                 if cue_match:
-                     candidate = candidate[:cue_match.start()].strip()
-                 action = candidate.strip()
--        return action.rstrip(".").strip()
-+        action = action.rstrip(".").strip()
-+        if action:
-+            weekday_only = re.fullmatch(
-+                r"(mon(day)?|tue(sday)?|wed(nesday)?|thu(rsday)?|fri(day)?|sat(urday)?|sun(day)?)(s)?",
-+                action.lower(),
-+            ) is not None
-+            if weekday_only:
-+                fallback = None
-+                sentences = re.split(r"[.!?]+", cleaned)
-+                for sentence in sentences:
-+                    candidate = sentence.strip()
-+                    if not candidate:
-+                        continue
-+                    if "routine" in candidate.lower():
-+                        continue
-+                    need_match = re.search(
-+                        r"\bneed to\b\s+([^.;\n]+)",
-+                        candidate,
-+                        flags=re.IGNORECASE,
-+                    )
-+                    if need_match:
-+                        fallback = need_match.group(1).strip()
-+                    else:
-+                        to_match = re.search(
-+                            r"\bto\b\s+([^.;\n]+)",
-+                            candidate,
-+                            flags=re.IGNORECASE,
-+                        )
-+                        if to_match:
-+                            fallback = to_match.group(1).strip()
-+                    if fallback:
-+                        break
-+                if fallback:
-+                    fallback = re.sub(
-+                        r"\s+at\s+\d{1,2}(?::\d{2})?\s*(a\.?m\.?|p\.?m\.?)?$",
-+                        "",
-+                        fallback,
-+                        flags=re.IGNORECASE,
-+                    ).strip()
-+                    if fallback:
-+                        action = fallback
-+        return action
- 
-     def _extract_scheduled_routine(self, text: str) -> Optional[Dict[str, Any]]:
-         lower = (text or "").lower()
 diff --git a/othello_ui.html b/othello_ui.html
-index b00079e0..a7c88e21 100644
+index a7c88e21..f0851c0b 100644
 --- a/othello_ui.html
 +++ b/othello_ui.html
-@@ -6757,14 +6757,9 @@
-         const isRoutineReady = !!(meta && meta.intent === "routine_ready" && meta.routine_suggestion_id);
-         let replyText = data.reply || "[no reply]";
-         if (isRoutineReady) {
--          replyText = " ";
-+          replyText = "Confirm this routine?";
-         }
-         const botEntry = addMessage("bot", replyText, { sourceClientMessageId: clientMessageId });
--        if (isRoutineReady && botEntry && botEntry.bubble && botEntry.bubble.firstChild) {
--          if (botEntry.bubble.firstChild.nodeType === 3) {
--            botEntry.bubble.firstChild.textContent = "";
+@@ -2791,7 +2791,9 @@
+       mobileEditorPinned: false,
+       mobileBackJustPressedAt: 0,
+       creatingRoutine: false,
+-      needsRoutineRefresh: false
++      needsRoutineRefresh: false,
++      pendingRoutineSuggestionId: null,
++      pendingRoutineAcceptFn: null
+     };
+     let devResetEnabled = false;
+ 
+@@ -6382,6 +6384,53 @@
+       }
+     }
+ 
++    function clearPendingRoutineSuggestion() {
++      othelloState.pendingRoutineSuggestionId = null;
++      othelloState.pendingRoutineAcceptFn = null;
++    }
++
++    async function acceptRoutineSuggestion(suggestionId, uiRefs) {
++      if (!suggestionId) return false;
++      const confirmBtn = uiRefs && uiRefs.confirmBtn;
++      const statusEl = uiRefs && uiRefs.statusEl;
++      const actionsEl = uiRefs && uiRefs.actionsEl;
++      if (confirmBtn) confirmBtn.disabled = true;
++      if (statusEl) statusEl.textContent = "Saving...";
++      try {
++        const confirmPayload = { reason: "confirm" };
++        await v1Request(
++          `/v1/suggestions/${suggestionId}/accept`,
++          {
++            method: "POST",
++            headers: { "Content-Type": "application/json" },
++            credentials: "include",
++            body: JSON.stringify(confirmPayload)
++          },
++          "Confirm routine suggestion"
++        );
++        if (statusEl) {
++          statusEl.textContent = "Saved";
++          if (actionsEl) {
++            actionsEl.innerHTML = "";
++            actionsEl.appendChild(statusEl);
++          }
++        }
++        requestRoutineRefresh();
++        clearPendingRoutineSuggestion();
++        return true;
++      } catch (err) {
++        if (err && (err.status === 401 || err.status === 403)) {
++          await handleUnauthorized("routine-accept");
++          return false;
++        }
++        if (statusEl) {
++          statusEl.textContent = err && err.message ? err.message : "Save failed.";
++        }
++        if (confirmBtn) confirmBtn.disabled = false;
++        return false;
++      }
++    }
++
+     function sendQuickReply(text) {
+       if (!input) return;
+       input.value = text;
+@@ -6537,35 +6586,20 @@
+       const status = document.createElement("div");
+       status.className = "ux-goal-intent-status";
+ 
++      if (suggestionId) {
++        othelloState.pendingRoutineSuggestionId = suggestionId;
++        othelloState.pendingRoutineAcceptFn = () => acceptRoutineSuggestion(
++          suggestionId,
++          { confirmBtn, statusEl: status, actionsEl: actions }
++        );
++      }
++
+       confirmBtn.addEventListener("click", async () => {
+         if (!suggestionId) return;
+-        confirmBtn.disabled = true;
+-        status.textContent = "Saving...";
+-        try {
+-          const confirmPayload = { reason: "confirm" };
+-          await v1Request(
+-            `/v1/suggestions/${suggestionId}/accept`,
+-            {
+-              method: "POST",
+-              headers: { "Content-Type": "application/json" },
+-              credentials: "include",
+-              body: JSON.stringify(confirmPayload)
+-            },
+-            "Confirm routine suggestion"
+-          );
+-          status.textContent = "Saved";
+-          confirmBtn.disabled = true;
+-          actions.innerHTML = "";
+-          actions.appendChild(status);
+-          requestRoutineRefresh();
+-        } catch (err) {
+-          if (err && (err.status === 401 || err.status === 403)) {
+-            await handleUnauthorized("routine-accept");
+-            return;
 -          }
+-          status.textContent = err && err.message ? err.message : "Save failed.";
+-          confirmBtn.disabled = false;
 -        }
-         try {
-           await applyRoutineMeta(meta, botEntry);
-         } catch (err) {
++        await acceptRoutineSuggestion(
++          suggestionId,
++          { confirmBtn, statusEl: status, actionsEl: actions }
++        );
+       });
+ 
+       actions.appendChild(confirmBtn);
+@@ -6686,6 +6720,20 @@
+       input.focus();
+       statusEl.textContent = "ThinkingÔÇª";
+ 
++      const normalizedText = text.toLowerCase().replace(/[.!?]+$/, "").trim();
++      if ((normalizedText === "confirm" || normalizedText === "save") &&
++          typeof othelloState.pendingRoutineAcceptFn === "function") {
++        statusEl.textContent = "Saving...";
++        try {
++          const accepted = await othelloState.pendingRoutineAcceptFn();
++          statusEl.textContent = accepted ? "Online" : "Error";
++        } catch (err) {
++          console.warn("[Othello UI] routine typed confirm failed:", err);
++          statusEl.textContent = "Error";
++        }
++        return;
++      }
++
+       const goalIntentResolved = await resolveGoalIntentDecision(text);
+       if (goalIntentResolved) {
+         fetch(V1_MESSAGES_API, {
 
---- EOF Phase 5 ---
