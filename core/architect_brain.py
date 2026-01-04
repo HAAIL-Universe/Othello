@@ -260,14 +260,24 @@ class Architect:
             
             messages: List[Dict[str, str]] = [
                 {"role": "system", "content": system_prompt},
-                {
+            ]
+
+            if has_goal_context:
+                messages.append({
+                    "role": "system",
+                    "content": "Use ONLY the injected goal context for any claims about the active goal. Do not invent details."
+                })
+            else:
+                messages.append({
                     "role": "system",
                     "content": (
-                        "Only claim something is 'in the goal' if it appears in the injected "
-                        "goal_context. Otherwise say it isn't saved yet."
-                    ),
-                },
-            ]
+                        "Respond normally to the user. If (and only if) the user asks what their goal is, "
+                        "references a focused/saved goal, or asks whether something is already in the goal, "
+                        "explain that there is no active goal context available right now and offer a next action: "
+                        "create a goal, focus an existing goal, or open the Goals tab. "
+                        "Do NOT default to 'it isn't saved yet' for unrelated messages."
+                    )
+                })
 
             # Inject active goal context (if provided by API)
             if has_goal_context:
