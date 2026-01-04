@@ -6388,12 +6388,15 @@
     }
 
     function applySuggestionMeta(meta) {
+      if (othelloState.pendingRoutineSuggestionId || othelloState.currentView === "routine-planner") {
+        return;
+      }
       const suggestions = meta && Array.isArray(meta.suggestions) ? meta.suggestions : [];
       suggestions.forEach(handleGoalIntentSuggestion);
     }
 
     function formatRoutineDays(days) {
-      if (!Array.isArray(days) || days.length === 0) return "Every day";
+      if (!Array.isArray(days) || days.length === 0) return "Days TBD";
       const labels = {
         mon: "Mon",
         tue: "Tue",
@@ -6440,9 +6443,6 @@
         document.querySelectorAll('.ux-goal-intent-panel[data-suggestion-type="routine"]')
       );
       const visible = panels.filter(isElementVisible).pop() || null;
-      if (!visible && othelloState.pendingRoutineSuggestionId) {
-        clearPendingRoutineSuggestion();
-      }
       return visible;
     }
 
@@ -6484,6 +6484,68 @@
           statusEl.textContent = err && err.message ? err.message : "Save failed.";
         }
         if (confirmBtn) confirmBtn.disabled = false;
+        return false;
+      }
+    }
+
+    async function patchRoutineSuggestion(suggestionId, text, panel) {
+      if (!suggestionId) return null;
+      const statusEl = panel ? panel.querySelector(".ux-goal-intent-status") : null;
+      if (statusEl) statusEl.textContent = "Updating...";
+      const payload = await v1Request(
+        `/v1/suggestions/${suggestionId}/patch`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({ text })
+        },
+        "Update routine suggestion"
+      );
+      const suggestion = payload && payload.data ? payload.data.suggestion : null;
+      const row = panel && panel.parentNode ? panel.parentNode : null;
+      if (panel && panel.parentNode) panel.parentNode.removeChild(panel);
+      if (row && suggestion) {
+        const entry = { row };
+        if (suggestion.payload && suggestion.payload.status === "incomplete") {
+          await buildRoutineClarifyPanel(entry, suggestionId);
+        } else {
+          buildRoutineReadyPanel(entry, suggestion, suggestionId);
+        }
+      }
+      return suggestion;
+    }
+
+    async function rejectRoutineSuggestion(suggestionId, panel) {
+      if (!suggestionId) return false;
+      const statusEl = panel ? panel.querySelector(".ux-goal-intent-status") : null;
+      if (statusEl) statusEl.textContent = "Dismissing...";
+      try {
+        await v1Request(
+          "/v1/confirm",
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            credentials: "include",
+            body: JSON.stringify({
+              decisions: [{ suggestion_id: suggestionId, action: "reject", reason: "dismiss" }]
+            })
+          },
+          "Dismiss routine suggestion"
+        );
+        clearPendingRoutineSuggestion();
+        if (panel && panel.parentNode) {
+          panel.parentNode.removeChild(panel);
+        }
+        return true;
+      } catch (err) {
+        if (err && (err.status === 401 || err.status === 403)) {
+          await handleUnauthorized("routine-dismiss");
+          return false;
+        }
+        if (statusEl) {
+          statusEl.textContent = err && err.message ? err.message : "Dismiss failed.";
+        }
         return false;
       }
     }
@@ -6532,6 +6594,10 @@
       panel.className = "ux-goal-intent-panel";
       panel.dataset.suggestionType = "routine";
       panel.dataset.suggestionId = suggestionId || "";
+      if (suggestionId) {
+        othelloState.pendingRoutineSuggestionId = suggestionId;
+        othelloState.pendingRoutineAcceptFn = null;
+      }
 
       const title = document.createElement("div");
       title.className = "ux-goal-intent-panel__title";
@@ -6590,6 +6656,15 @@
 
       actions.appendChild(amBtn);
       actions.appendChild(pmBtn);
+
+      const dismissBtn = document.createElement("button");
+      dismissBtn.className = "ux-goal-intent-btn link";
+      dismissBtn.dataset.action = "dismiss";
+      dismissBtn.textContent = "Dismiss";
+      dismissBtn.addEventListener("click", async () => {
+        await rejectRoutineSuggestion(suggestionId, panel);
+      });
+      actions.appendChild(dismissBtn);
       panel.appendChild(actions);
 
       entry.row.appendChild(panel);
@@ -6638,7 +6713,26 @@
 
       const confirmBtn = document.createElement("button");
       confirmBtn.className = "ux-goal-intent-btn primary";
-      confirmBtn.textContent = "Confirm & Save";
+      confirmBtn.dataset.action = "confirm";
+      confirmBtn.textContent = "Confirm";
+
+      const editBtn = document.createElement("button");
+      editBtn.className = "ux-goal-intent-btn secondary";
+      editBtn.dataset.action = "edit";
+      editBtn.textContent = "Edit";
+      editBtn.addEventListener("click", () => {
+        if (!input) return;
+        input.value = "Edit: ";
+        input.focus();
+      });
+
+      const dismissBtn = document.createElement("button");
+      dismissBtn.className = "ux-goal-intent-btn link";
+      dismissBtn.dataset.action = "dismiss";
+      dismissBtn.textContent = "Dismiss";
+      dismissBtn.addEventListener("click", async () => {
+        await rejectRoutineSuggestion(suggestionId, panel);
+      });
 
       const status = document.createElement("div");
       status.className = "ux-goal-intent-status";
@@ -6660,6 +6754,8 @@
       });
 
       actions.appendChild(confirmBtn);
+      actions.appendChild(editBtn);
+      actions.appendChild(dismissBtn);
       panel.appendChild(actions);
       panel.appendChild(status);
 
@@ -6829,6 +6925,54 @@
       input.focus();
       let sendUiState = beginSendUI({ label: isConfirmSave ? "Saving..." : "Thinking…", disableSend: true });
       try {
+        const pendingRoutineId = othelloState.pendingRoutineSuggestionId;
+        if (pendingRoutineId) {
+          const routinePanel = findVisiblePendingRoutinePanel();
+          const confirmWords = new Set(["confirm", "save", "ok", "okay", "yes"]);
+          const dismissWords = new Set(["dismiss", "cancel", "discard"]);
+          const editMatch = normalizedText.match(/^(edit|change|update)\b/i);
+          if (confirmWords.has(normalizedText)) {
+            try {
+              if (await acceptRoutineSuggestion(pendingRoutineId, {
+                confirmBtn: routinePanel && routinePanel.querySelector('[data-action="confirm"]'),
+                statusEl: routinePanel && routinePanel.querySelector(".ux-goal-intent-status"),
+                actionsEl: routinePanel && routinePanel.querySelector(".ux-goal-intent-panel__actions")
+              })) {
+                addMessage("bot", "Confirmed.");
+              }
+            } catch (err) {
+              console.warn("[Othello UI] routine confirm failed:", err);
+            }
+            return;
+          }
+          if (dismissWords.has(normalizedText)) {
+            await rejectRoutineSuggestion(pendingRoutineId, routinePanel);
+            return;
+          }
+          const patchText = text.toLowerCase();
+          const patchSignal = /(\b([01]?\d|2[0-3]):([0-5]\d)\b|\b([1-9]|1[0-2])\s*(a\.?m\.?|p\.?m\.?)\b|\b(morning|afternoon|evening|tonight)\b|\b(at|around|by)\s+([1-9]|1[0-2])\b|\b(daily|every day|each day|weekday|weekdays|weekend|weekends)\b|\bmon(day)?s?\s*-\s*fri(day)?s?\b|\b(mon|tue|wed|thu|fri|sat|sun)\b|\b\d{1,3}\s*(?:-?\s*)?(?:minutes?|mins?|min)\b)/.test(patchText);
+          if (editMatch || patchSignal) {
+            try {
+              await patchRoutineSuggestion(pendingRoutineId, text, routinePanel);
+            } catch (err) {
+              if (err && (err.status === 401 || err.status === 403)) {
+                await handleUnauthorized("routine-patch");
+              }
+              const statusEl = routinePanel ? routinePanel.querySelector(".ux-goal-intent-status") : null;
+              if (statusEl) {
+                statusEl.textContent = err && err.message ? err.message : "Update failed.";
+              }
+              console.warn("[Othello UI] routine patch failed:", err);
+            }
+            return;
+          }
+          addMessage(
+            "bot",
+            "You have a routine draft pending. Reply Confirm to save, Edit: ... to change it, or Dismiss to discard."
+          );
+          return;
+        }
+
         if (isConfirmSave) {
           const goalDecision = await acceptVisibleGoalIntentSuggestion();
           if (goalDecision.handled) {

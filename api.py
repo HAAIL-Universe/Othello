@@ -1684,6 +1684,37 @@ def _parse_routine_time_answer(text: str, draft: Dict[str, Any]) -> Optional[str
     return None
 
 
+def _build_routine_patch_payload(text: str, payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    if not text or not isinstance(payload, dict):
+        return None
+    lower = text.lower()
+    draft = dict(payload.get("draft") or {})
+    if not isinstance(draft, dict):
+        return None
+    missing_fields = list(payload.get("missing_fields") or [])
+    ambiguous_fields = list(payload.get("ambiguous_fields") or [])
+    updates: Dict[str, Any] = {}
+    time_local = _parse_routine_time_answer(text, draft)
+    if time_local:
+        updates["time_local"] = time_local
+        missing_fields = [f for f in missing_fields if f != "time_ampm"]
+        ambiguous_fields = [f for f in ambiguous_fields if f != "time_local"]
+    days = _extract_days_of_week(text)
+    if not days and re.search(r"\bmon(day)?s?\s*-\s*fri(day)?s?\b", lower):
+        days = ["mon", "tue", "wed", "thu", "fri"]
+    if days:
+        updates["days_of_week"] = days
+
+    duration_minutes = _parse_duration_minutes(text)
+    if duration_minutes is not None:
+        updates["duration_minutes"] = duration_minutes
+
+    if not updates:
+        return None
+    draft.update(updates)
+    return _build_routine_suggestion_payload(draft, missing_fields, ambiguous_fields)
+
+
 def _format_routine_summary(draft: Dict[str, Any]) -> str:
     title = draft.get("title") or "Routine"
     days = draft.get("days_of_week") or []
@@ -1696,7 +1727,7 @@ def _format_routine_summary(draft: Dict[str, Any]) -> str:
         "sat": "Sat",
         "sun": "Sun",
     }
-    day_text = ", ".join(day_labels.get(day, day) for day in days) if days else "every day"
+    day_text = ", ".join(day_labels.get(day, day) for day in days) if days else "days TBD"
     time_text = draft.get("time_local") or draft.get("time_text") or "unspecified time"
     return f"Routine draft ready: {title} on {day_text} at {time_text}. Confirm to save."
 
@@ -2710,6 +2741,39 @@ def v1_accept_suggestion(suggestion_id: int):
         suggestion_id,
     )
     return _v1_envelope(data={"results": results}, status=200)
+
+
+@v1.route("/suggestions/<int:suggestion_id>/patch", methods=["POST"])
+@require_auth
+def v1_patch_suggestion(suggestion_id: int):
+    user_id, error = _get_user_id_or_error()
+    if error:
+        return error
+    if not request.is_json:
+        return _v1_error("VALIDATION_ERROR", "JSON body required", 400)
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return _v1_error("VALIDATION_ERROR", "JSON object required", 400)
+    text = data.get("text")
+    if not isinstance(text, str) or not text.strip():
+        return _v1_error("VALIDATION_ERROR", "text is required", 400)
+    suggestion = suggestions_repository.get_suggestion(user_id, suggestion_id)
+    if not suggestion:
+        return _v1_error("NOT_FOUND", "Suggestion not found", 404, details={"suggestion_id": suggestion_id})
+    if suggestion.get("kind") != "routine":
+        return _v1_error("INVALID_KIND", "Only routine suggestions can be patched", 400)
+    status = (suggestion.get("status") or "").strip().lower()
+    if status != "pending":
+        return _v1_error("INVALID_STATUS", "Suggestion is not pending", 400)
+    payload = suggestion.get("payload") or {}
+    patched_payload = _build_routine_patch_payload(text, payload)
+    if not patched_payload:
+        return _v1_error("NO_PATCH_FIELDS", "No routine fields detected in edit text", 400)
+    updated = suggestions_repository.update_suggestion_payload(user_id, suggestion_id, patched_payload)
+    return _v1_envelope(
+        data={"suggestion_id": suggestion_id, "suggestion": updated or suggestion},
+        status=200,
+    )
 
 
 @v1.route("/capabilities", methods=["GET"])
