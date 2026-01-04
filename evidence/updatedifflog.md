@@ -4,6 +4,7 @@ Planned: Locate goal prompt emission + routine suggestion path; create goal sugg
 Completed: Added fallback goal suggestion creation + DB suggestion id; attached suggestion meta; updated goal accept to use /v1/suggestions with payload override; removed pendingGoalIntent and gated typed confirm on visible goal card; added insertBefore parent guard
 Remaining: Runtime verification pending deploy; report PASS/FAIL + screenshot/console
 Next Action: Deploy and run runtime checklist; report PASS/FAIL + screenshot/console.
+Commit: 48f7a4f5 (branch ux/routine-clarify-panel-pending)
 
 Paths Read: build_docs/theexecutor.md; build_docs/othello_blueprint.md; build_docs/othello_manifesto.md; build_docs/othello_directive.md; api.py; othello_ui.html; db/suggestions_repository.py; db/goals_repository.py
 Root-Cause Classification: BACKEND_NOT_EMITTING_SUGGESTION (primary); UI_DOM_CRASH_IN_LOADTODAYPLANNER (secondary)
