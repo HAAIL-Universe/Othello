@@ -1,69 +1,115 @@
-Cycle Status: IN_PROGRESS
+Cycle Status: COMPLETE
 Todo Ledger:
-Planned: Deploy + runtime verification; mark COMPLETE if PASS
-Completed: Fix HH:MM AM/PM parsing; guard ordinal one-offs; static py_compile
-Remaining: Runtime verification on deployed env + any hotfix if FAIL
-Next Action: Deploy this commit and test AM/PM (6:00 PM -> 18:00) and ordinal one-off guard; report PASS/FAIL + screenshot/console.
-Paths Read: build_docs/theexecutor.md; build_docs/othello_blueprint.md; build_docs/othello_manifesto.md; build_docs/othello_directive.md; core/conversation_parser.py
+Planned: Fix plural weekday parsing; prevent weekday-only title; replace blank routine_ready bubble; verification; commit checkpoint
+Completed: Added plural weekday detection; added weekday-only action fallback; updated routine_ready prompt; static + parser sanity verification
+Remaining: None
+Next Action: None
+Paths Read: build_docs/theexecutor.md; build_docs/othello_blueprint.md; build_docs/othello_manifesto.md; build_docs/othello_directive.md; core/conversation_parser.py; othello_ui.html
 Anchors:
-- _parse_time_from_text: core/conversation_parser.py:196
-- _extract_scheduled_routine: core/conversation_parser.py:307
-- extract_routines: core/conversation_parser.py:331
+- _extract_days_of_week: core/conversation_parser.py:166
+- _extract_routine_action: core/conversation_parser.py:296
+- _extract_scheduled_routine: core/conversation_parser.py:367
+- routine_ready reply handling: othello_ui.html:6757
 Verification:
-- Static: python -m py_compile core/conversation_parser.py api.py (pass)
-- Runtime: Not run (pending deploy)
+- Static: python -m py_compile core/conversation_parser.py (pass)
+- Runtime:
+  - python - <<'PY' (extract_routines) -> title "Feed the cat", days ['fri'], time_local '18:00'
+  - python - <<'PY' (_parse_time_from_text) -> missing_fields ['time_ampm'], ambiguous_fields ['time_local']
 
 diff --git a/core/conversation_parser.py b/core/conversation_parser.py
-index 801bafb3..e4ae01be 100644
+index e4ae01be..b229fa43 100644
 --- a/core/conversation_parser.py
 +++ b/core/conversation_parser.py
-@@ -200,13 +200,32 @@ class ConversationParser:
-         time_text: Optional[str] = None
-         time_local: Optional[str] = None
+@@ -173,13 +173,13 @@ class ConversationParser:
+         if "weekend" in lower:
+             days.extend(["sat", "sun"])
+         day_patterns = [
+-            ("mon", r"\bmon(day)?\b"),
+-            ("tue", r"\btue(sday)?\b"),
+-            ("wed", r"\bwed(nesday)?\b"),
+-            ("thu", r"\bthu(rsday)?\b"),
+-            ("fri", r"\bfri(day)?\b"),
+-            ("sat", r"\bsat(urday)?\b"),
+-            ("sun", r"\bsun(day)?\b"),
++            ("mon", r"\bmon(day)?s?\b"),
++            ("tue", r"\btue(sday)?s?\b"),
++            ("wed", r"\bwed(nesday)?s?\b"),
++            ("thu", r"\bthu(rsday)?s?\b"),
++            ("fri", r"\bfri(day)?s?\b"),
++            ("sat", r"\bsat(urday)?s?\b"),
++            ("sun", r"\bsun(day)?s?\b"),
+         ]
+         for day_key, pattern in day_patterns:
+             if re.search(pattern, lower):
+@@ -321,7 +321,48 @@ class ConversationParser:
+                 if cue_match:
+                     candidate = candidate[:cue_match.start()].strip()
+                 action = candidate.strip()
+-        return action.rstrip(".").strip()
++        action = action.rstrip(".").strip()
++        if action:
++            weekday_only = re.fullmatch(
++                r"(mon(day)?|tue(sday)?|wed(nesday)?|thu(rsday)?|fri(day)?|sat(urday)?|sun(day)?)(s)?",
++                action.lower(),
++            ) is not None
++            if weekday_only:
++                fallback = None
++                sentences = re.split(r"[.!?]+", cleaned)
++                for sentence in sentences:
++                    candidate = sentence.strip()
++                    if not candidate:
++                        continue
++                    if "routine" in candidate.lower():
++                        continue
++                    need_match = re.search(
++                        r"\bneed to\b\s+([^.;\n]+)",
++                        candidate,
++                        flags=re.IGNORECASE,
++                    )
++                    if need_match:
++                        fallback = need_match.group(1).strip()
++                    else:
++                        to_match = re.search(
++                            r"\bto\b\s+([^.;\n]+)",
++                            candidate,
++                            flags=re.IGNORECASE,
++                        )
++                        if to_match:
++                            fallback = to_match.group(1).strip()
++                    if fallback:
++                        break
++                if fallback:
++                    fallback = re.sub(
++                        r"\s+at\s+\d{1,2}(?::\d{2})?\s*(a\.?m\.?|p\.?m\.?)?$",
++                        "",
++                        fallback,
++                        flags=re.IGNORECASE,
++                    ).strip()
++                    if fallback:
++                        action = fallback
++        return action
  
--        match = re.search(r"\b([01]?\d|2[0-3]):([0-5]\d)\b", lower)
-+        match = re.search(
-+            r"\b([01]?\d|2[0-3]):([0-5]\d)\s*(a\.?m\.?|p\.?m\.?)?\b",
-+            lower,
-+        )
-         if match:
-             hour = int(match.group(1))
-             minute = int(match.group(2))
-             time_text = match.group(0)
--            has_ampm = re.search(r"\b(a\.?m\.?|p\.?m\.?)\b", lower) is not None
-+            ampm_raw = match.group(3)
-+            has_ampm = ampm_raw is not None
-             has_daypart = "morning" in lower or "evening" in lower
-+            if has_ampm and 1 <= hour <= 12:
-+                ampm_clean = ampm_raw.replace(".", "")
-+                is_pm = ampm_clean.startswith("p")
-+                if is_pm and hour != 12:
-+                    hour += 12
-+                if not is_pm and hour == 12:
-+                    hour = 0
-+                time_local = f"{hour:02d}:{minute:02d}"
-+                time_text = time_text.replace(" ", "")
-+                return {
-+                    "time_text": time_text,
-+                    "time_local": time_local,
-+                    "missing_fields": missing_fields,
-+                    "ambiguous_fields": ambiguous_fields,
-+                }
-             if 1 <= hour <= 11 and not has_ampm and not has_daypart:
-                 # Prefer ambiguity for bare 7:00-style times so we don't persist until clarified.
-                 missing_fields.append("time_ampm")
-@@ -315,6 +334,13 @@ class ConversationParser:
-         if not time_info.get("time_text") and not time_info.get("time_local"):
-             return None
-         days = self._extract_days_of_week(text)
-+        has_ordinal_date = re.search(r"\b([1-9]|[12]\d|3[01])(st|nd|rd|th)\b", lower)
-+        has_recurrence = bool(days) or re.search(
-+            r"\b(every|daily|weekly|weekday|weekend|each|monthly|yearly|annually)\b",
-+            lower,
-+        ) is not None
-+        if has_ordinal_date and not has_recurrence:
-+            return None
-         duration_minutes = self._parse_duration_minutes(text)
-         return {
-             "draft_type": "schedule",
+     def _extract_scheduled_routine(self, text: str) -> Optional[Dict[str, Any]]:
+         lower = (text or "").lower()
+diff --git a/othello_ui.html b/othello_ui.html
+index b00079e0..a7c88e21 100644
+--- a/othello_ui.html
++++ b/othello_ui.html
+@@ -6757,14 +6757,9 @@
+         const isRoutineReady = !!(meta && meta.intent === "routine_ready" && meta.routine_suggestion_id);
+         let replyText = data.reply || "[no reply]";
+         if (isRoutineReady) {
+-          replyText = " ";
++          replyText = "Confirm this routine?";
+         }
+         const botEntry = addMessage("bot", replyText, { sourceClientMessageId: clientMessageId });
+-        if (isRoutineReady && botEntry && botEntry.bubble && botEntry.bubble.firstChild) {
+-          if (botEntry.bubble.firstChild.nodeType === 3) {
+-            botEntry.bubble.firstChild.textContent = "";
+-          }
+-        }
+         try {
+           await applyRoutineMeta(meta, botEntry);
+         } catch (err) {
 
+--- EOF Phase 5 ---

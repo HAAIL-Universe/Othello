@@ -173,13 +173,13 @@ class ConversationParser:
         if "weekend" in lower:
             days.extend(["sat", "sun"])
         day_patterns = [
-            ("mon", r"\bmon(day)?\b"),
-            ("tue", r"\btue(sday)?\b"),
-            ("wed", r"\bwed(nesday)?\b"),
-            ("thu", r"\bthu(rsday)?\b"),
-            ("fri", r"\bfri(day)?\b"),
-            ("sat", r"\bsat(urday)?\b"),
-            ("sun", r"\bsun(day)?\b"),
+            ("mon", r"\bmon(day)?s?\b"),
+            ("tue", r"\btue(sday)?s?\b"),
+            ("wed", r"\bwed(nesday)?s?\b"),
+            ("thu", r"\bthu(rsday)?s?\b"),
+            ("fri", r"\bfri(day)?s?\b"),
+            ("sat", r"\bsat(urday)?s?\b"),
+            ("sun", r"\bsun(day)?s?\b"),
         ]
         for day_key, pattern in day_patterns:
             if re.search(pattern, lower):
@@ -321,7 +321,48 @@ class ConversationParser:
                 if cue_match:
                     candidate = candidate[:cue_match.start()].strip()
                 action = candidate.strip()
-        return action.rstrip(".").strip()
+        action = action.rstrip(".").strip()
+        if action:
+            weekday_only = re.fullmatch(
+                r"(mon(day)?|tue(sday)?|wed(nesday)?|thu(rsday)?|fri(day)?|sat(urday)?|sun(day)?)(s)?",
+                action.lower(),
+            ) is not None
+            if weekday_only:
+                fallback = None
+                sentences = re.split(r"[.!?]+", cleaned)
+                for sentence in sentences:
+                    candidate = sentence.strip()
+                    if not candidate:
+                        continue
+                    if "routine" in candidate.lower():
+                        continue
+                    need_match = re.search(
+                        r"\bneed to\b\s+([^.;\n]+)",
+                        candidate,
+                        flags=re.IGNORECASE,
+                    )
+                    if need_match:
+                        fallback = need_match.group(1).strip()
+                    else:
+                        to_match = re.search(
+                            r"\bto\b\s+([^.;\n]+)",
+                            candidate,
+                            flags=re.IGNORECASE,
+                        )
+                        if to_match:
+                            fallback = to_match.group(1).strip()
+                    if fallback:
+                        break
+                if fallback:
+                    fallback = re.sub(
+                        r"\s+at\s+\d{1,2}(?::\d{2})?\s*(a\.?m\.?|p\.?m\.?)?$",
+                        "",
+                        fallback,
+                        flags=re.IGNORECASE,
+                    ).strip()
+                    if fallback:
+                        action = fallback
+        return action
 
     def _extract_scheduled_routine(self, text: str) -> Optional[Dict[str, Any]]:
         lower = (text or "").lower()

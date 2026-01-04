@@ -6757,14 +6757,9 @@
         const isRoutineReady = !!(meta && meta.intent === "routine_ready" && meta.routine_suggestion_id);
         let replyText = data.reply || "[no reply]";
         if (isRoutineReady) {
-          replyText = " ";
+          replyText = "Confirm this routine?";
         }
         const botEntry = addMessage("bot", replyText, { sourceClientMessageId: clientMessageId });
-        if (isRoutineReady && botEntry && botEntry.bubble && botEntry.bubble.firstChild) {
-          if (botEntry.bubble.firstChild.nodeType === 3) {
-            botEntry.bubble.firstChild.textContent = "";
-          }
-        }
         try {
           await applyRoutineMeta(meta, botEntry);
         } catch (err) {
