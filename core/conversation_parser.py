@@ -199,6 +199,15 @@ class ConversationParser:
         ambiguous_fields: List[str] = []
         time_text: Optional[str] = None
         time_local: Optional[str] = None
+        time_cues = {"at", "@", "around", "by"}
+        dayparts = ("morning", "afternoon", "evening", "tonight")
+
+        def _has_time_cue(prefix: str) -> bool:
+            tokens = re.findall(r"[@\\w]+", prefix)
+            for token in tokens[-2:]:
+                if token in time_cues:
+                    return True
+            return False
 
         match = re.search(
             r"\b([01]?\d|2[0-3]):([0-5]\d)\s*(a\.?m\.?|p\.?m\.?)?\b",
@@ -270,11 +279,15 @@ class ConversationParser:
             time_local = "19:00"
 
         if time_local is None:
-            match = re.search(r"\b([1-9]|1[0-2])\s*(?:o\W?clock)?\b", lower)
+            match = re.search(r"\b([1-9]|1[0-2])\s*(o\W?clock)?\b", lower)
             if match:
-                time_text = match.group(0).strip()
-                missing_fields.append("time_ampm")
-                ambiguous_fields.append("time_local")
+                has_oclock = match.group(2) is not None
+                has_daypart = any(daypart in lower for daypart in dayparts)
+                has_cue = _has_time_cue(lower[:match.start()])
+                if has_oclock or has_daypart or has_cue:
+                    time_text = match.group(0).strip()
+                    missing_fields.append("time_ampm")
+                    ambiguous_fields.append("time_local")
 
         return {
             "time_text": time_text,

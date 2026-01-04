@@ -21,6 +21,24 @@ class TestConversationParser(unittest.TestCase):
         routines = self.parser.extract_routines(text)
         self.assertTrue(any("wake up" in r["question"].lower() for r in routines))
 
+    def test_parse_time_ignores_numeric_counts(self):
+        info = self.parser._parse_time_from_text("each day I log 3 priorities.")
+        self.assertIsNone(info.get("time_text"))
+        self.assertIsNone(info.get("time_local"))
+        self.assertFalse(info.get("ambiguous_fields"))
+
+    def test_parse_time_accepts_cued_hour(self):
+        info = self.parser._parse_time_from_text("at 3")
+        self.assertEqual(info.get("time_text"), "3")
+        self.assertIn("time_ampm", info.get("missing_fields") or [])
+        self.assertIn("time_local", info.get("ambiguous_fields") or [])
+
+    def test_parse_time_keeps_colon_ambiguity(self):
+        info = self.parser._parse_time_from_text("meet at 7:00")
+        self.assertEqual(info.get("time_text"), "7:00")
+        self.assertIsNone(info.get("time_local"))
+        self.assertIn("time_local", info.get("ambiguous_fields") or [])
+
     def test_extract_traits_detects_trait(self):
         text = "I am compassionate and kind."
         traits = self.parser.extract_traits(text)
