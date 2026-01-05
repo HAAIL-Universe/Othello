@@ -815,7 +815,7 @@
       goals: [],
       activeGoalId: null,
       activeConversationId: null, // New Chat support
-      lastGoalDraft: null, // Stores the last assistant goal summary for voice save
+      lastGoalDraftByConversationId: {}, // Stores the last assistant goal summary per conversation
       currentDetailGoalId: null,
       pendingGoalEdit: null,
       goalUpdateCounts: {},
@@ -4038,7 +4038,8 @@
           : "";
         const listItems = extractListItems(text);
         if (hasStructuredList(text) && listItems.length) {
-          othelloState.lastGoalDraft = { items: listItems, rawText: text, sourceClientMessageId };
+          const convKey = othelloState.activeConversationId ? String(othelloState.activeConversationId) : "default";
+          othelloState.lastGoalDraftByConversationId[convKey] = { items: listItems, rawText: text, sourceClientMessageId };
           const bar = createCommitmentBar(listItems, text, sourceClientMessageId);
           bubble.appendChild(bar);
         }
@@ -5299,24 +5300,29 @@
       const text = input.value.trim();
       if (!text) return;
 
-      // Voice-first save command
-      const lowerText = text.toLowerCase().trim();
-      if (["save as long-term goal", "save this as a goal", "create that goal", "save that goal", "lock that in as a goal"].some(phrase => lowerText.includes(phrase))) {
-          addMessage("user", text);
+      // Voice-first save command (Strict Command Mode)
+      const lowerText = text.toLowerCase().trim().replace(/[.!?]+$/, "");
+      const commandPhrases = new Set(["save as long-term goal", "save this as a goal", "create that goal", "save that goal", "lock that in as a goal"]);
+      const isQuestion = text.toLowerCase().match(/^(how|can|should|do) i\b/);
+
+      if (commandPhrases.has(lowerText) && !isQuestion) {
           input.value = "";
           input.focus();
           
-          if (othelloState.lastGoalDraft) {
-              addMessage("bot", "Saving goal...");
+          const convKey = othelloState.activeConversationId ? String(othelloState.activeConversationId) : "default";
+          const draft = othelloState.lastGoalDraftByConversationId[convKey];
+
+          if (draft) {
+              showToast("Saving goal...");
               try {
-                  await postCommitment("goal", othelloState.lastGoalDraft.items, othelloState.lastGoalDraft.rawText, othelloState.lastGoalDraft.sourceClientMessageId);
-                  addMessage("bot", "Saved as long-term goal.");
+                  await postCommitment("goal", draft.items, draft.rawText, draft.sourceClientMessageId);
+                  showToast("Saved as long-term goal.");
                   refreshGoals();
               } catch (e) {
-                  addMessage("bot", "Failed to save goal: " + e.message);
+                  showToast("Failed to save goal: " + e.message);
               }
           } else {
-               addMessage("bot", "I don't have a goal draft to save yet.");
+               showToast("No goal draft to save in this chat yet.");
           }
           return;
       }
@@ -6215,11 +6221,11 @@
           <div class="goal-card__header">
             <div>
               <div class="goal-card__id">Goal #${goal.id}</div>
-              <div class="goal-card__title">${goal.text || "Untitled Goal"}</div>
+              <div class="goal-card__title">${formatMessageText(goal.text || "Untitled Goal")}</div>
             </div>
             ${isActive ? '<div class="goal-card__badge">Active</div>' : ''}
           </div>
-          ${goal.deadline ? `<div class="goal-card__meta">Deadline: ${goal.deadline}</div>` : ''}
+          ${goal.deadline ? `<div class="goal-card__meta">Deadline: ${formatMessageText(goal.deadline)}</div>` : ''}
           ${updateCount > 0 ? `<div class="goal-card__meta">${updateCount} update${updateCount !== 1 ? 's' : ''} this session</div>` : ''}
         `;
 
@@ -6261,7 +6267,7 @@
     function renderGoalDetail(goal) {
       if (!goal) return;
       detailGoalId.textContent = `Goal #${goal.id}`;
-      detailGoalTitle.textContent = goal.text || "Untitled Goal";
+      detailGoalTitle.innerHTML = formatMessageText(goal.text || "Untitled Goal");
 
       // Build detail content
       let contentHtml = "";
@@ -6289,7 +6295,7 @@
         const itemsHtml = intentItems.map((item, idx) => {
           const itemIndex = Number.isFinite(item.index) ? item.index : (idx + 1);
           const itemText = item.text || "";
-          const safeText = escapeHtml(itemText);
+          const safeText = formatMessageText(itemText);
           const planBtn = `
             <button class="commitment-btn intent-plan-btn" data-intent-index="${itemIndex}" data-intent-text="${encodeURIComponent(itemText)}" data-goal-id="${goalIdNum || ""}">
               Build plan
@@ -6314,7 +6320,7 @@
         contentHtml += `
           <div class="detail-section">
             <div class="detail-section__title">Intent</div>
-            <div class="detail-section__body">${escapeHtml(intentText)}</div>
+            <div class="detail-section__body">${formatMessageText(intentText)}</div>
           </div>
         `;
       }
@@ -6360,7 +6366,7 @@
           contentHtml += `
             <div class="activity-item">
               <div class="activity-item__role">${escapeHtml(role)}</div>
-              <div class="activity-item__text">${escapeHtml(entry.content || "")}</div>
+              <div class="activity-item__text">${formatMessageText(entry.content || "")}</div>
               ${planBtn}
             </div>
           `;

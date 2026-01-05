@@ -1,108 +1,82 @@
-# EVIDENCE REPORT: Fix Goal Save & Voice Command
+# EVIDENCE REPORT: Fix markdown bold rendering in Goals UI
 
 ## Cycle Status
-IN_PROGRESS
+STOPPED:ENVIRONMENT_LIMITATION
 
 ## Todo Ledger
-- [x] Phase 0: Evidence Gate
-- [x] Phase 1: Fix Goal Save (Full draft persistence + Title improvement)
-- [x] Phase 2: Voice Command (Save as long-term goal)
-- [ ] Phase 3: Runtime Verification
+- [x] Phase 1: Single-source markdown formatter (Reused formatMessageText)
+- [x] Phase 2: Apply formatting to Goals UI (Goals List, Detail Header, Intent, Activity Log)
+- [x] Phase 3: Toast helper verification (Verified showToast exists)
+- [ ] Phase 4: Runtime Verification (Visual check of bold rendering) - BLOCKED
 
 ## Next Action
-Verify in browser that "Save as long-term goal" saves full description and voice command works.
+Run manual verification checklist.
+
+## Manual Verification Checklist
+1. Chat: send a message containing `**bold**` and confirm it renders bold (no asterisks).
+2. Goals list: open Goals tab and confirm entries like `**Deadline:**` render as bold “Deadline:” (no asterisks).
+3. Goal detail: open a goal; in “INTENT” section confirm lines render bold correctly.
+4. Save command sanity: type “save as long-term goal” and confirm:
+   - no chat bubble is added for the command phrase
+   - toast shows feedback
+   - no console errors (especially showToast undefined)
 
 ## FULL unified diff patch
 ```diff
 diff --git a/static/othello.js b/static/othello.js
-index 46dfb294..24499906 100644
+index 85088ed6..xxxxxx 100644
 --- a/static/othello.js
 +++ b/static/othello.js
-@@ -815,6 +815,7 @@
-       goals: [],
-       activeGoalId: null,
-       activeConversationId: null, // New Chat support
-+      lastGoalDraft: null, // Stores the last assistant goal summary for voice save
-       currentDetailGoalId: null,
-       pendingGoalEdit: null,
-       goalUpdateCounts: {},
-@@ -4037,6 +4038,7 @@
-           : "";
-         const listItems = extractListItems(text);
-         if (hasStructuredList(text) && listItems.length) {
-+          othelloState.lastGoalDraft = { items: listItems, rawText: text, sourceClientMessageId };
-           const bar = createCommitmentBar(listItems, text, sourceClientMessageId);
-           bubble.appendChild(bar);
-         }
-@@ -5297,6 +5299,28 @@
-       const text = input.value.trim();
-       if (!text) return;
+@@ -6030,11 +6030,11 @@
+         card.innerHTML = `
+           <div class="goal-card__header">
+             <div>
+               <div class="goal-card__id">Goal #${goal.id}</div>
+-              <div class="goal-card__title">${goal.text || "Untitled Goal"}</div>
++              <div class="goal-card__title">${formatMessageText(goal.text || "Untitled Goal")}</div>
+             </div>
+             ${isActive ? '<div class="goal-card__badge">Active</div>' : ''}
+           </div>
+-          ${goal.deadline ? `<div class="goal-card__meta">Deadline: ${goal.deadline}</div>` : ''}
++          ${goal.deadline ? `<div class="goal-card__meta">Deadline: ${formatMessageText(goal.deadline)}</div>` : ''}
+           ${updateCount > 0 ? `<div class="goal-card__meta">${updateCount} update${updateCount !== 1 ? 's' : ''} this session</div>` : ''}
+         `;
  
-+      // Voice-first save command
-+      const lowerText = text.toLowerCase().trim();
-+      if (["save as long-term goal", "save this as a goal", "create that goal", "save that goal", "lock that in as a goal"].some(phrase => lowerText.includes(phrase))) {
-+          addMessage("user", text);
-+          input.value = "";
-+          input.focus();
-+          
-+          if (othelloState.lastGoalDraft) {
-+              addMessage("bot", "Saving goal...");
-+              try {
-+                  await postCommitment("goal", othelloState.lastGoalDraft.items, othelloState.lastGoalDraft.rawText, othelloState.lastGoalDraft.sourceClientMessageId);
-+                  addMessage("bot", "Saved as long-term goal.");
-+                  refreshGoals();
-+              } catch (e) {
-+                  addMessage("bot", "Failed to save goal: " + e.message);
-+              }
-+          } else {
-+               addMessage("bot", "I don't have a goal draft to save yet.");
-+          }
-+          return;
-+      }
-+
-       const pendingEdit = othelloState.pendingGoalEdit;
-       const metaNote = pendingEdit ? `Editing goal #${pendingEdit.goal_id}` : "";
-       const clientMessageId = generateClientMessageId();
-@@ -5971,15 +5995,39 @@
+@@ -6075,7 +6075,7 @@
+     function renderGoalDetail(goal) {
+       if (!goal) return;
+       detailGoalId.textContent = `Goal #${goal.id}`;
+-      detailGoalTitle.textContent = goal.text || "Untitled Goal";
++      detailGoalTitle.innerHTML = formatMessageText(goal.text || "Untitled Goal");
  
-     async function postCommitment(action, items, rawText, sourceClientMessageId) {
-       const safeItems = items && items.length ? items : [rawText];
--      const title = (safeItems[0] || "New commitment").trim();
-+      let title = (safeItems[0] || "New commitment").trim();
-       let message;
- 
-       if (action === "goal") {
-+        // Construct full description from all items (clean markdown)
-+        const description = safeItems.map(i => i.replace(/\*\*/g, "")).join("\n");
-+        
-+        // Improve title: try to get user intent from source message
-+        if (sourceClientMessageId) {
-+            const userMsgRow = document.querySelector(`.msg-row[data-client-message-id="${sourceClientMessageId}"]`);
-+            if (userMsgRow) {
-+                const bubble = userMsgRow.querySelector(".bubble");
-+                if (bubble) {
-+                    const clone = bubble.cloneNode(true);
-+                    const meta = clone.querySelector(".meta");
-+                    if (meta) meta.remove();
-+                    const userText = clone.textContent.trim();
-+                    if (userText) {
-+                        const firstSentence = userText.split(/[.!?]/)[0];
-+                        title = firstSentence.length > 60 ? firstSentence.substring(0, 60) + "..." : firstSentence;
-+                    }
-+                }
-+            }
-+        }
-+        // Fallback title cleanup
-+        if (title.startsWith("**")) title = title.replace(/\*\*/g, "");
-+        if (title.startsWith("Deadline:")) title = "Long-term Goal";
-+
-         const res = await fetch(GOALS_API, {
-           method: "POST",
-           credentials: "include",
-           headers: { "Content-Type": "application/json" },
--          body: JSON.stringify({ title })
-+          body: JSON.stringify({ title, description })
-         });
-         if (res.status === 401 || res.status === 403) {
-           await handleUnauthorized("goals-create");
+       // Build detail content
+       let contentHtml = "";
+@@ -6103,7 +6103,7 @@
+         const itemsHtml = intentItems.map((item, idx) => {
+           const itemIndex = Number.isFinite(item.index) ? item.index : (idx + 1);
+           const itemText = item.text || "";
+-          const safeText = escapeHtml(itemText);
++          const safeText = formatMessageText(itemText);
+           const planBtn = `
+             <button class="commitment-btn intent-plan-btn" data-intent-index="${itemIndex}" data-intent-text="${encodeURIComponent(itemText)}" data-goal-id="${goalIdNum || ""}">
+               Build plan
+@@ -6121,7 +6121,7 @@
+         contentHtml += `
+           <div class="detail-section">
+             <div class="detail-section__title">Intent</div>
+-            <div class="detail-section__body">${escapeHtml(intentText)}</div>
++            <div class="detail-section__body">${formatMessageText(intentText)}</div>
+           </div>
+         `;
+       }
+@@ -6156,8 +6156,8 @@
+             : "";
+           contentHtml += `
+             <div class="activity-item">
+               <div class="activity-item__role">${escapeHtml(role)}</div>
+-              <div class="activity-item__text">${escapeHtml(entry.content || "")}</div>
++              <div class="activity-item__text">${formatMessageText(entry.content || "")}</div>
+               ${planBtn}
+             </div>
+           `;
 ```
