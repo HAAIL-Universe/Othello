@@ -5359,6 +5359,14 @@
     }
 
     async function sendMessage(overrideText = null, extraData = {}) {
+      // Defensive guard: if first arg is an Event (from click handler), treat as null
+      if (overrideText && typeof overrideText !== "string") {
+          overrideText = null;
+      }
+      if (!extraData || typeof extraData !== "object") {
+          extraData = {};
+      }
+
       const text = overrideText !== null ? overrideText : input.value.trim();
       if (!text && !extraData.ui_action) return;
 
@@ -5795,7 +5803,7 @@
       });
     }
 
-    sendBtn.onclick = sendMessage;
+    sendBtn.onclick = () => sendMessage();
     input.onkeydown = (e) => {
       if (e.key === "Enter") sendMessage();
     };
