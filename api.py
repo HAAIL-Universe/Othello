@@ -3799,6 +3799,28 @@ def _process_insights_pipeline(*, user_text: str, assistant_text: str, user_id: 
     return meta
 
 
+@app.route("/api/conversations", methods=["POST"])
+@require_auth
+def create_conversation():
+    user_id, error = _get_user_id_or_error()
+    if error:
+        return error
+    from db.messages_repository import create_session
+    session = create_session(user_id)
+    return jsonify({"conversation_id": session.get("id")})
+
+
+@app.route("/api/conversations", methods=["GET"])
+@require_auth
+def list_conversations():
+    user_id, error = _get_user_id_or_error()
+    if error:
+        return error
+    from db.messages_repository import list_sessions
+    sessions = list_sessions(user_id, limit=50)
+    return jsonify({"conversations": sessions})
+
+
 @app.route("/api/message", methods=["POST"])
 @require_auth
 def handle_message():
@@ -3880,14 +3902,23 @@ def handle_message():
         if raw_client_message_id is not None:
             client_message_id = str(raw_client_message_id).strip() or None
 
+        raw_conversation_id = data.get("conversation_id")
+        conversation_id = None
+        if raw_conversation_id is not None:
+            try:
+                conversation_id = int(raw_conversation_id)
+            except (ValueError, TypeError):
+                pass
+
         logger.info(
-            "API: message meta request_id=%s current_view=%s current_mode=%s keys=%s goal_id=%s active_goal_id=%s",
+            "API: message meta request_id=%s current_view=%s current_mode=%s keys=%s goal_id=%s active_goal_id=%s conversation_id=%s",
             request_id,
             current_view,
             current_mode,
             list(data.keys()),
             data.get("goal_id"),
             data.get("active_goal_id"),
+            conversation_id,
         )
 
         _log_request_start(raw_goal_id)
@@ -4562,6 +4593,7 @@ def handle_message():
                     source="text",
                     channel=effective_channel,
                     status="final",
+                    session_id=conversation_id,
                 )
                 create_message(
                     user_id=user_id,
@@ -4569,6 +4601,7 @@ def handle_message():
                     source="assistant",
                     channel=effective_channel,
                     status="final",
+                    session_id=conversation_id,
                 )
             except Exception as exc:
                 logger.warning(
@@ -4581,6 +4614,8 @@ def handle_message():
         def _respond(payload: Dict[str, Any]):
             reply_text = payload.get("reply") if isinstance(payload, dict) else None
             _persist_chat_exchange(reply_text)
+            if isinstance(payload, dict) and conversation_id:
+                payload["conversation_id"] = conversation_id
             return jsonify(payload)
 
         logger.info(

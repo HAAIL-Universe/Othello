@@ -16,6 +16,24 @@ def create_session(user_id: str) -> Dict[str, Any]:
     return execute_and_fetch_one(query, (user_id,)) or {}
 
 
+def list_sessions(user_id: str, limit: int = 50) -> List[Dict[str, Any]]:
+    """
+    List sessions for a user, ordered by most recent activity.
+    Computes updated_at from max message time if needed.
+    """
+    query = """
+        SELECT s.id as conversation_id, s.created_at,
+               COALESCE(MAX(m.created_at), s.created_at) as updated_at
+        FROM sessions s
+        LEFT JOIN messages m ON s.id = m.session_id
+        WHERE s.user_id = %s
+        GROUP BY s.id, s.created_at
+        ORDER BY updated_at DESC
+        LIMIT %s
+    """
+    return fetch_all(query, (user_id, limit))
+
+
 def create_message(
     *,
     user_id: str,

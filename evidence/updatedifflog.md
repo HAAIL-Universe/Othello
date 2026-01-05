@@ -1,100 +1,130 @@
-Cycle Status: COMPLETE
-Todo Ledger:
-Planned: Fix missing '?? Goal' intent marker on first bot reply; Adjust 'Is this a goal?' UX to use '?' icon for weak intents; Stop false goal-candidate suggestions for 'I want to ask a question'; Remove duplicate 'Goal suggestion' entries.
-Completed: Updated detectUserGoalHint with strict regex; Added detectGoalCandidateStatement for weak intents; Updated updateSecondaryBadge to show '?' icon; Added hard negative guard in sendMessage for question intents; Added deduplication logic in addSecondarySuggestion.
-Remaining: Runtime verification (deploy-required)
-Next Action: Deploy and verify that 'I want to ask a question' does NOT show a goal suggestion, and 'I want to lose 10kg' shows a '?' icon.
+# EVIDENCE REPORT: Backend & DB Analysis for Conversations/Threads
 
-diff --git a/othello_ui.html b/othello_ui.html
-index 7bf87f8b..747e3bd6 100644
---- a/othello_ui.html
-+++ b/othello_ui.html
-@@ -6068,7 +6068,8 @@
+## Cycle Status
+IN_PROGRESS
 
-     function updateSecondaryBadge(entry) {
-       if (!entry || !entry.clientMessageId || !entry.bubbleEl) return;
--      const count = getSecondarySuggestions(entry.clientMessageId).length;
-+      const suggestions = getSecondarySuggestions(entry.clientMessageId);
-+      const count = suggestions.length;
-       const meta = entry.bubbleEl.querySelector('.meta');
-       if (!meta) return;
-       if (!count) {
-@@ -6090,7 +6091,12 @@
-         entry.secondaryBadgeEl = badge;
-         meta.appendChild(badge);
-       }
--      badge.textContent = \•\\;
-+      
-+      const hasGoal = suggestions.some(s => s.type === 'goal_intent');
-+      badge.textContent = hasGoal ? '?' : \•\\;
-+      badge.style.fontWeight = hasGoal ? 'bold' : 'normal';
-+      badge.style.color = hasGoal ? 'var(--accent)' : 'inherit';
-+
-       if (entry.secondaryPanelEl && entry.secondaryPanelEl.style.display === 'flex') {
-         renderSecondarySuggestionPanel(entry);
-       }
-@@ -6110,7 +6116,11 @@
-       const suggestionId = suggestion.suggestion_id || suggestion.id || null;
-       const key = suggestionId != null ? \\:\\ : \\:\\;
-       const list = othelloState.secondarySuggestionsByClientId[clientMessageId] || [];
-+      
-       if (list.some((item) => item.key === key)) return false;
-+      // Enforce one candidate per type per message
-+      if (list.some((item) => item.type === normalizedType)) return false;
-+
-       list.push({ key, type: normalizedType, suggestionId, suggestion });
-       othelloState.secondarySuggestionsByClientId[clientMessageId] = list;
-       const entry = othelloState.messagesByClientId[clientMessageId];
-@@ -6621,10 +6631,18 @@
-       const raw = String(userText || '').trim();
-       if (!raw) return false;
-       const text = raw.toLowerCase();
-+
-+      // Hard negative guard: question intent must never trigger goal candidates
-+      if (text.includes('question') || text.includes('?') || 
-+          text.startsWith('i want to ask') || text.startsWith('i have a question') ||
-+          text.startsWith('can i ask') || text.startsWith('could i ask')) {
-+        return false;
-+      }
-+
-       const tokens = text.split(/\\s+/).filter(Boolean);
-       const explicitGoal = /(goal:|my goal is|i want to|i'm going to|im going to|i am going to|i will|new goal|i need to achieve|i'm working towards|im working towards)/.test(text);
-       if (tokens.length <= 4 && !explicitGoal) return false;
--      if (raw.includes('?') || /^(what|why|how|when|where|who|can|should|do|is|are)\\b/.test(text)) {
-+      if (/^(what|why|how|when|where|who|can|should|do|is|are)\\b/.test(text)) {
-         return false;
-       }
-       const routineSignals = /\\b(every day|each day|daily|weekly|remind me|alarm|routine|habit|meet at)\\b/.test(text);
-@@ -6649,18 +6667,9 @@
-       const entryText = entry && typeof entry.text === 'string' ? entry.text : '';
-       if (!shouldSuggestGoalDraft(entryText, normalizedSuggestion, othelloState)) return;
-       if (isSuggestionDismissed(normalizedSuggestion.type, clientMessageId)) return;
--      const focusKind = getActiveFocusKind(othelloState);
--      if (focusKind && focusKind !== 'goal') {
--        addSecondarySuggestion(clientMessageId, normalizedSuggestion);
--        return;
--      }
--      othelloState.goalIntentSuggestions[clientMessageId] = normalizedSuggestion;
--      if (!entry || !entry.bubbleEl || !entry.rowEl) return;
--      if (entry.panelEl) return;
--      entry.bubbleEl.classList.add('ux-goal-intent');
--      const panel = buildGoalIntentPanel(normalizedSuggestion, entry);
--      entry.panelEl = panel;
--      entry.rowEl.appendChild(panel);
-+      
-+      // Always use secondary suggestion for goal intents (candidate flow)
-+      addSecondarySuggestion(clientMessageId, normalizedSuggestion);
-     }
+## Todo Ledger
+- [x] Phase 0: Evidence Gate
+- [x] Phase 1: Backend Implementation (API endpoints)
+- [ ] Phase 2: Frontend Implementation (UI for New Chat and switching)
+- [ ] Phase 3: Optional Delete
+- [ ] Runtime Verification
+
+## Next Action
+Implement Phase 2: Frontend "New Chat" and conversation switching.
+
+## FULL unified diff patch
+```diff
+diff --git a/api.py b/api.py
+index c9338b7c..3146c3e2 100644
+--- a/api.py
++++ b/api.py
+@@ -3799,6 +3799,28 @@ def _process_insights_pipeline(*, user_text: str, assistant_text: str, user_id:
+         return meta
  
-     function applySuggestionMeta(meta) {
-@@ -7213,7 +7222,10 @@
-       const qWords = ['what', 'how', 'why', 'when', 'where', 'who', 'can', 'should', 'do', 'is', 'are'];
-       if (qWords.some(w => t.startsWith(w + ' ') || t === w)) return false;
-       
--      const signals = ['goal:', 'my goal is', 'new goal', 'i want to', 'i'm going to', 'i will', 'working towards'];
-+      const signals = [
-+        'goal', 'i have a goal', 'i need to create a goal', 'create a goal', 
-+        'set a goal', 'new goal', 'my goal is', 'working towards'
-+      ];
-       return signals.some(s => t.includes(s));
-     }
+ 
++@app.route("/api/conversations", methods=["POST"])
++@require_auth
++def create_conversation():
++    user_id, error = _get_user_id_or_error()
++    if error:
++        return error
++    from db.messages_repository import create_session
++    session = create_session(user_id)
++    return jsonify({"conversation_id": session.get("id")})
++
++
++@app.route("/api/conversations", methods=["GET"])
++@require_auth
++def list_conversations():
++    user_id, error = _get_user_id_or_error()
++    if error:
++        return error
++    from db.messages_repository import list_sessions
++    sessions = list_sessions(user_id, limit=50)
++    return jsonify({"conversations": sessions})
++
++
+ @app.route("/api/message", methods=["POST"])
+ @require_auth
+ def handle_message():
+@@ -3880,14 +3902,23 @@ def handle_message():
+         if raw_client_message_id is not None:
+             client_message_id = str(raw_client_message_id).strip() or None
+ 
++        raw_conversation_id = data.get("conversation_id")
++        conversation_id = None
++        if raw_conversation_id is not None:
++            try:
++                conversation_id = int(raw_conversation_id)
++            except (ValueError, TypeError):
++                pass
++
+         logger.info(
+-            "API: message meta request_id=%s current_view=%s current_mode=%s keys=%s goal_id=%s active_goal_id=%s",
++            "API: message meta request_id=%s current_view=%s current_mode=%s keys=%s goal_id=%s active_goal_id=%s conversation_id=%s",
+             request_id,
+             current_view,
+             current_mode,
+             list(data.keys()),
+             data.get("goal_id"),
+             data.get("active_goal_id"),
++            conversation_id,
+         )
+ 
+         _log_request_start(raw_goal_id)
+@@ -4562,6 +4593,7 @@ def handle_message():
+                     source="text",
+                     channel=effective_channel,
+                     status="final",
++                    session_id=conversation_id,
+                 )
+                 create_message(
+                     user_id=user_id,
+@@ -4569,6 +4601,7 @@ def handle_message():
+                     source="assistant",
+                     channel=effective_channel,
+                     status="final",
++                    session_id=conversation_id,
+                 )
+             except Exception as exc:
+                 logger.warning(
+@@ -4581,6 +4614,8 @@ def handle_message():
+         def _respond(payload: Dict[str, Any]):
+             reply_text = payload.get("reply") if isinstance(payload, dict) else None
+             _persist_chat_exchange(reply_text)
++            if isinstance(payload, dict) and conversation_id:
++                payload["conversation_id"] = conversation_id
+             return jsonify(payload)
+ 
+         logger.info(
+diff --git a/db/messages_repository.py b/db/messages_repository.py
+index bec7c15d..18d6d42c 100644
+--- a/db/messages_repository.py
++++ b/db/messages_repository.py
+@@ -16,6 +16,24 @@ def create_session(user_id: str) -> Dict[str, Any]:
+     return execute_and_fetch_one(query, (user_id,)) or {}
+ 
+ 
++def list_sessions(user_id: str, limit: int = 50) -> List[Dict[str, Any]]:
++    """
++    List sessions for a user, ordered by most recent activity.
++    Computes updated_at from max message time if needed.
++    """
++    query = """
++        SELECT s.id as conversation_id, s.created_at,
++               COALESCE(MAX(m.created_at), s.created_at) as updated_at
++        FROM sessions s
++        LEFT JOIN messages m ON s.id = m.session_id
++        WHERE s.user_id = %s
++        GROUP BY s.id, s.created_at
++        ORDER BY updated_at DESC
++        LIMIT %s
++    """
++    return fetch_all(query, (user_id, limit))
++
++
+ def create_message(
+     *,
+     user_id: str,
+```
