@@ -1795,3 +1795,35 @@
 .w-100 {
   width: 100%;
 }
+
+/* Draft Preview */
+.draft-preview {
+    background: var(--bg-2);
+    border-bottom: 1px solid var(--border);
+    padding: 1rem;
+    margin-bottom: 1rem;
+    border-radius: 0 0 8px 8px;
+}
+.draft-preview h3 {
+    margin: 0 0 0.5rem 0;
+    font-size: 1.1rem;
+    color: var(--accent);
+}
+.draft-preview .draft-meta {
+    font-size: 0.9rem;
+    color: var(--text-soft);
+    margin-bottom: 0.5rem;
+}
+.draft-preview .draft-steps {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+.draft-preview .draft-steps li {
+    padding: 0.25rem 0;
+    border-bottom: 1px solid var(--border-soft);
+    font-size: 0.9rem;
+}
+.draft-preview .draft-steps li:last-child {
+    border-bottom: none;
+}

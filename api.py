@@ -1148,6 +1148,35 @@ def _patch_goal_draft_payload(current_payload: Dict[str, Any], user_instruction:
         return current_payload
 
 
+def _generate_draft_steps_payload(current_payload: Dict[str, Any]) -> Dict[str, Any]:
+    from core.llm_wrapper import LLMWrapper
+    
+    system_prompt = (
+        "You are a goal planning engine. Generate a list of concrete, actionable steps for the user's goal.\n"
+        "Return the FULL updated JSON object with keys: title, target_days, steps, body.\n"
+        "The 'steps' key should be a list of strings.\n"
+        "Keep the existing title, target_days, and body unless they are missing.\n"
+        "Return ONLY valid JSON."
+    )
+    
+    try:
+        llm = LLMWrapper()
+        response = llm.chat_completion(
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"Current Payload: {json.dumps(current_payload)}\nTask: Generate 3-5 actionable steps for this goal."}
+            ],
+            temperature=0.2,
+            max_tokens=600,
+            response_format={"type": "json_object"}
+        )
+        content = response.choices[0].message.content
+        return json.loads(content)
+    except Exception as e:
+        logging.error(f"Failed to generate draft steps: {e}")
+        return current_payload
+
+
 def _extract_goal_title_suggestion(text: str) -> str:
     raw = str(text or "").strip()
     if not raw:
@@ -4209,8 +4238,11 @@ def handle_message():
                     # Update DB
                     updated_suggestion = suggestions_repository.update_suggestion_payload(user_id, draft_id, updated_payload)
                     
+                    title = updated_payload.get("title", "Goal")
+                    steps_count = len(updated_payload.get("steps", []))
+                    
                     response = {
-                        "reply": "Updated the draft.",
+                        "reply": f"Updated draft: '{title}' ({steps_count} steps).",
                         "draft_context": {
                             "draft_id": draft_id,
                             "draft_type": "goal",
@@ -4221,6 +4253,43 @@ def handle_message():
                     }
                     return jsonify(response)
                     
+            except (ValueError, TypeError):
+                pass
+
+        # Draft Focus: Generate Steps
+        # Trigger: ui_action="generate_draft_steps" OR voice command "generate steps" with active draft
+        is_generate_steps = (ui_action == "generate_draft_steps")
+        if not is_generate_steps and user_id and data.get("draft_id") and data.get("draft_type") == "goal":
+             norm_input = user_input.strip().lower()
+             if "generate steps" in norm_input or "suggest steps" in norm_input:
+                 is_generate_steps = True
+
+        if is_generate_steps and user_id and data.get("draft_id"):
+            draft_id = data.get("draft_id")
+            try:
+                draft_id = int(draft_id)
+                draft = suggestions_repository.get_suggestion(user_id, draft_id)
+                
+                if draft and draft.get("status") == "pending":
+                    current_payload = draft.get("payload", {})
+                    updated_payload = _generate_draft_steps_payload(current_payload)
+                    
+                    # Update DB
+                    updated_suggestion = suggestions_repository.update_suggestion_payload(user_id, draft_id, updated_payload)
+                    
+                    steps_count = len(updated_payload.get("steps", []))
+                    
+                    response = {
+                        "reply": f"I've generated {steps_count} steps for your goal.",
+                        "draft_context": {
+                            "draft_id": draft_id,
+                            "draft_type": "goal",
+                            "source_message_id": client_message_id
+                        },
+                        "draft_payload": updated_payload,
+                        "request_id": request_id
+                    }
+                    return jsonify(response)
             except (ValueError, TypeError):
                 pass
 

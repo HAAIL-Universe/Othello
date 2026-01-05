@@ -816,6 +816,7 @@
       activeGoalId: null,
       activeConversationId: null, // New Chat support
       activeDraft: null, // { draft_id, draft_type, source_message_id }
+      activeDraftPayload: null,
       lastGoalDraftByConversationId: {}, // Stores the last assistant goal summary per conversation
       currentDetailGoalId: null,
       pendingGoalEdit: null,
@@ -3643,6 +3644,12 @@
         const stored = localStorage.getItem("othello_active_draft");
         if (stored) {
           othelloState.activeDraft = JSON.parse(stored);
+          
+          const storedPayload = localStorage.getItem("othello_active_draft_payload");
+          if (storedPayload) {
+              othelloState.activeDraftPayload = JSON.parse(storedPayload);
+          }
+          
           updateFocusRibbon();
         }
       } catch (e) {}
@@ -3713,8 +3720,40 @@
     loadDraftState();
     refreshInsightsCounts();
 
+    function renderDraftPreview() {
+        const container = document.getElementById("draft-preview");
+        if (!container) return;
+        
+        if (!othelloState.activeDraft || !othelloState.activeDraftPayload) {
+            container.style.display = "none";
+            container.innerHTML = "";
+            return;
+        }
+        
+        const p = othelloState.activeDraftPayload;
+        const steps = p.steps || [];
+        
+        let html = `<h3>${p.title || "New Goal"}</h3>`;
+        html += `<div class="draft-meta">Target: ${p.target_days || 7} days</div>`;
+        
+        if (steps.length > 0) {
+            html += `<ul class="draft-steps">`;
+            steps.forEach(step => {
+                html += `<li>${step}</li>`;
+            });
+            html += `</ul>`;
+        } else {
+            html += `<div class="draft-meta">No steps generated yet.</div>`;
+        }
+        
+        container.innerHTML = html;
+        container.style.display = "block";
+    }
+
     // ===== FOCUS RIBBON =====
     function updateFocusRibbon() {
+      renderDraftPreview();
+      
       if (!focusRibbon) return;
       if (othelloState.currentView !== "chat") {
         focusRibbon.classList.remove("visible");
@@ -3728,33 +3767,46 @@
           focusRibbonTitle.textContent = `Drafting ${displayType}...`; 
           
           // Add actions if not present
-          if (!focusRibbon.querySelector(".ribbon-actions")) {
-              const actionsDiv = document.createElement("div");
+          let actionsDiv = focusRibbon.querySelector(".ribbon-actions");
+          if (!actionsDiv) {
+              actionsDiv = document.createElement("div");
               actionsDiv.className = "ribbon-actions";
               actionsDiv.style.marginLeft = "auto";
               actionsDiv.style.display = "flex";
               actionsDiv.style.gap = "8px";
-
-              const confirmBtn = document.createElement("button");
-              confirmBtn.textContent = "Confirm";
-              confirmBtn.className = "ribbon-btn confirm-btn";
-              confirmBtn.onclick = (e) => {
-                  e.stopPropagation();
-                  sendMessage("", { ui_action: "confirm_draft" });
-              };
-
-              const dismissBtn = document.createElement("button");
-              dismissBtn.textContent = "Dismiss";
-              dismissBtn.className = "ribbon-btn dismiss-btn";
-              dismissBtn.onclick = (e) => {
-                  e.stopPropagation();
-                  sendMessage("", { ui_action: "dismiss_draft" });
-              };
-
-              actionsDiv.appendChild(confirmBtn);
-              actionsDiv.appendChild(dismissBtn);
               focusRibbon.appendChild(actionsDiv);
           }
+          
+          // Rebuild actions
+          actionsDiv.innerHTML = "";
+
+          const genStepsBtn = document.createElement("button");
+          genStepsBtn.textContent = "Generate Steps";
+          genStepsBtn.className = "ribbon-btn";
+          genStepsBtn.onclick = (e) => {
+              e.stopPropagation();
+              sendMessage("", { ui_action: "generate_draft_steps" });
+          };
+          
+          const confirmBtn = document.createElement("button");
+          confirmBtn.textContent = "Confirm";
+          confirmBtn.className = "ribbon-btn confirm-btn";
+          confirmBtn.onclick = (e) => {
+              e.stopPropagation();
+              sendMessage("", { ui_action: "confirm_draft" });
+          };
+
+          const dismissBtn = document.createElement("button");
+          dismissBtn.textContent = "Dismiss";
+          dismissBtn.className = "ribbon-btn dismiss-btn";
+          dismissBtn.onclick = (e) => {
+              e.stopPropagation();
+              sendMessage("", { ui_action: "dismiss_draft" });
+          };
+
+          actionsDiv.appendChild(genStepsBtn);
+          actionsDiv.appendChild(confirmBtn);
+          actionsDiv.appendChild(dismissBtn);
 
           focusRibbon.classList.add("visible");
           focusRibbon.classList.add("draft-mode");
@@ -5737,19 +5789,29 @@
         if (data.draft_context) {
             othelloState.activeDraft = data.draft_context;
             localStorage.setItem("othello_active_draft", JSON.stringify(othelloState.activeDraft));
+            
+            if (data.draft_payload) {
+                othelloState.activeDraftPayload = data.draft_payload;
+                localStorage.setItem("othello_active_draft_payload", JSON.stringify(data.draft_payload));
+            }
+            
             updateFocusRibbon();
         }
         
         if (data.saved_goal) {
             othelloState.activeDraft = null;
+            othelloState.activeDraftPayload = null;
             localStorage.removeItem("othello_active_draft");
+            localStorage.removeItem("othello_active_draft_payload");
             updateFocusRibbon();
         }
 
         if (data.dismissed_draft_id) {
             if (othelloState.activeDraft && othelloState.activeDraft.draft_id === data.dismissed_draft_id) {
                 othelloState.activeDraft = null;
+                othelloState.activeDraftPayload = null;
                 localStorage.removeItem("othello_active_draft");
+                localStorage.removeItem("othello_active_draft_payload");
                 updateFocusRibbon();
             }
         }
