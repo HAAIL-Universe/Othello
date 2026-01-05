@@ -1803,6 +1803,8 @@
     padding: 1rem;
     margin-bottom: 1rem;
     border-radius: 0 0 8px 8px;
+    max-height: 40vh;
+    overflow: auto;
 }
 .draft-preview h3 {
     margin: 0 0 0.5rem 0;

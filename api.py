@@ -4283,6 +4283,12 @@ def handle_message():
                     
                     # Fallback Logic
                     steps = updated_payload.get("steps", [])
+                    if not isinstance(steps, list):
+                        steps = []
+                    
+                    # Sanitize steps
+                    steps = [str(s) for s in steps if s]
+                    
                     used_fallback = False
                     if not steps:
                         used_fallback = True
@@ -4293,25 +4299,32 @@ def handle_message():
                             "Execute and track progress",
                             "Review and adjust"
                         ]
-                        updated_payload["steps"] = steps
                         logging.warning(f"Used fallback steps for draft {draft_id}")
+                    
+                    updated_payload["steps"] = steps
 
                     # Update DB
                     updated_suggestion = suggestions_repository.update_suggestion_payload(user_id, draft_id, updated_payload)
                     
-                    steps_count = len(updated_payload.get("steps", []))
+                    steps_count = len(steps)
+                    reply_text = f"I've generated {steps_count} steps for your goal:"
+                    for i, s in enumerate(steps, 1):
+                        reply_text += f"\n{i}) {s}"
                     
                     response = {
-                        "reply": f"I've generated {steps_count} steps for your goal.",
+                        "reply": reply_text,
                         "draft_context": {
                             "draft_id": draft_id,
                             "draft_type": "goal",
                             "source_message_id": client_message_id
                         },
                         "draft_payload": updated_payload,
-                        "request_id": request_id,
-                        "meta": {"used_fallback_steps": used_fallback}
+                        "request_id": request_id
                     }
+                    
+                    meta = response.setdefault("meta", {})
+                    meta["used_fallback_steps"] = used_fallback
+                    
                     return jsonify(response)
             except (ValueError, TypeError):
                 pass

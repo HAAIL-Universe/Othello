@@ -3730,8 +3730,18 @@
             return;
         }
         
+        // Dynamic offset for ribbon
+        if (focusRibbon && focusRibbon.classList.contains("visible")) {
+            const h = focusRibbon.offsetHeight || 0;
+            container.style.marginTop = h ? (h + 8) + "px" : "0px";
+        } else {
+            container.style.marginTop = "0px";
+        }
+        
         const p = othelloState.activeDraftPayload;
         const steps = p.steps || [];
+        
+        console.debug("[Othello UI] Draft preview steps:", steps.length);
         
         let html = `<h3>${p.title || "New Goal"}</h3>`;
         html += `<div class="draft-meta">Target: ${p.target_days || 7} days</div>`;
@@ -5790,12 +5800,13 @@
         if (data.draft_context) {
             othelloState.activeDraft = data.draft_context;
             localStorage.setItem("othello_active_draft", JSON.stringify(othelloState.activeDraft));
-            
-            if (data.draft_payload) {
-                othelloState.activeDraftPayload = data.draft_payload;
-                localStorage.setItem("othello_active_draft_payload", JSON.stringify(data.draft_payload));
-            }
-            
+        }
+
+        if (data.draft_payload) {
+            othelloState.activeDraftPayload = data.draft_payload;
+            localStorage.setItem("othello_active_draft_payload", JSON.stringify(data.draft_payload));
+            updateFocusRibbon();
+        } else if (data.draft_context) {
             updateFocusRibbon();
         }
         
