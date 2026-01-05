@@ -5359,15 +5359,24 @@
     }
 
     async function sendMessage(overrideText = null, extraData = {}) {
-      // Defensive guard: if first arg is an Event (from click handler), treat as null
-      if (overrideText && typeof overrideText !== "string") {
-          overrideText = null;
+      // 1) Robust String Safety & Diagnostic
+      let override = overrideText;
+      if (override !== null && typeof override !== "string") {
+          console.warn("[Othello UI] sendMessage received non-string overrideText:", typeof override, override?.constructor?.name);
+          override = null;
       }
+
       if (!extraData || typeof extraData !== "object") {
           extraData = {};
       }
 
-      const text = overrideText !== null ? overrideText : input.value.trim();
+      // Canonical text variable
+      let rawText = (override !== null ? override : (input?.value ?? ""));
+      if (typeof rawText !== "string") {
+          rawText = String(rawText ?? "");
+      }
+      const text = rawText.trim();
+
       if (!text && !extraData.ui_action) return;
 
       // Voice-first save command (Strict Command Mode)
