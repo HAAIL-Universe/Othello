@@ -345,6 +345,48 @@ class DbGoalManager:
             self.logger.warning("DbGoalManager: goal description append failed for goal %s", goal_id)
         return updated_goal
     
+    def append_goal_draft(
+        self,
+        user_id: str,
+        goal_id: int,
+        extra_text: str,
+        request_id: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Append extra text to the goal draft_text.
+        """
+        uid = self._require_user_id(user_id)
+        goal = self.get_goal(uid, goal_id, include_conversation=False)
+        if goal is None:
+            return None
+        base_draft = (goal.get("draft_text") or "").rstrip()
+        extra = (extra_text or "").strip()
+        if base_draft:
+            new_draft = f"{base_draft}\n\n{extra}"
+        else:
+            new_draft = extra
+        
+        updated_goal = goals_repository.update_goal_draft(goal_id, new_draft, uid)
+        if updated_goal is None:
+            self.logger.warning("DbGoalManager: goal draft append failed for goal %s", goal_id)
+        return updated_goal
+
+    def replace_goal_draft(
+        self,
+        user_id: str,
+        goal_id: int,
+        new_text: str,
+        request_id: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Replace the goal draft_text.
+        """
+        uid = self._require_user_id(user_id)
+        updated_goal = goals_repository.update_goal_draft(goal_id, new_text, uid)
+        if updated_goal is None:
+            self.logger.warning("DbGoalManager: goal draft replace failed for goal %s", goal_id)
+        return updated_goal
+
     def update_goal_plan(
         self,
         user_id: str,

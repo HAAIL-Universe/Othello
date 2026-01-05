@@ -573,9 +573,17 @@ def serialize_goal_task_history(row: Dict[str, Any]) -> Dict[str, Any]:
 # Initialize database connection pool
 db_initialized = False
 try:
-    from db.database import init_pool, ensure_core_schema, fetch_one
+    from db.database import init_pool, ensure_core_schema, fetch_one, execute_query
     init_pool()
     ensure_core_schema()
+
+    # Migration: Ensure draft_text column exists
+    try:
+        execute_query("ALTER TABLE goals ADD COLUMN IF NOT EXISTS draft_text TEXT")
+        print("[API] [OK] Ensured goals.draft_text column exists")
+    except Exception as e:
+        print(f"[API] [ERR] Failed to ensure goals.draft_text column: {e}")
+
     db_initialized = True
     print("[API] [OK] Database connection pool initialized successfully")
     print("[API] [OK] Connected to Neon PostgreSQL database")
@@ -5652,21 +5660,21 @@ def handle_message():
                 return _respond(response)
             try:
                 if focused_goal_edit["mode"] == "append":
-                    updated_goal = architect_agent.goal_mgr.append_goal_description(
+                    updated_goal = architect_agent.goal_mgr.append_goal_draft(
                         user_id,
                         active_goal["id"],
                         payload,
                         request_id=request_id,
                     )
-                    intent = "append_goal_description"
+                    intent = "append_goal_draft"
                 else:
-                    updated_goal = architect_agent.goal_mgr.replace_goal_description(
+                    updated_goal = architect_agent.goal_mgr.replace_goal_draft(
                         user_id,
                         active_goal["id"],
                         payload,
                         request_id=request_id,
                     )
-                    intent = "update_goal_description"
+                    intent = "update_goal_draft"
             except Exception:
                 logger.error(
                     "API: focused goal edit failed request_id=%s goal_id=%s mode=%s",
@@ -5687,9 +5695,9 @@ def handle_message():
                 return _respond(response)
             try:
                 note_label = (
-                    "[Goal Append] Appended text (len=%s)" % len(payload)
+                    "[Goal Draft Append] Appended text (len=%s)" % len(payload)
                     if focused_goal_edit["mode"] == "append"
-                    else "[Goal Update] Replaced description (len=%s)" % len(payload)
+                    else "[Goal Draft Update] Replaced draft (len=%s)" % len(payload)
                 )
                 architect_agent.goal_mgr.add_note_to_goal(
                     user_id,
@@ -5710,12 +5718,17 @@ def handle_message():
                 _log_goal_intent_status(False, "fallback")
                 return _respond(response)
             reply_text = (
-                "Appended to the focused goal." if focused_goal_edit["mode"] == "append"
-                else "Updated the focused goal."
+                "Appended to the focused goal draft." if focused_goal_edit["mode"] == "append"
+                else "Updated the focused goal draft."
             )
             response = {
                 "reply": reply_text,
-                "meta": {"intent": intent},
+                "meta": {
+                    "intent": intent,
+                    "goal_updated": True,
+                    "goal_id": active_goal["id"],
+                    "goal_field_updated": "draft_text"
+                },
                 "goal": fresh_goal,
             }
             _log_goal_intent_status(False, "fallback")

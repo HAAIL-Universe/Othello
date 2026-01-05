@@ -5631,6 +5631,10 @@
 
         // Always refresh from backend to stay in sync
         await refreshGoals();
+
+        if (data.meta && data.meta.goal_updated) {
+           refreshGoalDetail();
+        }
       } catch (err) {
         console.error("[Othello UI] sendMessage error:", err);
         addMessage("bot", "[Connection error: backend unreachable]");
@@ -6276,6 +6280,16 @@
 
       // Build detail content
       let contentHtml = "";
+
+      // Draft (New)
+      if (goal.draft_text) {
+        contentHtml += `
+          <div class="detail-section">
+            <div class="detail-section__title">Draft</div>
+            <div class="detail-section__body" style="white-space: pre-wrap;">${formatMessageText(goal.draft_text)}</div>
+          </div>
+        `;
+      }
 
       // Description / Intent
       const intentBody = (goal.description || goal.intent || goal.body || "").trim();

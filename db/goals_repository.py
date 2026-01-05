@@ -102,7 +102,7 @@ def list_goals(user_id: str, *, include_archived: bool = False) -> List[Dict[str
     if include_archived:
         query = """
             SELECT id, user_id, title, description, status, priority, category,
-                   plan, checklist, last_conversation_summary, created_at, updated_at
+                   plan, checklist, last_conversation_summary, created_at, updated_at, draft_text
             FROM goals
             WHERE user_id = %s
             ORDER BY created_at DESC
@@ -111,7 +111,7 @@ def list_goals(user_id: str, *, include_archived: bool = False) -> List[Dict[str
 
     query = """
         SELECT id, user_id, title, description, status, priority, category,
-               plan, checklist, last_conversation_summary, created_at, updated_at
+               plan, checklist, last_conversation_summary, created_at, updated_at, draft_text
         FROM goals
         WHERE user_id = %s AND (status IS NULL OR status != 'archived')
         ORDER BY created_at DESC
@@ -132,7 +132,7 @@ def get_goal(goal_id: int, user_id: str) -> Optional[Dict[str, Any]]:
     """
     query = """
         SELECT id, user_id, title, description, status, priority, category,
-               plan, checklist, last_conversation_summary, created_at, updated_at
+               plan, checklist, last_conversation_summary, created_at, updated_at, draft_text
         FROM goals
         WHERE id = %s AND user_id = %s
     """
@@ -555,4 +555,18 @@ def get_max_plan_step_index(goal_id: int) -> int:
     except Exception as e:
         print(f"[GoalsRepository] Failed to fetch max step index for goal {goal_id}: {e}")
     return 0
+
+
+def update_goal_draft(goal_id: int, draft_text: str, user_id: str) -> Optional[Dict[str, Any]]:
+    """
+    Update the draft_text field for a goal.
+    """
+    query = """
+        UPDATE goals
+        SET draft_text = %s, updated_at = NOW()
+        WHERE id = %s AND user_id = %s
+        RETURNING id, user_id, title, description, status, priority, category,
+                  plan, checklist, last_conversation_summary, created_at, updated_at, draft_text
+    """
+    return execute_and_fetch_one(query, (draft_text, goal_id, user_id))
 
