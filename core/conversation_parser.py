@@ -379,6 +379,10 @@ class ConversationParser:
 
     def _extract_scheduled_routine(self, text: str) -> Optional[Dict[str, Any]]:
         lower = (text or "").lower()
+        # Explicitly ignore negative intent or goal-only requests
+        if "no routine" in lower or "do not create a routine" in lower or "goal draft only" in lower or "goal only" in lower:
+            return None
+
         if "routine" not in lower and "every" not in lower and "daily" not in lower:
             return None
         action = self._extract_routine_action(text)
