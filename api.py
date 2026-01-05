@@ -1275,6 +1275,7 @@ def _load_companion_context(
     channel: str = "companion",
     max_turns: int = CHAT_CONTEXT_TURNS,
     max_chars: int = CHAT_CONTEXT_MAX_CHARS,
+    conversation_id: Optional[int] = None,
 ) -> List[Dict[str, str]]:
     uid = str(user_id or "").strip()
     if not uid:
@@ -1286,8 +1287,11 @@ def _load_companion_context(
     if limit <= 0:
         return []
     try:
-        from db.messages_repository import list_recent_messages
-        rows = list_recent_messages(uid, limit=limit, channel=channel_name)
+        from db.messages_repository import list_recent_messages, list_messages_for_session
+        if conversation_id:
+            rows = list_messages_for_session(uid, conversation_id, limit=limit, channel=channel_name)
+        else:
+            rows = list_recent_messages(uid, limit=limit, channel=channel_name)
     except Exception as exc:
         logger.warning(
             "API: failed to load companion history user_id=%s error=%s",
@@ -4602,7 +4606,7 @@ def handle_message():
         companion_context = None
         persist_enabled = _should_persist_chat()
         if persist_enabled:
-            companion_context = _load_companion_context(user_id, logger, channel=effective_channel)
+            companion_context = _load_companion_context(user_id, logger, channel=effective_channel, conversation_id=conversation_id)
 
         def _persist_chat_exchange(reply_text: Optional[str]) -> None:
             if not reply_text or not _should_persist_chat():
