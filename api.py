@@ -1163,14 +1163,39 @@ def _apply_goal_draft_deterministic_edit(current_payload: Dict[str, Any], user_i
         if not isinstance(steps, list):
             steps = []
             
-        # Extend if needed
-        if step_idx >= 0:
-            if step_idx >= len(steps):
-                steps.extend([""] * (step_idx - len(steps) + 1))
-                
-            steps[step_idx] = new_step_text
-            updated_payload["steps"] = steps
-            return updated_payload, True, f"Updated step {step_idx + 1}."
+        # Sanitize existing steps (remove blanks)
+        steps = [str(s).strip() for s in steps if str(s).strip()]
+        
+        # Logic:
+        # 1. If steps empty, allow only step 1.
+        # 2. If steps exist, allow 1..len(steps) (edit) OR len(steps)+1 (append).
+        # 3. Reject gaps.
+        
+        current_count = len(steps)
+        target_idx = step_idx
+        
+        if current_count == 0:
+            if target_idx == 0:
+                # Set first step
+                steps = [new_step_text]
+                updated_payload["steps"] = steps
+                return updated_payload, True, "Added step 1."
+            else:
+                return current_payload, True, "No steps exist yet. Generate steps first, or set step 1 before step 2."
+        else:
+            if target_idx < current_count:
+                # Edit existing
+                steps[target_idx] = new_step_text
+                updated_payload["steps"] = steps
+                return updated_payload, True, f"Updated step {target_idx + 1}."
+            elif target_idx == current_count:
+                # Append next
+                steps.append(new_step_text)
+                updated_payload["steps"] = steps
+                return updated_payload, True, f"Added step {target_idx + 1}."
+            else:
+                # Gap
+                return current_payload, True, f"You currently have {current_count} steps. Add step {current_count + 1} next (or generate steps)."
 
     return current_payload, False, ""
 
@@ -4341,12 +4366,16 @@ def handle_message():
         # Draft Focus: Generate Steps
         # Trigger: ui_action="generate_draft_steps" OR voice command "generate steps" with active draft
         is_generate_steps = (ui_action == "generate_draft_steps")
-        if not is_generate_steps and user_id and data.get("draft_id") and data.get("draft_type") == "goal":
+        is_regenerate_steps = (ui_action == "regenerate_draft_steps")
+        
+        if not (is_generate_steps or is_regenerate_steps) and user_id and data.get("draft_id") and data.get("draft_type") == "goal":
              norm_input = user_input.strip().lower()
              if "generate steps" in norm_input or "suggest steps" in norm_input:
                  is_generate_steps = True
+             elif "regenerate steps" in norm_input:
+                 is_regenerate_steps = True
 
-        if is_generate_steps and user_id and data.get("draft_id"):
+        if (is_generate_steps or is_regenerate_steps) and user_id and data.get("draft_id"):
             draft_id = data.get("draft_id")
             try:
                 draft_id = int(draft_id)
@@ -4360,15 +4389,65 @@ def handle_message():
                         except:
                             current_payload = {}
 
-                    updated_payload = _generate_draft_steps_payload(current_payload)
+                    # Normalize existing steps
+                    existing_steps = current_payload.get("steps", [])
+                    if not isinstance(existing_steps, list):
+                        existing_steps = []
+                    existing_steps = [str(s).strip() for s in existing_steps if str(s).strip()]
                     
-                    # Fallback Logic
+                    # Idempotency check (only for generate, not regenerate)
+                    if is_generate_steps and len(existing_steps) >= 5:
+                        response = {
+                            "reply": f"Steps already generated ({len(existing_steps)}). Say 'regenerate steps' to replace them.",
+                            "draft_context": {
+                                "draft_id": draft_id,
+                                "draft_type": "goal",
+                                "source_message_id": client_message_id
+                            },
+                            "draft_payload": current_payload, # Return normalized? No, keep as is but maybe update DB if we normalized? 
+                            # Actually let's update DB with normalized steps just in case
+                            "request_id": request_id
+                        }
+                        # Update DB with normalized steps to be safe
+                        current_payload["steps"] = existing_steps
+                        suggestions_repository.update_suggestion_payload(user_id, draft_id, current_payload)
+                        response["draft_payload"] = current_payload
+                        return jsonify(response)
+
+                    # Call LLM
+                    # If regenerating, we might want to clear steps or pass them as context to replace?
+                    # The prompt says "Keep existing... unless missing".
+                    # For regenerate, we probably want fresh ideas, but let's stick to the requested logic:
+                    # "Fill to 5, preserving existing steps" for generate.
+                    # For regenerate, maybe we clear them first?
+                    # The user requirement says: "Regenerate... This is the explicit 'replace' path".
+                    
+                    payload_to_process = current_payload.copy()
+                    payload_to_process["steps"] = existing_steps # Use normalized
+                    
+                    if is_regenerate_steps:
+                        # Clear steps for regeneration so LLM generates fresh ones
+                        payload_to_process["steps"] = []
+                    
+                    updated_payload = _generate_draft_steps_payload(payload_to_process)
+                    
+                    # Fallback Logic & Post-processing
                     steps = updated_payload.get("steps", [])
                     if not isinstance(steps, list):
                         steps = []
                     
                     # Sanitize steps
-                    steps = [str(s) for s in steps if s]
+                    steps = [str(s).strip() for s in steps if str(s).strip()]
+                    
+                    # Deduplicate (case-insensitive)
+                    seen = set()
+                    deduped_steps = []
+                    for s in steps:
+                        k = s.lower()
+                        if k not in seen:
+                            seen.add(k)
+                            deduped_steps.append(s)
+                    steps = deduped_steps
                     
                     used_fallback = False
                     if not steps:
@@ -4382,6 +4461,25 @@ def handle_message():
                         ]
                         logging.warning(f"Used fallback steps for draft {draft_id}")
                     
+                    # Ensure at least 5 steps if we have fewer (pad with generics if needed, but avoid dupes)
+                    # Only if we are in generate/regenerate mode which implies we want a full plan.
+                    if len(steps) < 5:
+                        defaults = [
+                            "Define success criteria",
+                            "Break down into sub-tasks",
+                            "Identify resources needed",
+                            "Set milestones",
+                            "Execute and track progress",
+                            "Review and adjust",
+                            "Celebrate completion"
+                        ]
+                        for d in defaults:
+                            if len(steps) >= 5:
+                                break
+                            if d.lower() not in seen:
+                                steps.append(d)
+                                seen.add(d.lower())
+
                     updated_payload["steps"] = steps
 
                     # Update DB

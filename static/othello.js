@@ -3739,7 +3739,8 @@
         }
         
         const p = othelloState.activeDraftPayload;
-        const steps = p.steps || [];
+        // Filter blank steps
+        const steps = (p.steps || []).filter(s => typeof s === "string" && s.trim());
         
         console.debug("[Othello UI] Draft preview steps:", steps.length);
         
@@ -3793,9 +3794,23 @@
           const genStepsBtn = document.createElement("button");
           genStepsBtn.textContent = "Generate Steps";
           genStepsBtn.className = "ribbon-btn";
-          genStepsBtn.onclick = (e) => {
+          genStepsBtn.onclick = async (e) => {
               e.stopPropagation();
-              sendMessage("", { ui_action: "generate_draft_steps" });
+              if (othelloState.isGeneratingSteps) return;
+              
+              othelloState.isGeneratingSteps = true;
+              genStepsBtn.disabled = true;
+              genStepsBtn.textContent = "Generating...";
+              
+              try {
+                  await sendMessage("", { ui_action: "generate_draft_steps" });
+              } finally {
+                  othelloState.isGeneratingSteps = false;
+                  if (genStepsBtn) { // Check if still exists
+                      genStepsBtn.disabled = false;
+                      genStepsBtn.textContent = "Generate Steps";
+                  }
+              }
           };
           
           const confirmBtn = document.createElement("button");
