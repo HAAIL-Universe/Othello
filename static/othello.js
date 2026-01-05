@@ -4007,6 +4007,11 @@
       const row = document.createElement("div");
       row.className = `msg-row ${role}`;
 
+      // Apply focus highlighting if a goal is focused
+      if (othelloState.activeGoalId) {
+        row.classList.add("msg--focus-attached");
+      }
+
       const bubble = document.createElement("div");
       bubble.className = "bubble";
       bubble.innerHTML = formatMessageText(text);

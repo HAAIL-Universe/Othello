@@ -4659,8 +4659,27 @@ def handle_message():
             len(companion_context or []),
         )
 
+        # Helper to detect positive routine intent
+        def _has_positive_routine_intent(text: str) -> bool:
+            t = (text or "").lower()
+            if "no routine" in t or "do not create a routine" in t or "goal draft only" in t or "goal only" in t:
+                return False
+            # Explicit creation requests
+            if "create a routine" in t or "make a routine" in t or "schedule this" in t or "set up a routine" in t:
+                return True
+            # Explicit schedule patterns
+            if "every day" in t or "daily" in t or "weekly" in t:
+                return True
+            return False
+
         routine_response = None
-        if user_id:
+        # If goal focus is active, suppress routine suggestions unless explicitly requested
+        goal_focus_active = bool(raw_goal_id)
+        should_check_routines = True
+        if goal_focus_active and not _has_positive_routine_intent(user_input):
+            should_check_routines = False
+
+        if user_id and should_check_routines:
             try:
                 from db.suggestions_repository import (
                     create_suggestion,
