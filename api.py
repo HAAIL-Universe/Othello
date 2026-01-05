@@ -4226,6 +4226,7 @@ def handle_message():
         # Trigger: draft_id present + draft_type="goal" + NO ui_action
         if user_id and data.get("draft_id") and data.get("draft_type") == "goal" and not ui_action:
             draft_id = data.get("draft_id")
+            logger.info("Draft edit lane draft_id=%s", draft_id)
             try:
                 draft_id = int(draft_id)
                 draft = suggestions_repository.get_suggestion(user_id, draft_id)
@@ -4272,8 +4273,29 @@ def handle_message():
                 
                 if draft and draft.get("status") == "pending":
                     current_payload = draft.get("payload", {})
+                    if isinstance(current_payload, str):
+                        try:
+                            current_payload = json.loads(current_payload)
+                        except:
+                            current_payload = {}
+
                     updated_payload = _generate_draft_steps_payload(current_payload)
                     
+                    # Fallback Logic
+                    steps = updated_payload.get("steps", [])
+                    used_fallback = False
+                    if not steps:
+                        used_fallback = True
+                        steps = [
+                            "Define success criteria",
+                            "Break down into sub-tasks",
+                            f"Schedule daily work for {updated_payload.get('target_days', 7)} days",
+                            "Execute and track progress",
+                            "Review and adjust"
+                        ]
+                        updated_payload["steps"] = steps
+                        logging.warning(f"Used fallback steps for draft {draft_id}")
+
                     # Update DB
                     updated_suggestion = suggestions_repository.update_suggestion_payload(user_id, draft_id, updated_payload)
                     
@@ -4287,7 +4309,8 @@ def handle_message():
                             "source_message_id": client_message_id
                         },
                         "draft_payload": updated_payload,
-                        "request_id": request_id
+                        "request_id": request_id,
+                        "meta": {"used_fallback_steps": used_fallback}
                     }
                     return jsonify(response)
             except (ValueError, TypeError):

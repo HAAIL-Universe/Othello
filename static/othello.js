@@ -5623,6 +5623,7 @@
             draft_type: othelloState.activeDraft ? othelloState.activeDraft.draft_type : null,
             ...extraData
         };
+        console.debug("[Othello UI] Sending /api/message payload:", payload);
         const res = await fetch(API, {
           method: "POST",
           headers: {"Content-Type": "application/json"},
