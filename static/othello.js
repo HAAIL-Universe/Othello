@@ -815,6 +815,7 @@
       goals: [],
       activeGoalId: null,
       activeConversationId: null, // New Chat support
+      activeDraft: null, // { draft_id, draft_type, source_message_id }
       lastGoalDraftByConversationId: {}, // Stores the last assistant goal summary per conversation
       currentDetailGoalId: null,
       pendingGoalEdit: null,
@@ -3637,6 +3638,16 @@
       return "companion";
     }
 
+    function loadDraftState() {
+      try {
+        const stored = localStorage.getItem("othello_active_draft");
+        if (stored) {
+          othelloState.activeDraft = JSON.parse(stored);
+          updateFocusRibbon();
+        }
+      } catch (e) {}
+    }
+
     function setMode(mode) {
       if (!MODE_LABELS[mode]) return;
       othelloState.currentMode = mode;
@@ -3699,6 +3710,7 @@
     // ===== INITIALIZE MODE =====
     // To add new modes later, extend MODE_LABELS, MODE_SUBTITLES, and modeOptions in markup.
     setMode(loadMode());
+    loadDraftState();
     refreshInsightsCounts();
 
     // ===== FOCUS RIBBON =====
@@ -3708,6 +3720,51 @@
         focusRibbon.classList.remove("visible");
         return;
       }
+
+      // Draft Focus (Priority over Active Goal)
+      if (othelloState.activeDraft) {
+          const draftType = othelloState.activeDraft.draft_type || "Goal";
+          const displayType = draftType.charAt(0).toUpperCase() + draftType.slice(1);
+          focusRibbonTitle.textContent = `Drafting ${displayType}...`; 
+          
+          // Add actions if not present
+          if (!focusRibbon.querySelector(".ribbon-actions")) {
+              const actionsDiv = document.createElement("div");
+              actionsDiv.className = "ribbon-actions";
+              actionsDiv.style.marginLeft = "auto";
+              actionsDiv.style.display = "flex";
+              actionsDiv.style.gap = "8px";
+
+              const confirmBtn = document.createElement("button");
+              confirmBtn.textContent = "Confirm";
+              confirmBtn.className = "ribbon-btn confirm-btn";
+              confirmBtn.onclick = (e) => {
+                  e.stopPropagation();
+                  sendMessage("", { ui_action: "confirm_draft" });
+              };
+
+              const dismissBtn = document.createElement("button");
+              dismissBtn.textContent = "Dismiss";
+              dismissBtn.className = "ribbon-btn dismiss-btn";
+              dismissBtn.onclick = (e) => {
+                  e.stopPropagation();
+                  sendMessage("", { ui_action: "dismiss_draft" });
+              };
+
+              actionsDiv.appendChild(confirmBtn);
+              actionsDiv.appendChild(dismissBtn);
+              focusRibbon.appendChild(actionsDiv);
+          }
+
+          focusRibbon.classList.add("visible");
+          focusRibbon.classList.add("draft-mode");
+          return;
+      } else {
+          focusRibbon.classList.remove("draft-mode");
+          const actions = focusRibbon.querySelector(".ribbon-actions");
+          if (actions) actions.remove();
+      }
+
       if (othelloState.activeGoalId !== null) {
         const goal = othelloState.goals.find(g => g.id === othelloState.activeGoalId);
         if (goal) {
@@ -5301,9 +5358,9 @@
       }
     }
 
-    async function sendMessage() {
-      const text = input.value.trim();
-      if (!text) return;
+    async function sendMessage(overrideText = null, extraData = {}) {
+      const text = overrideText !== null ? overrideText : input.value.trim();
+      if (!text && !extraData.ui_action) return;
 
       // Voice-first save command (Strict Command Mode)
       const lowerText = text.toLowerCase().trim().replace(/[.!?]+$/, "");
@@ -5343,9 +5400,11 @@
       }
 
       const normalizedText = text.toLowerCase().replace(/[.!?]+$/, "").trim(), isConfirmSave = normalizedText === "confirm" || normalizedText === "save";
-      addMessage("user", text, { metaNote, clientMessageId });
-      input.value = "";
-      input.focus();
+      addMessage("user", text || (extraData.ui_action ? `[Action: ${extraData.ui_action}]` : ""), { metaNote, clientMessageId });
+      if (overrideText === null) {
+          input.value = "";
+          input.focus();
+      }
       let sendUiState = beginSendUI({ label: isConfirmSave ? "Saving..." : "Thinking…", disableSend: true });
       try {
         const pendingRoutineId = othelloState.pendingRoutineSuggestionId;
@@ -5457,11 +5516,7 @@
         const channel = mode === "companion" ? "companion" : "planner";
         console.debug(`[Othello UI] sendMessage mode=${mode} channel=${channel} view=${othelloState.currentView}`);
         console.log("[Othello UI] Sending plain-message payload:", text);
-        const res = await fetch(API, {
-          method: "POST",
-          headers: {"Content-Type": "application/json"},
-          credentials: "include",
-          body: JSON.stringify({ 
+        const payload = { 
             message: text,
             channel,
             goal_id: othelloState.activeGoalId || null,
@@ -5470,7 +5525,15 @@
             current_view: othelloState.currentView,
             client_message_id: clientMessageId,
             conversation_id: othelloState.activeConversationId,
-          })
+            draft_id: othelloState.activeDraft ? othelloState.activeDraft.draft_id : null,
+            draft_type: othelloState.activeDraft ? othelloState.activeDraft.draft_type : null,
+            ...extraData
+        };
+        const res = await fetch(API, {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          credentials: "include",
+          body: JSON.stringify(payload)
         });
 
         console.log("[Othello UI] /api/message status", res.status);
@@ -5627,6 +5690,26 @@
 
         if (data.meta) {
           applySuggestionMeta(data.meta);
+        }
+
+        if (data.draft_context) {
+            othelloState.activeDraft = data.draft_context;
+            localStorage.setItem("othello_active_draft", JSON.stringify(othelloState.activeDraft));
+            updateFocusRibbon();
+        }
+        
+        if (data.saved_goal) {
+            othelloState.activeDraft = null;
+            localStorage.removeItem("othello_active_draft");
+            updateFocusRibbon();
+        }
+
+        if (data.dismissed_draft_id) {
+            if (othelloState.activeDraft && othelloState.activeDraft.draft_id === data.dismissed_draft_id) {
+                othelloState.activeDraft = null;
+                localStorage.removeItem("othello_active_draft");
+                updateFocusRibbon();
+            }
         }
 
         // Always refresh from backend to stay in sync

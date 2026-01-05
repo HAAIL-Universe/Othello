@@ -1617,6 +1617,31 @@ def _attach_goal_intent_suggestion(
         suggestion = dict(suggestion)
         suggestion["suggestion_id"] = suggestion_id
         suggestion.setdefault("kind", "goal")
+
+        # Draft Focus: Return draft context and payload
+        # Payload normalization
+        raw_payload = suggestion.get("payload", {})
+        if isinstance(raw_payload, str):
+            try:
+                import json
+                raw_payload = json.loads(raw_payload)
+            except Exception:
+                raw_payload = {}
+        if not isinstance(raw_payload, dict):
+            raw_payload = {}
+
+        response["draft_context"] = {
+            "draft_id": suggestion_id,
+            "draft_type": "goal",
+            "source_message_id": suggestion_id  # Use stable ID for UI highlight
+        }
+        response["draft_payload"] = {
+            "title": suggestion.get("title_suggestion") or raw_payload.get("title"),
+            "target_days": raw_payload.get("target_days"),
+            "steps": raw_payload.get("steps"),
+            "body": suggestion.get("body_suggestion") or raw_payload.get("body")
+        }
+
     meta = response.setdefault("meta", {})
     suggestions = meta.setdefault("suggestions", [])
     suggestions.append(suggestion)
@@ -3971,6 +3996,93 @@ def handle_message():
             if session.get("authed"):
                 return user_error
             user_id = None
+
+        # Draft Focus: Confirm Goal Intent
+        # Tightened routing:
+        # A) data.ui_action == "confirm_draft"
+        # B) user_input == "confirm goal" (exact)
+        # C) user_input == "confirm" ONLY if draft_id is present
+        is_confirm_action = data.get("ui_action") == "confirm_draft"
+        is_confirm_goal_text = user_input.strip().lower() == "confirm goal"
+        is_confirm_text_with_id = user_input.strip().lower() == "confirm" and data.get("draft_id")
+
+        if user_id and (is_confirm_action or is_confirm_goal_text or is_confirm_text_with_id):
+            draft_id = data.get("draft_id")
+            
+            if draft_id:
+                # Verify it exists and is pending
+                try:
+                    draft_id = int(draft_id)
+                    draft = suggestions_repository.get_suggestion(user_id, draft_id)
+                    if not draft or draft.get("status") != "pending":
+                        draft = None # Invalid draft_id provided
+                except (ValueError, TypeError):
+                    draft = None
+            elif is_confirm_goal_text:
+                # Find latest pending goal draft ONLY if explicit "confirm goal"
+                pending_drafts = suggestions_repository.list_suggestions(
+                    user_id=user_id,
+                    status="pending",
+                    kind="goal",
+                    limit=1
+                )
+                # list_suggestions orders by created_at DESC
+                draft = pending_drafts[0] if pending_drafts else None
+            else:
+                draft = None
+            
+            if draft:
+                draft_id = draft["id"]
+                # Apply decision (Accept)
+                results = _apply_suggestion_decisions(
+                    user_id, 
+                    [{"suggestion_id": draft_id, "action": "accept", "reason": "user_confirmed_via_chat"}],
+                    event_source="api_message_confirm"
+                )
+                
+                if results and results[0].get("ok"):
+                    res = results[0]
+                    saved_goal = res.get("goal")
+                    goal_id = saved_goal.get("id") if saved_goal else None
+                    
+                    return jsonify({
+                        "reply": f"Goal confirmed! I've saved '{saved_goal.get('title')}' and set it as your active focus.",
+                        "saved_goal": {"goal_id": goal_id, "title": saved_goal.get("title")},
+                        "active_goal_id": goal_id,
+                        "agent_status": {"planner_active": True},
+                        "request_id": request_id
+                    })
+            
+            # If no draft found or confirm failed
+            return jsonify({
+                "reply": "PENDING_GOAL_DRAFT_MISSING. I couldn't find a pending goal draft to confirm. Try describing your goal again.",
+                "agent_status": {},
+                "request_id": request_id
+            })
+
+        # Draft Focus: Dismiss Draft
+        if user_id and data.get("ui_action") == "dismiss_draft":
+            draft_id = data.get("draft_id")
+            if draft_id:
+                try:
+                    draft_id = int(draft_id)
+                    suggestions_repository.update_suggestion_status(
+                        user_id, 
+                        draft_id, 
+                        "dismissed", 
+                        decided_reason="user_dismissed_via_ui"
+                    )
+                    return jsonify({
+                        "reply": "Draft dismissed.",
+                        "dismissed_draft_id": draft_id,
+                        "request_id": request_id
+                    })
+                except (ValueError, TypeError):
+                    pass
+            return jsonify({
+                "reply": "Could not dismiss draft.",
+                "request_id": request_id
+            })
 
         # --- Phase 3.2: Chat Command Router ---
         if user_id:
