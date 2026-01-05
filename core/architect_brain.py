@@ -365,6 +365,9 @@ class Architect:
             # Log full raw response for debugging
             self.logger.debug(f"ARCHITECT raw LLM response: {raw_text}")
 
+            # Parse any goal update XML before stripping it
+            parsed_goal_update = self._parse_goal_update_xml(raw_text)
+            
             # Remove stray markdown fences for a cleaner reply
             user_facing_response = self._strip_markdown_fences(raw_text).strip() or raw_text
 
@@ -385,7 +388,8 @@ class Architect:
 
             agent_status = {
                 "planner_active": bool(has_goal_context),
-                "had_goal_update_xml": False,
+                "had_goal_update_xml": bool(parsed_goal_update),
+                "goal_update": parsed_goal_update
             }
 
             # Append assistant turn to memory

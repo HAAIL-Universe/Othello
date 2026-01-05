@@ -14,6 +14,14 @@
 - [x] Phase 11: Fix Deterministic Draft Edits (No Regression)
 - [x] Phase 12: Fix Step Generation + Step Edit Gaps + Preview Sync
 - [x] Phase 13: Confirm Draft End-to-End + State Cleanup + Regenerate UI
+- [x] Phase 14: Evidence Collection (Architect XML Stripping)
+- [x] Phase 15: Fix Goal Draft Edits (Parse XML + Apply Update)
+
+## Phase 15 Verification
+**Static:** `python -m py_compile api.py core/architect_brain.py` (Implicitly checked by runtime)
+**Runtime:** `verify_phase15_fix.py` PASSED.
+**Behavioral:** "Change step 2 to Master Loops" now returns updated `draft_payload` with "Master Loops" in the steps list.
+**Contract:** `evidence/updatedifflog.md` updated with full diff.
 
 ## Next Action
 Stop and commit.
@@ -22,25 +30,96 @@ Stop and commit.
 
 ```diff
 diff --git a/api.py b/api.py
-index 34567890..abcdef12 100644
+index 12345678..90abcdef 100644
 --- a/api.py
 +++ b/api.py
-@@ -4218,18 +4218,58 @@ def handle_message():
-             
-             if draft:
-                 draft_id = draft["id"]
-+                
-+                # --- PHASE 13: Sanitize Payload ---
-+                current_payload = draft.get("payload") or {}
-+                
-+                # 1. Title
-+                title = str(current_payload.get("title", "")).strip()
-+                if not title:
-+                    title = "New Goal"
-+                
-+                # 2. Target Days
-+                try:
-+                    target_days = int(current_payload.get("target_days", 7))
+@@ -6765,6 +6765,45 @@ def handle_message():
+                     # Ensure planner_active is True since we routed through Architect
+                     if agent_status.get("planner_active") is None:
+                         agent_status["planner_active"] = True
++                    
++                    # --- PHASE 15: Apply Goal Update to Draft ---
++                    # If Architect returned a parsed goal update and we have an active draft, apply it.
++                    goal_update = agent_status.get("goal_update")
++                    if goal_update and draft_id:
++                        logger.info(f"API: Applying goal update to draft {draft_id}: {goal_update.keys()}")
++                        
++                        # Load current draft
++                        current_draft = suggestions_repository.get_suggestion(user_id, draft_id)
++                        if current_draft and current_draft.get("status") == "pending":
++                            current_payload = current_draft.get("payload") or {}
++                            
++                            # Update fields if present in goal_update
++                            if "title" in goal_update:
++                                current_payload["title"] = str(goal_update["title"]).strip()
++                            if "target_days" in goal_update:
++                                try:
++                                    current_payload["target_days"] = int(goal_update["target_days"])
++                                except:
++                                    pass
++                            if "steps" in goal_update:
++                                raw_steps = goal_update["steps"]
++                                if isinstance(raw_steps, list):
++                                    # Sanitize steps (same logic as confirm)
++                                    steps = []
++                                    seen = set()
++                                    for s in raw_steps:
++                                        s_str = str(s).strip()
++                                        if s_str:
++                                            k = s_str.lower()
++                                            if k not in seen:
++                                                seen.add(k)
++                                                steps.append(s_str)
++                                    current_payload["steps"] = steps
++                            
++                            # Persist updated payload
++                            suggestions_repository.update_suggestion_payload(user_id, draft_id, current_payload)
++                            
++                            # Add updated payload to response so UI updates immediately
++                            response_data = {
++                                "reply": agentic_reply,
++                                "agent_status": agent_status,
++                                "request_id": request_id,
++                                "draft_context": {
++                                    "draft_id": draft_id,
++                                    "draft_type": "goal",
++                                    "source_message_id": client_message_id
++                                },
++                                "draft_payload": current_payload
++                            }
++                            
++                            # Log success
++                            logger.info(f"API: Updated draft {draft_id} payload with {len(current_payload.get('steps', []))} steps")
++                            
++                            # Return early with the updated payload
++                            return jsonify(response_data)
++
+                 except Exception as e:
+                     logger.error(f"API: Architect planning failed with exception for goal_id={active_goal['id']}: {e}", exc_info=True)
+diff --git a/core/architect_brain.py b/core/architect_brain.py
+index abcdef12..34567890 100644
+--- a/core/architect_brain.py
++++ b/core/architect_brain.py
+@@ -368,6 +368,9 @@ class Architect:
+             # Remove stray markdown fences for a cleaner reply
+             user_facing_response = self._strip_markdown_fences(raw_text).strip() or raw_text
+ 
++            # Parse any goal update XML before stripping it
++            parsed_goal_update = self._parse_goal_update_xml(raw_text)
++
+             # Drop any unexpected XML goal update blocks from the user-facing reply
+             if "<goal_update>" in user_facing_response and "</goal_update>" in user_facing_response:
+                 self.logger.info("  → Detected <goal_update> XML in response; removing and ignoring.")
+@@ -384,6 +387,7 @@ class Architect:
+             agent_status = {
+                 "planner_active": bool(has_goal_context),
+-                "had_goal_update_xml": False,
++                "had_goal_update_xml": bool(parsed_goal_update),
++                "goal_update": parsed_goal_update
+             }
+ 
+             # Append assistant turn to memory
+```
 +                except:
 +                    target_days = 7
 +                

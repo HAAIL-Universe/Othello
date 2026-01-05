@@ -6768,6 +6768,63 @@ def handle_message():
                     # Ensure planner_active is True since we routed through Architect
                     if agent_status.get("planner_active") is None:
                         agent_status["planner_active"] = True
+                    
+                    # --- PHASE 15: Apply Goal Update to Draft ---
+                    # If Architect returned a parsed goal update and we have an active draft, apply it.
+                    goal_update = agent_status.get("goal_update")
+                    if goal_update and draft_id:
+                        logger.info(f"API: Applying goal update to draft {draft_id}: {goal_update.keys()}")
+                        
+                        # Load current draft
+                        current_draft = suggestions_repository.get_suggestion(user_id, draft_id)
+                        if current_draft and current_draft.get("status") == "pending":
+                            current_payload = current_draft.get("payload") or {}
+                            
+                            # Update fields if present in goal_update
+                            if "title" in goal_update:
+                                current_payload["title"] = str(goal_update["title"]).strip()
+                            if "target_days" in goal_update:
+                                try:
+                                    current_payload["target_days"] = int(goal_update["target_days"])
+                                except:
+                                    pass
+                            if "steps" in goal_update:
+                                raw_steps = goal_update["steps"]
+                                if isinstance(raw_steps, list):
+                                    # Sanitize steps (same logic as confirm)
+                                    steps = []
+                                    seen = set()
+                                    for s in raw_steps:
+                                        s_str = str(s).strip()
+                                        if s_str:
+                                            k = s_str.lower()
+                                            if k not in seen:
+                                                seen.add(k)
+                                                steps.append(s_str)
+                                    current_payload["steps"] = steps
+                            
+                            # Persist updated payload
+                            suggestions_repository.update_suggestion_payload(user_id, draft_id, current_payload)
+                            
+                            # Add updated payload to response so UI updates immediately
+                            response_data = {
+                                "reply": agentic_reply,
+                                "agent_status": agent_status,
+                                "request_id": request_id,
+                                "draft_context": {
+                                    "draft_id": draft_id,
+                                    "draft_type": "goal",
+                                    "source_message_id": client_message_id
+                                },
+                                "draft_payload": current_payload
+                            }
+                            
+                            # Log success
+                            logger.info(f"API: Updated draft {draft_id} payload with {len(current_payload.get('steps', []))} steps")
+                            
+                            # Return early with the updated payload
+                            return jsonify(response_data)
+
                 except Exception as e:
                     logger.error(f"API: Architect planning failed with exception for goal_id={active_goal['id']}: {e}", exc_info=True)
                 
