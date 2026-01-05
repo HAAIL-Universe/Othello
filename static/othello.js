@@ -564,31 +564,29 @@
           container.innerHTML = "";
           
           if (!conversations || conversations.length === 0) {
-              container.innerHTML = "<div style='padding:1rem;color:var(--text-muted);'>No conversations found.</div>";
+              container.innerHTML = "<div class='conversations-list-empty'>No conversations found.</div>";
               return;
           }
 
           conversations.forEach(conv => {
               const row = document.createElement("div");
               row.className = "conversation-row";
-              row.style = "display:flex;justify-content:space-between;align-items:center;padding:0.8rem;border-bottom:1px solid var(--border);";
               
               const info = document.createElement("div");
               const date = new Date(conv.updated_at || conv.created_at).toLocaleString();
               const isCurrent = conv.conversation_id === othelloState.activeConversationId;
               info.innerHTML = `
-                  <div style="font-weight:${isCurrent ? 'bold' : 'normal'}">
+                  <div class="conversation-info-title ${isCurrent ? 'current' : ''}">
                       ${isCurrent ? 'Current: ' : ''}Conversation #${conv.conversation_id}
                   </div>
-                  <div style="font-size:0.8rem;color:var(--text-muted)">${date}</div>
+                  <div class="conversation-info-date">${date}</div>
               `;
               
               const actions = document.createElement("div");
               if (!isCurrent) {
                   const switchBtn = document.createElement("button");
                   switchBtn.textContent = "Open";
-                  switchBtn.className = "btn-secondary";
-                  switchBtn.style = "padding:0.3rem 0.8rem;font-size:0.8rem;";
+                  switchBtn.className = "btn-secondary conversation-switch-btn";
                   switchBtn.onclick = () => switchConversation(conv.conversation_id);
                   actions.appendChild(switchBtn);
               }
