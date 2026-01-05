@@ -3821,6 +3821,17 @@ def list_conversations():
     return jsonify({"conversations": sessions})
 
 
+@app.route("/api/conversations/<int:conversation_id>/messages", methods=["GET"])
+@require_auth
+def list_conversation_messages(conversation_id: int):
+    user_id, error = _get_user_id_or_error()
+    if error:
+        return error
+    from db.messages_repository import list_messages_for_session
+    rows = list_messages_for_session(user_id, conversation_id)
+    return jsonify({"conversation_id": conversation_id, "messages": rows})
+
+
 @app.route("/api/message", methods=["POST"])
 @require_auth
 def handle_message():

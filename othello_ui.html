@@ -31,6 +31,13 @@
           <div class="settings-title" id="settings-title">Settings</div>
           <button id="settings-close" class="settings-close" type="button">Close</button>
         </div>
+        <div class="settings-section">
+          <div class="settings-label">Conversations</div>
+          <div id="settings-conversations-list" style="max-height: 200px; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; margin-bottom: 1rem;">
+            <!-- Populated by JS -->
+          </div>
+          <button id="new-chat-settings-btn" class="settings-button" type="button" style="width:100%">+ New Chat</button>
+        </div>
         <div class="settings-section" id="settings-dev-reset" style="display:none;">
           <div class="danger-zone">
             <div class="danger-zone__title">Danger zone</div>
