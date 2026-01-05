@@ -489,3 +489,7 @@ index 817ee466..f97a4cad 100644
 - [x] Repeat and click Dismiss/Unfocus → Draft clears and suggestion marked dismissed.
 - [x] Refresh page mid-draft → Draft restores from localStorage and still exists server-side.
 - [x] No regressions: normal chat messages still work.
+
+- [x] Click 'Generate Steps' in ribbon ? Steps are generated and displayed in Draft Preview.
+- [x] Send 'generate steps' voice command ? Steps are generated and displayed.
+- [x] Draft Preview updates correctly when steps are generated.
