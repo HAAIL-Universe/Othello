@@ -833,7 +833,8 @@
       creatingRoutine: false,
       needsRoutineRefresh: false,
       pendingRoutineSuggestionId: null,
-      pendingRoutineAcceptFn: null
+      pendingRoutineAcceptFn: null,
+      isGeneratingSteps: false
     };
     let devResetEnabled = false;
 
@@ -3801,6 +3802,8 @@
               othelloState.isGeneratingSteps = true;
               genStepsBtn.disabled = true;
               genStepsBtn.textContent = "Generating...";
+              const regenBtn = actionsDiv.querySelector(".regen-btn");
+              if (regenBtn) regenBtn.disabled = true;
               
               try {
                   await sendMessage("", { ui_action: "generate_draft_steps" });
@@ -3810,6 +3813,31 @@
                       genStepsBtn.disabled = false;
                       genStepsBtn.textContent = "Generate Steps";
                   }
+                  if (regenBtn) regenBtn.disabled = false;
+              }
+          };
+          
+          const regenStepsBtn = document.createElement("button");
+          regenStepsBtn.textContent = "Regenerate";
+          regenStepsBtn.className = "ribbon-btn regen-btn";
+          regenStepsBtn.onclick = async (e) => {
+              e.stopPropagation();
+              if (othelloState.isGeneratingSteps) return;
+              
+              othelloState.isGeneratingSteps = true;
+              regenStepsBtn.disabled = true;
+              regenStepsBtn.textContent = "Generating...";
+              genStepsBtn.disabled = true;
+              
+              try {
+                  await sendMessage("", { ui_action: "regenerate_draft_steps" });
+              } finally {
+                  othelloState.isGeneratingSteps = false;
+                  if (regenStepsBtn) {
+                      regenStepsBtn.disabled = false;
+                      regenStepsBtn.textContent = "Regenerate";
+                  }
+                  if (genStepsBtn) genStepsBtn.disabled = false;
               }
           };
           
@@ -3830,6 +3858,7 @@
           };
 
           actionsDiv.appendChild(genStepsBtn);
+          actionsDiv.appendChild(regenStepsBtn);
           actionsDiv.appendChild(confirmBtn);
           actionsDiv.appendChild(dismissBtn);
 
@@ -3995,7 +4024,9 @@
       
       // Clear draft state on new chat/reset
       othelloState.activeDraft = null;
+      othelloState.activeDraftPayload = null;
       localStorage.removeItem("othello_active_draft");
+      localStorage.removeItem("othello_active_draft_payload");
       updateFocusRibbon();
     }
 
@@ -5830,6 +5861,12 @@
             othelloState.activeDraftPayload = null;
             localStorage.removeItem("othello_active_draft");
             localStorage.removeItem("othello_active_draft_payload");
+            
+            if (data.saved_goal.goal_id) {
+                othelloState.activeGoalId = data.saved_goal.goal_id;
+                showToast(`Goal created: ${data.saved_goal.title || "New Goal"}`);
+            }
+            
             updateFocusRibbon();
         }
 

@@ -4227,6 +4227,51 @@ def handle_message():
             
             if draft:
                 draft_id = draft["id"]
+                
+                # --- PHASE 13: Sanitize Payload ---
+                current_payload = draft.get("payload") or {}
+                
+                # 1. Title
+                title = str(current_payload.get("title", "")).strip()
+                if not title:
+                    title = "New Goal"
+                
+                # 2. Target Days
+                try:
+                    target_days = int(current_payload.get("target_days", 7))
+                except:
+                    target_days = 7
+                
+                # 3. Steps
+                raw_steps = current_payload.get("steps", [])
+                if not isinstance(raw_steps, list):
+                    raw_steps = []
+                
+                # Filter blanks & Dedupe
+                steps = []
+                seen = set()
+                for s in raw_steps:
+                    s_str = str(s).strip()
+                    if s_str:
+                        k = s_str.lower()
+                        if k not in seen:
+                            seen.add(k)
+                            steps.append(s_str)
+                
+                # 4. Body
+                body = str(current_payload.get("body", "")).strip()
+                
+                # Update Payload
+                sanitized_payload = {
+                    "title": title,
+                    "target_days": target_days,
+                    "steps": steps,
+                    "body": body
+                }
+                
+                # Persist sanitized payload before confirming
+                suggestions_repository.update_suggestion_payload(user_id, draft_id, sanitized_payload)
+
                 # Apply decision (Accept)
                 results = _apply_suggestion_decisions(
                     user_id, 
@@ -4239,12 +4284,23 @@ def handle_message():
                     saved_goal = res.get("goal")
                     goal_id = saved_goal.get("id") if saved_goal else None
                     
+                    meta = {}
+                    if not steps:
+                        meta["steps_empty"] = True
+
                     return jsonify({
                         "reply": f"Goal confirmed! I've saved '{saved_goal.get('title')}' and set it as your active focus.",
-                        "saved_goal": {"goal_id": goal_id, "title": saved_goal.get("title")},
+                        "saved_goal": {
+                            "goal_id": goal_id, 
+                            "title": saved_goal.get("title"),
+                            "target_days": target_days,
+                            "steps_count": len(steps)
+                        },
+                        "draft_cleared": True,
                         "active_goal_id": goal_id,
                         "agent_status": {"planner_active": True},
-                        "request_id": request_id
+                        "request_id": request_id,
+                        "meta": meta
                     })
             
             # If no draft found or confirm failed
