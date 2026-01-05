@@ -3827,9 +3827,24 @@ def list_conversation_messages(conversation_id: int):
     user_id, error = _get_user_id_or_error()
     if error:
         return error
+
+    channel = request.args.get("channel") or "companion"
+    channel = str(channel).strip().lower()
+
+    limit = request.args.get("limit")
+    try:
+        limit_value = int(limit) if limit is not None else 50
+    except (TypeError, ValueError):
+        return _v1_error("VALIDATION_ERROR", "limit must be an integer", 400)
+
     from db.messages_repository import list_messages_for_session
-    rows = list_messages_for_session(user_id, conversation_id)
-    return jsonify({"conversation_id": conversation_id, "messages": rows})
+    rows = list_messages_for_session(user_id, conversation_id, limit=limit_value, channel=channel)
+    
+    provenance = {
+        "requested_channel": channel,
+        "conversation_id": conversation_id
+    }
+    return _v1_envelope(data={"messages": rows, "provenance": provenance, "conversation_id": conversation_id}, status=200)
 
 
 @app.route("/api/message", methods=["POST"])
