@@ -3986,7 +3986,8 @@ def handle_message():
 
         _log_request_start(raw_goal_id)
 
-        if not user_input:
+        # Allow empty message if ui_action is present (e.g. confirm_draft, dismiss_draft)
+        if not user_input and not ui_action:
             return api_error("VALIDATION_ERROR", "message is required", 400)
 
         logger.info("API: Received message: %s request_id=%s", user_input[:100], request_id)

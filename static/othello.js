@@ -3852,6 +3852,19 @@
     }
 
     async function unfocusGoal() {
+      // If we have an active draft, treat Unfocus as Dismiss Draft
+      if (othelloState.activeDraft) {
+          console.log("[Othello UI] Unfocus clicked while drafting -> Dismissing draft");
+          // Optimistic clear
+          othelloState.activeDraft = null;
+          localStorage.removeItem("othello_active_draft");
+          updateFocusRibbon();
+          
+          // Tell backend
+          await sendMessage("", { ui_action: "dismiss_draft" });
+          return;
+      }
+
       const hadFocus = othelloState.activeGoalId !== null;
       if (!hadFocus) return;
 
@@ -3902,6 +3915,11 @@
       if (chatPlaceholder) chatPlaceholder.classList.remove("hidden");
       othelloState.messagesByClientId = {};
       othelloState.goalIntentSuggestions = {};
+      
+      // Clear draft state on new chat/reset
+      othelloState.activeDraft = null;
+      localStorage.removeItem("othello_active_draft");
+      updateFocusRibbon();
     }
 
     function resetAuthBoundary(reason) {
@@ -5417,7 +5435,14 @@
       }
 
       const normalizedText = text.toLowerCase().replace(/[.!?]+$/, "").trim(), isConfirmSave = normalizedText === "confirm" || normalizedText === "save";
-      addMessage("user", text || (extraData.ui_action ? `[Action: ${extraData.ui_action}]` : ""), { metaNote, clientMessageId });
+      
+      // Only add user bubble if there is actual text
+      if (text) {
+          addMessage("user", text, { metaNote, clientMessageId });
+      } else if (extraData.ui_action) {
+          // No bubble for pure UI actions
+      }
+
       if (overrideText === null) {
           input.value = "";
           input.focus();
