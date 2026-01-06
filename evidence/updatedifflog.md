@@ -1,53 +1,33 @@
 ﻿diff --git a/static/othello.js b/static/othello.js
-index 2a82f107..4319420a 100644
+index 4319420a..b162b6e9 100644
 --- a/static/othello.js
 +++ b/static/othello.js
-@@ -1,4 +1,6 @@
-     console.log("Othello UI boot OK");
-+    console.info("[build] othello.js", "v2026-01-06-A", new Date().toISOString());
-+
-     // DOM element bindings for globals that may be missing
-     const modeToggle = document.getElementById('mode-toggle');
-     const inputBar = document.getElementById('input-bar');
-@@ -4152,8 +4154,17 @@
-         await refreshGoals();
-       } catch (err) {
-         console.error("[Othello UI] goal edit error:", err);
--        addMessage("bot", "[Connection error: backend unreachable]");
--        statusEl.textContent = "Offline";
-+        const isNetwork = err instanceof TypeError && (
-+             err.message === "Failed to fetch" ||
-+             err.message.includes("NetworkError") ||
-+             err.message.includes("Network request failed")
-+        );
-+        if (isNetwork) {
-+             addMessage("bot", `[Network error] backend unreachable: ${err.message}`);
-+             updateConnectivity('offline');
-+        } else {
-+             addMessage("bot", `[Client error] Goal edit failed: ${err.message || String(err)}`);
-+        }
-       }
+@@ -36,6 +36,7 @@
+     const archiveStatus = document.getElementById('archive-status');
+     const archiveGoalLabel = document.getElementById('archive-goal-label');
+     let settingsWarningLogged = false;
++    let pendingChatRequests = 0; // Moved to top-level to avoid TDZ errors
+     const BOOT_STATE = {
+       CHECKING_AUTH: "checking_auth",
+       NEEDS_LOGIN: "needs_login",
+@@ -5740,7 +5741,6 @@
      }
  
-@@ -6248,9 +6259,18 @@
-            refreshGoalDetail();
+     // KITT Scanner Logic
+-    let pendingChatRequests = 0;
+     function setChatThinking(isThinking) {
+         const sheet = document.querySelector('.chat-sheet');
+         if(sheet) {
+@@ -5749,10 +5749,12 @@
          }
-       } catch (err) {
--        console.error("[Othello UI] sendMessage error:", err);
--        addMessage("bot", "[Connection error: backend unreachable]");
--        statusEl.textContent = "Offline";
-+        console.error("[sendMessage] outer exception:", err);
-+        const isNetwork = err instanceof TypeError && (
-+             err.message === "Failed to fetch" ||
-+             err.message.includes("NetworkError") ||
-+             err.message.includes("Network request failed")
-+        );
-+        if (isNetwork) {
-+             addMessage("bot", `[Network error] backend unreachable: ${err.message}`);
-+             updateConnectivity('offline');
-+        } else {
-+             addMessage("bot", `[Client error] ${err.message || String(err)}`);
-+        }
-       } finally {
-         endSendUI(sendUiState);
-       }
+     }
+     function beginThinking() {
++        if (typeof pendingChatRequests !== 'number') pendingChatRequests = 0;
+         pendingChatRequests++;
+         setChatThinking(true);
+     }
+     function endThinking() {
++        if (typeof pendingChatRequests !== 'number') pendingChatRequests = 0;
+         pendingChatRequests = Math.max(0, pendingChatRequests - 1);
+         if (pendingChatRequests === 0) setChatThinking(false);
+     }
