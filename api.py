@@ -5553,6 +5553,20 @@ def handle_message():
 
         companion_context = None
         persist_enabled = _should_persist_chat()
+
+        # Ensure session continuity: if missing, resume most recent or create new
+        if persist_enabled and not conversation_id:
+            try:
+                from db.messages_repository import list_sessions, create_session
+                _recent_sessions = list_sessions(user_id, limit=1)
+                if _recent_sessions:
+                    conversation_id = _recent_sessions[0]["conversation_id"]
+                else:
+                    _new_sess = create_session(user_id)
+                    conversation_id = _new_sess.get("id")
+            except Exception as e:
+                logger.warning("API: failed to resolve session_id: %s", e)
+
         if persist_enabled:
             companion_context = _load_companion_context(user_id, logger, channel=effective_channel, conversation_id=conversation_id)
 
@@ -5568,7 +5582,7 @@ def handle_message():
                 create_message(
                     user_id=user_id,
                     transcript=user_input,
-                    source="text",
+                    source="user",
                     channel=effective_channel,
                     status="final",
                     session_id=conversation_id,
