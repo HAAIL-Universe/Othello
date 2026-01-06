@@ -3630,12 +3630,26 @@
          globalChatFab.classList.toggle('active', isOpen);
       }
 
+      // [Phase 3] Re-bind composer button when opening overlay
+      if (isOpen) {
+          if (typeof bindComposerActionButton === 'function') {
+              bindComposerActionButton("overlay_open");
+              requestAnimationFrame(() => bindComposerActionButton("overlay_open_raf"));
+          }
+      }
+
       if (!isOpen) {
           stopConnectivityPing();
       }
 
       if (isOpen) {
         startConnectivityPing();
+        // Ensure the composer button is bound
+        if (typeof bindComposerActionButton === 'function') {
+            bindComposerActionButton("overlay_open");
+            requestAnimationFrame(() => bindComposerActionButton("overlay_open_raf"));
+        }
+
         // Phase 5: Initialize selector based on current effective channel
         // But only if we haven't manually overridden it yet for this session? 
         // Actually, better to reset to context on open, unless user changed it *while* open.
@@ -6298,6 +6312,60 @@
 
     // --- COMPOSER & VOICE LOGIC ---
 
+    // --- DIRECT COMPOSER CLICK HANDLING (FIXED) ---
+    function handleComposerAction(e) {
+      if (e) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+
+      const btn = document.getElementById("composer-action-btn");
+      const inputEl = document.getElementById("user-input");
+
+      const hasText = ((inputEl && inputEl.value) ? inputEl.value.trim().length : 0) > 0;
+      // Robust state check
+      const recording = (typeof isRecording !== 'undefined' && isRecording) || 
+                        (typeof voice !== 'undefined' && voice.active) || 
+                        (btn && (btn.classList.contains("record-mode") || btn.dataset.action === "stop"));
+
+      console.debug("[composer] action", { hasText, recording, target: (e.target && e.target.tagName) });
+
+      if (recording) {
+        if (typeof stopVoiceInput === 'function') stopVoiceInput();
+      } else if (hasText) {
+        if (typeof sendMessage === 'function') sendMessage();
+      } else {
+        if (typeof startVoiceInput === 'function') startVoiceInput();
+      }
+      
+      if (typeof updateComposerUI === 'function') setTimeout(updateComposerUI, 50);
+    }
+
+    function bindComposerActionButton(reason="boot") {
+      const btn = document.getElementById("composer-action-btn");
+      if (!btn) return false; 
+      if (btn.dataset.bound === "1") return true;
+
+      btn.dataset.bound = "1";
+      // Use capture for priority
+      btn.addEventListener("pointerdown", handleComposerAction, true);
+      btn.addEventListener("click", handleComposerAction, true);
+
+      console.info("[composer] bound composer-action-btn", reason);
+      return true;
+    }
+
+    // Observer to re-bind if the input bar is replaced
+    setTimeout(() => {
+        const inputBarRef = document.getElementById("input-bar") || document.querySelector(".input-bar");
+        if (inputBarRef && typeof MutationObserver !== 'undefined') {
+            const composerObserver = new MutationObserver((mutations) => {
+                bindComposerActionButton("mutation");
+            });
+            composerObserver.observe(inputBarRef, { childList: true, subtree: true });
+        }
+    }, 1000);
+
     function updateComposerUI() {
       // Robust element resolution (Fix 2)
       const input = document.getElementById("user-input");
@@ -6368,7 +6436,8 @@
         }
     });
     
-    // Note: Click handling is now managed by the delegated "click" listener below
+    // [Phase 4] Previous delegated click listener removed.
+    // Click handling is now managed by bindComposerActionButton() + handleComposerAction().
 
     let voice = {
       recognition: null,
@@ -6585,50 +6654,12 @@
         console.log("[Composer] Paragraph break inserted via silence");
     }
 
-    // Delegated Event Handling (Robust)
-    document.addEventListener("click", (e) => {
-        // Find closest button with our ID or class
-        let btn = e.target.closest("#composer-action-btn");
-        if (!btn && e.target.closest(".composer-action-btn")) {
-             btn = e.target.closest(".composer-action-btn");
-        }
-        
-        if (btn) {
-            e.preventDefault();
-            e.stopPropagation();
-            
-            const inputEl = document.getElementById("user-input");
-            const hasText = (inputEl && inputEl.value.trim().length > 0) || false;
-            
-            // Derive recording state from multiple sources for safety
-            const isMicActive = btn.classList.contains("mic-active") || 
-                                btn.classList.contains("record-mode") || 
-                                btn.dataset.action === "mic-active" || 
-                                btn.dataset.action === "stop";
-            
-            const recording = (typeof isRecording !== 'undefined' && isRecording) || 
-                              (typeof voice !== 'undefined' && voice.active) || 
-                              isMicActive;
-
-            console.log("[composer] mic click fired", { hasText, recording, val: inputEl?.value });
-            
-            if (recording) {
-                 if (typeof stopVoiceInput === 'function') stopVoiceInput();
-            } else if (hasText) {
-                 if (typeof sendMessage === 'function') sendMessage();
-            } else {
-                 if (typeof startVoiceInput === 'function') startVoiceInput();
-            }
-            
-            // Force UI update to reflect state change immediately
-            setTimeout(() => {
-                if (typeof updateComposerUI === 'function') updateComposerUI();
-            }, 50);
-        }
-    }, true); // Capture phase to beat other handlers
+    // Note: Click handling is now managed by the direct binder setup above.
+    // Delegated listener removed to avoid conflicts.
 
     // Initial render
     updateComposerUI();
+    bindComposerActionButton("boot");
 
     // ===== GOALS FUNCTIONS =====
     function extractListItems(text) {

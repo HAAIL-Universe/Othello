@@ -1252,7 +1252,8 @@
       flex-shrink: 0;
       box-shadow: 0 2px 8px rgba(0,0,0,0.2);
       pointer-events: auto;
-      z-index: 101;
+      position: relative;
+      z-index: 1000;
     }
     
     .composer-action-btn.send-mode {
