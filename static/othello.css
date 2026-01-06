@@ -1965,6 +1965,10 @@
   overflow-y: auto; /* The log scrolls */
   padding: 1rem;
   height: auto;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end; /* anchor messages to bottom */
+  gap: 0.5rem;
 }
 
 /* Adjust Input Bar for the sheet */

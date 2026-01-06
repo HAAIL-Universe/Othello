@@ -4297,6 +4297,16 @@
             const role = msg && msg.source === "assistant" ? "bot" : "user";
             addMessage(role, text);
           });
+          
+          // Force scroll to bottom after initial load
+          requestAnimationFrame(() => {
+              const chatLog = document.getElementById("chat-log");
+              const chatView = document.getElementById("chat-view");
+              const scroller = chatLog || chatView;
+              if (scroller) {
+                  scroller.scrollTop = scroller.scrollHeight;
+              }
+          });
         };
         if (renderedCount > 0) {
           renderMessages(messages);
@@ -4424,7 +4434,7 @@
         refreshSecondarySuggestionUI(othelloState.messagesByClientId[clientMessageId]);
       }
 
-      // Scroll to latest message
+      // Scroll to latest message (Smart Scroll)
       requestAnimationFrame(() => {
         // Fix: Scroll #chat-log if in overlay mode, as it's the scroll container
         const chatLog = document.getElementById("chat-log");
@@ -4433,10 +4443,17 @@
         const scroller = chatLog || chatView;
         
         if (scroller) {
-          scroller.scrollTo({
-            top: scroller.scrollHeight,
-            behavior: "smooth"
-          });
+            // Determine if we should auto-scroll
+            const distanceFromBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
+            // If we are somewhat near the bottom (or if the content was just added and it was empty/short)
+            // we force scroll. But if user is reading up history, we leave it be.
+            // For new messages (which this function handles), we usually want to jump if we are close enough.
+            // 80px seems reasonable (about 1-2 messages).
+            // We also scroll if the total height is small (just filling up).
+            
+            if (distanceFromBottom < 150 || scroller.scrollHeight <= scroller.clientHeight * 1.5) {
+                 scroller.scrollTop = scroller.scrollHeight; // Instant scroll (no smooth) to prevent "flying"
+            }
         }
       });
       return { row, bubble };
