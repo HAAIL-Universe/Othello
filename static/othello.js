@@ -761,6 +761,18 @@
 
     let recognition = null;
     let isRecording = false;
+    // Composer State
+    let composerMode = "idle"; // idle | typing | recording
+    let silenceInterval = null;
+    let audioContext = null;
+    let analyser = null;
+    let microphoneStream = null;
+    let silenceStart = 0;
+    let lastParaInsertAt = 0;
+    const SILENCE_THRESHOLD = 0.02; // RMS threshold
+    const SILENCE_DELAY_MS = 2500;
+    const PARA_COOLDOWN_MS = 1200;
+
     let sttFullTranscript = "";
     let sttLastInterim = "";
     let pendingMicStart = false;
@@ -769,9 +781,14 @@
 
     // DOM elements - declare all elements used in the script
     const input = document.getElementById('user-input');
-    const sendBtn = document.getElementById('send');
-    const micBtn = document.getElementById('mic-btn');
-    const cancelTranscriptBtn = document.getElementById('cancel-transcript-btn');
+    const composerActionBtn = document.getElementById('composer-action-btn');
+    const inputBarContainer = document.getElementById('input-bar');
+
+    // Legacy mocks for safety
+    const sendBtn = { disabled: false, onclick: null };
+    const micBtn = { disabled: false, classList: { add:()=>{}, remove:()=>{} }, title:'', addEventListener:()=>{} }; 
+    const cancelTranscriptBtn = { classList: { add:()=>{}, remove:()=>{} }, addEventListener:()=>{} };
+
     const chatLog = document.getElementById('chat-log');
     const statusEl = document.getElementById('status');
     const modeLabel = document.getElementById('current-mode-label');
@@ -1021,10 +1038,7 @@
     }
 
     if (!SpeechRecognition) {
-      if (micBtn) {
-        micBtn.disabled = true;
-        micBtn.title = "Speech recognition not supported in this browser.";
-      }
+       // Handled in startVoiceInput check
     } else {
       recognition = new SpeechRecognition();
       recognition.continuous = true;
@@ -1036,27 +1050,15 @@
         sttFullTranscript = "";
         sttLastInterim = "";
         pendingMicStart = false;
-        hideTranscriptCancel();
-        if (micBtn) {
-          micBtn.classList.remove("error");
-          micBtn.classList.add("recording");
-          micBtn.disabled = false;
-        }
+        if (input) input.value = "";
+        updateComposerUI();
       };
 
       recognition.onend = () => {
         isRecording = false;
-        const finalText = (sttFullTranscript || sttLastInterim || "").trim();
-        input.value = finalText;
-        if (finalText) {
-          showTranscriptCancel();
-        }
-        if (micBtn) {
-          micBtn.classList.remove("recording");
-          micBtn.disabled = false;
-        }
+        // Final flush logic if needed, but onresult handles it usually.
+        updateComposerUI();
 
-        // If a fresh start was requested, kick it off now after the shutdown finishes.
         if (pendingMicStart) {
           pendingMicStart = false;
           if (pendingStartTimeout) {
@@ -1075,44 +1077,57 @@
 
       recognition.onerror = (event) => {
         console.warn("[Othello UI] speech error:", event.error);
+        if (event.error === "aborted") return; // ignore explicit aborts
+        
         isRecording = false;
         pendingMicStart = false;
         if (pendingStartTimeout) {
           clearTimeout(pendingStartTimeout);
           pendingStartTimeout = null;
         }
-        if (micBtn) {
-          micBtn.classList.remove("recording");
-          micBtn.classList.add("error");
-          setTimeout(() => micBtn.classList.remove("error"), 1000);
-          micBtn.disabled = false;
+        updateComposerUI();
+        
+        if (inputBarContainer) {
+            inputBarContainer.classList.add("error"); // Optional visual cue
+            setTimeout(() => inputBarContainer.classList.remove("error"), 1000);
         }
       };
 
       recognition.onresult = (event) => {
         let interimBuffer = "";
+        let newFinal = "";
+        
         for (let i = event.resultIndex; i < event.results.length; i++) {
           const result = event.results[i];
           const phrase = (result[0] && result[0].transcript ? result[0].transcript : "").trim();
           if (!phrase) continue;
           if (result.isFinal) {
-            sttFullTranscript = sttFullTranscript
-              ? `${sttFullTranscript} ${phrase}`
-              : phrase;
+             newFinal += (newFinal ? " " : "") + phrase;
           } else {
-            interimBuffer = interimBuffer
-              ? `${interimBuffer} ${phrase}`
-              : phrase;
+             interimBuffer += (interimBuffer ? " " : "") + phrase;
           }
         }
-
-        sttLastInterim = interimBuffer;
-        const tickerSource = `${sttFullTranscript} ${interimBuffer}`.trim();
-        if (tickerSource) {
-          const words = tickerSource.split(/\s+/);
-          const snippet = words.slice(-8).join(" ");
-          input.value = snippet;
+        
+        // Append new final to full transcript
+        if (newFinal) {
+             const needsSpace = sttFullTranscript.length > 0 && !sttFullTranscript.match(/\s$/);
+             sttFullTranscript += (needsSpace ? " " : "") + newFinal;
         }
+        
+        sttLastInterim = interimBuffer;
+        
+        // Render
+        let display = sttFullTranscript;
+        if (sttLastInterim) {
+             const needsSpace = display.length > 0 && !display.match(/\s$/);
+             display += (needsSpace ? " " : "") + sttLastInterim;
+        }
+        
+        if (input) {
+            input.value = display;
+            input.scrollTop = input.scrollHeight;
+        }
+        updateComposerUI();
       };
     }
 
@@ -5728,6 +5743,7 @@
     function beginSendUI(options = {}) {
       const previousStatus = statusEl ? statusEl.textContent : "", label = options.label || "Thinking…", disableSend = options.disableSend !== false;
       if (disableSend && sendBtn) sendBtn.disabled = true;
+      if (disableSend && composerActionBtn) composerActionBtn.disabled = true;
       if (statusEl) statusEl.textContent = label;
       return { previousStatus, label, disableSend };
     }
@@ -5735,9 +5751,11 @@
     function endSendUI(state) {
       if (!state) return;
       if (state.disableSend !== false && sendBtn) sendBtn.disabled = false;
+      if (state.disableSend !== false && composerActionBtn) composerActionBtn.disabled = false;
       if (statusEl && (!statusEl.textContent || statusEl.textContent === state.label)) {
         statusEl.textContent = state.previousStatus || "Online";
       }
+      if (typeof updateComposerUI === "function") updateComposerUI();
     }
 
     // KITT Scanner Logic
@@ -6278,78 +6296,197 @@
       }
     }
 
-    if (micBtn) {
-      micBtn.addEventListener("click", () => {
-        if (!SpeechRecognition || !recognition) return;
-        if (isRecording) {
-          try {
-            recognition.stop();
-          } catch (err) {
-            console.warn("[Othello UI] speech stop (toggle) error:", err);
-          }
-          return;
-        }
-        hideTranscriptCancel();
-        sttFullTranscript = "";
-        sttLastInterim = "";
-        if (micBtn) micBtn.disabled = true;
+    // --- COMPOSER & VOICE LOGIC ---
 
-        // Request a clean restart: stop/abort current session, then start once shutdown completes.
-        pendingMicStart = true;
-        if (pendingStartTimeout) {
-          clearTimeout(pendingStartTimeout);
-          pendingStartTimeout = null;
-        }
+    function updateComposerUI() {
+      if (!input || !composerActionBtn) return;
+      const val = (input.value || "").trim();
+      
+      // Determine mode
+      if (isRecording) {
+        composerMode = "recording";
+      } else if (val.length > 0) {
+        composerMode = "typing";
+      } else {
+        composerMode = "idle";
+      }
 
-        try {
-          recognition.stop();
-        } catch (err) {
-          // ignore stop errors
-        }
+      // Update Wrapper
+      if (inputBarContainer) {
+          if (composerMode === "recording") inputBarContainer.classList.add("is-recording");
+          else inputBarContainer.classList.remove("is-recording");
+      }
+      if (composerMode === "recording") input.classList.add("composer-ghost");
+      else input.classList.remove("composer-ghost");
 
-        try {
-          recognition.abort();
-        } catch (err) {
-          // ignore abort errors
-        }
+      // Update Button
+      composerActionBtn.className = "composer-action-btn"; // reset classes
+      
+      if (composerMode === "idle") {
+        composerActionBtn.setAttribute("aria-label", "Start voice input");
+        composerActionBtn.innerHTML = `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="23"></line><line x1="8" y1="23" x2="16" y2="23"></line></svg>`;
+      } else if (composerMode === "recording") {
+        composerActionBtn.classList.add("record-mode");
+        composerActionBtn.setAttribute("aria-label", "Stop recording");
+        composerActionBtn.innerHTML = `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="2" ry="2"></rect></svg>`;
+      } else if (composerMode === "typing") {
+        composerActionBtn.classList.add("send-mode");
+        composerActionBtn.setAttribute("aria-label", "Send message");
+        composerActionBtn.innerHTML = `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>`;
+      }
+    }
 
-        // Fallback: if onend never fires, attempt a start after a short grace period.
-        pendingStartTimeout = setTimeout(() => {
-          if (pendingMicStart && !isRecording) {
-            pendingMicStart = false;
-            try {
-              recognition.start();
-            } catch (err) {
-              console.warn("[Othello UI] speech fallback start error:", err);
-            } finally {
-              if (micBtn) micBtn.disabled = false;
+    // Input listener
+    if (input) {
+        input.addEventListener("input", () => {
+             updateComposerUI();
+        });
+        
+        input.onkeydown = (e) => {
+            if (e.key === "Enter") {
+                if (e.ctrlKey || e.metaKey) {
+                    e.preventDefault();
+                    sendMessage();
+                } else {
+                    // Allow normal newline
+                }
             }
-          }
-        }, 150);
-      });
+        };
+    }
+    
+    // Action Button listener
+    if (composerActionBtn) {
+        composerActionBtn.onclick = (e) => {
+            e.preventDefault();
+            if (composerMode === "idle") {
+                 startVoiceInput();
+            } else if (composerMode === "recording") {
+                 stopVoiceInput();
+            } else if (composerMode === "typing") {
+                 sendMessage();
+            }
+        };
     }
 
-    if (cancelTranscriptBtn) {
-      cancelTranscriptBtn.addEventListener("click", () => {
-        input.value = "";
-        hideTranscriptCancel();
-        sttFullTranscript = "";
-        sttLastInterim = "";
-        if (recognition && isRecording) {
-          try {
-            recognition.stop();
-          } catch (err) {
-            console.warn("[Othello UI] speech stop error:", err);
-          }
+    // Voice & Silence Logic
+    function startVoiceInput() {
+        if (!SpeechRecognition) {
+            alert("Speech recognition not supported in this browser.");
+            return;
         }
-        input.focus();
-      });
+        if (!recognition) {
+             console.warn("SpeechRecognition not initialized");
+             return;
+        }
+        try {
+            recognition.start();
+        } catch(e) { console.warn("Rec start error", e); }
+        
+        startSilenceDetection();
+    }
+    
+    function stopVoiceInput() {
+        if (recognition) {
+            try { recognition.stop(); } catch(e) {}
+        }
+        stopSilenceDetection();
+    }
+    
+    async function startSilenceDetection() {
+        try {
+            if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) return;
+            stopSilenceDetection();
+            
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            microphoneStream = stream;
+            
+            const AudioContext = window.AudioContext || window.webkitAudioContext;
+            audioContext = new AudioContext();
+            analyser = audioContext.createAnalyser();
+            analyser.fftSize = 256;
+            
+            const source = audioContext.createMediaStreamSource(stream);
+            source.connect(analyser);
+            
+            const bufferLength = analyser.frequencyBinCount;
+            const dataArray = new Uint8Array(bufferLength);
+            
+            silenceStart = Date.now();
+            lastParaInsertAt = Date.now(); 
+            
+            silenceInterval = setInterval(() => {
+                if (!isRecording) {
+                    stopSilenceDetection();
+                    return;
+                }
+                if (analyser) {
+                    analyser.getByteTimeDomainData(dataArray);
+                    
+                    let sum = 0;
+                    for(let i = 0; i < bufferLength; i++) {
+                        const x = (dataArray[i] - 128) / 128.0;
+                        sum += x * x;
+                    }
+                    const rms = Math.sqrt(sum / bufferLength);
+                    
+                    if (rms < SILENCE_THRESHOLD) {
+                        const now = Date.now();
+                        if ((now - silenceStart) > SILENCE_DELAY_MS) {
+                             if ((now - lastParaInsertAt) > PARA_COOLDOWN_MS) {
+                                  insertParagraphBreak();
+                                  lastParaInsertAt = now;
+                             }
+                        }
+                    } else {
+                        silenceStart = Date.now();
+                    }
+                }
+            }, 100);
+            
+        } catch (err) {
+            console.warn("[Composer] Silence detection setup failed", err);
+        }
+    }
+    
+    function stopSilenceDetection() {
+        if (silenceInterval) { clearInterval(silenceInterval); silenceInterval = null; }
+        if (microphoneStream) {
+             microphoneStream.getTracks().forEach(track => track.stop());
+             microphoneStream = null;
+        }
+        if (audioContext) {
+            try { audioContext.close(); } catch(e){}
+            audioContext = null;
+        }
+    }
+    
+    function insertParagraphBreak() {
+        if (!input) return;
+        const oldVal = input.value;
+        if (!oldVal.trim().length) return; 
+        
+        let suffix = "\n\n";
+        if (oldVal.endsWith("\n\n")) return;
+        if (oldVal.endsWith("\n")) suffix = "\n";
+        
+        const newVal = oldVal + suffix;
+        input.value = newVal;
+        input.scrollTop = input.scrollHeight;
+        
+        if (isRecording) {
+             sttFullTranscript = newVal;
+        }
+
+        // Flash
+        input.classList.remove("para-flash");
+        void input.offsetWidth; // trigger reflow
+        input.classList.add("para-flash");
+        setTimeout(() => input.classList.remove("para-flash"), 600);
+        console.log("[Composer] Paragraph break inserted via silence");
     }
 
-    sendBtn.onclick = () => sendMessage();
-    input.onkeydown = (e) => {
-      if (e.key === "Enter") sendMessage();
-    };
+    // Initialize UI
+    updateComposerUI();
 
     // ===== GOALS FUNCTIONS =====
     function extractListItems(text) {

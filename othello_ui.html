@@ -348,10 +348,12 @@
 
       <!-- Moved Input Bar -->
       <div class="input-bar" id="input-bar">
-        <input id="user-input" placeholder="Tell Othello what you're working towards..." />
-        <button id="mic-btn" class="mic-btn" title="Start voice input">🎤</button>
-        <button id="cancel-transcript-btn" class="cancel-transcript-btn hidden" title="Clear transcript">Cancel</button>
-        <button id="send">Send</button>
+        <textarea id="user-input" placeholder="Tell Othello what you're working towards..." rows="1" style="resize:none; overflow-y:hidden;"></textarea>
+        <!-- Single action button controlled by JS state -->
+        <button id="composer-action-btn" class="composer-action-btn" aria-label="Start voice input">
+          <svg class="icon-mic" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="23"></line><line x1="8" y1="23" x2="16" y2="23"></line></svg>
+        </button>
+        <!-- Legacy buttons hidden or removed (JS ref will need update) -->
       </div>
     </div>
   </div>
