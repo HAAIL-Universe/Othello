@@ -1814,15 +1814,24 @@ def _attach_goal_intent_suggestion(
         raw_text = (user_input or "").strip()
         is_vague = len(raw_text) < 25 and not any(k in raw_text.lower() for k in ["day", "week", "month", "step", "plan", "build", "create"])
         
+        # Phase 22: Restore Marker for Vague Inputs
+        # The user wants the '?' marker even for vague inputs.
+        # However, we skip the expensive LLM extraction for vague inputs to keep chat snappy.
         if is_vague:
-            logger.info("API: Goal intent detected but input is vague (%d chars). Skipping automatic drafting.", len(raw_text))
-            return False
+            logger.info("API: Vague goal intent (%d chars). Using lightweight payload.", len(raw_text))
+            draft_payload = {
+                "title": _extract_goal_title_suggestion(raw_text) or "New Goal",
+                "body": raw_text,
+                "steps": [],
+                "target_days": 7
+            }
+        else:
+             draft_payload = _generate_goal_draft_payload(raw_text)
 
         # Phase 21: No-Persistence "Goal Candidate" (Voice-First)
         # We do NOT create a draft in the DB. We just return metadata so the UI can show the ? marker.
         # When confirmed, the UI will call create_goal_from_message.
         
-        draft_payload = _generate_goal_draft_payload(raw_text)
         title = draft_payload.get("title") or suggestion.get("title_suggestion") or _extract_goal_title_suggestion(raw_text) or "New Goal"
         body = draft_payload.get("body") or suggestion.get("body_suggestion") or raw_text
         

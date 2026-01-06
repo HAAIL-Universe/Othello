@@ -15,8 +15,9 @@ Completed:
 - [x] api.py: Added "clear_pending_drafts".
 - [x] otello.js: createGoalFromSuggestion uses sendMessage instead of fetch.
 - [x] db_goal_manager.py: list_goals no longer merges drafts.
+- [x] Phase 22: Restore '?' marker for vague inputs (api.py).
 Remaining:
-- [ ] Phase 22 tasks...
+- [ ] Done.
 
 ## Next Action
 Stop and commit.
