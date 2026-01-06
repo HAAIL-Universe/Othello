@@ -4180,6 +4180,16 @@
       const chatLog = document.getElementById("chat-log");
       if (!chatLog) {
         console.error("[Othello UI] CRITICAL: #chat-log container missing from DOM. Chat interaction may be invisible.");
+        // Visible UI Error (Safe Failure)
+        const toastContainer = document.getElementById("toast-container");
+        if (toastContainer) {
+            const errDiv = document.createElement("div");
+            errDiv.className = "toast error";
+            errDiv.textContent = "Chat Error: Container #chat-log missing.";
+            toastContainer.appendChild(errDiv);
+        } else {
+            alert("Chat Critical Error: #chat-log missing");
+        }
         return null;
       }
       return chatLog;

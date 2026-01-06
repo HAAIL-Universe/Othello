@@ -1964,11 +1964,12 @@
   flex: 1 1 auto;
   overflow-y: auto; /* The log scrolls */
   padding: 1rem;
-  height: auto;
   display: flex;
   flex-direction: column;
-  justify-content: flex-end; /* anchor messages to bottom */
+  /* Fixed: Removed justify-content: flex-end to prevent clipping of top messages. */
+  /* We rely on JS to scroll to bottom. */
   gap: 0.5rem;
+  min-height: 0; /* Critical for flex scrolling */
 }
 
 /* Adjust Input Bar for the sheet */
