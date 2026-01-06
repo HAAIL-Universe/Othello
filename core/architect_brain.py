@@ -139,6 +139,9 @@ class Architect:
         - WORK_MODE: For architectural/planning tasks (concise, neutral).
         - CHAT_PERSONA: For casual/open-ended support (warm, human).
         """
+        prompt_key = "chat_persona"
+        reason = "default"
+
         # 1. Strict Goal Context Check
         # Only use work mode if we have a robust goal object or explicit focus.
         if context:
@@ -148,29 +151,32 @@ class Architect:
             has_structured_goal = isinstance(gc, dict) and (gc.get("id") or gc.get("title"))
             
             if is_focused or has_structured_goal:
-                return load_prompt("work_mode")
+                prompt_key = "work_mode"
+                reason = "active_goal_context"
 
         # 2. Heuristic Intent -> WORK_MODE
-        # Requires [Ask Signal] + [Planning Keyword] to avoid false positives.
-        user_text_lower = user_text.lower()
-        
-        # Signals that imply a request/action
-        ask_signals = [
-            "help", "can you", "could you", "please", "make", "create", "generate", 
-            "draft", "build", "design", "how do i", "what should i"
-        ]
-        has_ask = any(s in user_text_lower for s in ask_signals)
-
-        # Keywords specific to planning (word boundary matched)
-        # Note: 'draft' acts as both signal and keyword, which is fine.
-        triggers_pattern = r"\b(goal|plan|steps|task|tasks|routine|schedule|roadmap|milestone|draft)\b"
-        hits_trigger = bool(re.search(triggers_pattern, user_text_lower))
-
-        if has_ask and hits_trigger:
-            return load_prompt("work_mode")
+        if prompt_key == "chat_persona":
+            # Requires [Ask Signal] + [Planning Keyword] to avoid false positives.
+            user_text_lower = user_text.lower()
             
-        # 3. Default -> CHAT_PERSONA
-        return load_prompt("chat_persona")
+            # Signals that imply a request/action
+            ask_signals = [
+                "help", "can you", "could you", "please", "make", "create", "generate", 
+                "draft", "build", "design", "how do i", "what should i"
+            ]
+            has_ask = any(s in user_text_lower for s in ask_signals)
+
+            # Keywords specific to planning (word boundary matched)
+            # Note: 'draft' acts as both signal and keyword, which is fine.
+            triggers_pattern = r"\b(goal|plan|steps|task|tasks|routine|schedule|roadmap|milestone|draft)\b"
+            hits_trigger = bool(re.search(triggers_pattern, user_text_lower))
+
+            if has_ask and hits_trigger:
+                prompt_key = "work_mode"
+                reason = "explicit_planning_request"
+            
+        self.logger.debug(f"[prompt_router] selected={prompt_key} reason={reason}")
+        return load_prompt(prompt_key)
 
     async def plan_and_execute(
         self,
