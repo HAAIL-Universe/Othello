@@ -4176,11 +4176,18 @@
     }
 
     // ===== CHAT FUNCTIONS =====
-    function clearChatState() {
-      // Use resolved container
+    function getChatLogOrWarn() {
       const chatLog = document.getElementById("chat-log");
-      const chatView = document.getElementById("chat-view");
-      const container = chatLog || chatView;
+      if (!chatLog) {
+        console.error("[Othello UI] CRITICAL: #chat-log container missing from DOM. Chat interaction may be invisible.");
+        return null;
+      }
+      return chatLog;
+    }
+
+    function clearChatState() {
+      // Use strict resolved container
+      const container = getChatLogOrWarn();
       if (container) container.innerHTML = "";
       
       const chatPlaceholder = document.getElementById("chat-placeholder");
@@ -4305,7 +4312,7 @@
           
           // Force scroll to bottom after initial load
           requestAnimationFrame(() => {
-              const chatLog = document.getElementById("chat-log");
+              const chatLog = getChatLogOrWarn();
               if (chatLog) {
                   chatLog.scrollTop = chatLog.scrollHeight;
               }
@@ -4371,10 +4378,13 @@
         chatPlaceholder.classList.add("hidden");
       }
 
-      // Resolve container explicitly (Fix for invisible messages)
-      const chatLog = document.getElementById("chat-log");
-      const chatView = document.getElementById("chat-view");
-      const container = chatLog || chatView;
+      // Resolve container explicitly - STRICT MODE OTHELLO-LOG-ONLY
+      // We strictly require #chat-log. No fallback to #chat-view.
+      const container = getChatLogOrWarn();
+      if (!container) {
+          // Fail robustly if UI is broken
+          return { row: null, bubble: null };
+      }
 
       const row = document.createElement("div");
       row.className = `msg-row ${role}`;
