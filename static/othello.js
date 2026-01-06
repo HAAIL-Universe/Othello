@@ -6370,17 +6370,104 @@
 
     // Voice & Silence Logic
     function startVoiceInput() {
+        console.debug("[Composer] Starting voice input...");
+        
+        // Robust check for SpeechRecognition
+        const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
         if (!SpeechRecognition) {
             alert("Speech recognition not supported in this browser.");
+            console.error("[Composer] SpeechRecognition API missing");
             return;
         }
+
+        // Prepare recognition instance if missing (re-init safety)
         if (!recognition) {
-             console.warn("SpeechRecognition not initialized");
-             return;
+             console.log("[Composer] Re-initializing SpeechRecognition");
+             try {
+                 recognition = new SpeechRecognition();
+                 recognition.continuous = true;
+                 recognition.interimResults = true;
+                 recognition.lang = "en-GB";
+                 
+                 recognition.onstart = () => {
+                    isRecording = true;
+                    sttFullTranscript = "";
+                    sttLastInterim = "";
+                    pendingMicStart = false;
+                    if (input) input.value = ""; // Clear on fresh start? User might want append. Let's clear for now as per "idle" state.
+                    console.debug("[Composer] Recognition started");
+                    updateComposerUI();
+                 };
+                 
+                 recognition.onend = () => {
+                    console.debug("[Composer] Recognition ended");
+                    isRecording = false;
+                    updateComposerUI();
+                    
+                    if (pendingMicStart) {
+                      pendingMicStart = false;
+                      setTimeout(() => {
+                        try { recognition.start(); } catch (err) { console.warn("[Composer] restart error:", err); }
+                      }, 50);
+                    }
+                 };
+                 
+                 recognition.onerror = (event) => {
+                    console.warn("[Composer] Speech error:", event.error);
+                    if (event.error === "not-allowed" || event.error === "service-not-allowed") {
+                        alert("Microphone access denied. Please allow microphone access.");
+                    }
+                    if (event.error === "aborted") return;
+                    isRecording = false;
+                    updateComposerUI();
+                 };
+                 
+                 recognition.onresult = (event) => {
+                    let interimBuffer = "";
+                    let newFinal = "";
+                    for (let i = event.resultIndex; i < event.results.length; i++) {
+                      const result = event.results[i];
+                      const phrase = (result[0] && result[0].transcript ? result[0].transcript : "").trim();
+                      if (!phrase) continue;
+                      if (result.isFinal) {
+                         newFinal += (newFinal ? " " : "") + phrase;
+                      } else {
+                         interimBuffer += (interimBuffer ? " " : "") + phrase;
+                      }
+                    }
+                    if (newFinal) {
+                         const needsSpace = sttFullTranscript.length > 0 && !sttFullTranscript.match(/\s$/);
+                         sttFullTranscript += (needsSpace ? " " : "") + newFinal;
+                    }
+                    sttLastInterim = interimBuffer;
+                    let display = sttFullTranscript;
+                    if (sttLastInterim) {
+                         const needsSpace = display.length > 0 && !display.match(/\s$/);
+                         display += (needsSpace ? " " : "") + sttLastInterim;
+                    }
+                    if (input) {
+                        input.value = display;
+                        input.scrollTop = input.scrollHeight;
+                    }
+                    updateComposerUI();
+                 };
+
+             } catch(e) {
+                 console.error("[Composer] Failed to create SpeechRecognition", e);
+                 alert("Voice input failed to initialize.");
+                 return;
+             }
         }
+        
         try {
             recognition.start();
-        } catch(e) { console.warn("Rec start error", e); }
+        } catch(e) { 
+            console.warn("[Composer] Rec start error:", e);
+            // If already started, ignore
+            if (e.name !== "InvalidStateError") {
+                alert("Could not start voice input: " + e.message);
+            }
+        }
         
         startSilenceDetection();
     }
@@ -6485,8 +6572,41 @@
         console.log("[Composer] Paragraph break inserted via silence");
     }
 
-    // Initialize UI
-    updateComposerUI();
+    // Initialize UI with robust binding
+    function initComposerControls() {
+        const _input = document.getElementById('user-input');
+        const _btn = document.getElementById('composer-action-btn');
+        if (!_input || !_btn) {
+            console.warn("[Composer] Elements not found, retrying in 100ms");
+            setTimeout(initComposerControls, 100);
+            return;
+        }
+
+        // Re-bind listener (idempotent)
+        _btn.onclick = (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            console.debug("[Composer] Action clicked. Mode:", composerMode);
+            
+            if (composerMode === "idle") {
+                 startVoiceInput();
+            } else if (composerMode === "recording") {
+                 stopVoiceInput();
+            } else if (composerMode === "typing") {
+                 sendMessage();
+            }
+        };
+        
+        // Initial render
+        updateComposerUI();
+    }
+    
+    // Boot up
+    if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", initComposerControls);
+    } else {
+        initComposerControls();
+    }
 
     // ===== GOALS FUNCTIONS =====
     function extractListItems(text) {
