@@ -3566,10 +3566,10 @@
 
       if (isOpen) {
         // Phase 5: Initialize selector based on current effective channel
-        // Reset override when opening (to match context), unless we want persistence?
-        // Let's reset to ensure "context sensitive" default behavior.
-        othelloState.manualChannelOverride = null;
-
+        // But only if we haven't manually overridden it yet for this session? 
+        // Actually, better to reset to context on open, unless user changed it *while* open.
+        // Let's reset it to the view's context every time we open, for consistency.
+        
         const channel = effectiveChannelForView({ 
             currentView: othelloState.currentView, 
             currentMode: othelloState.currentMode 
@@ -3634,6 +3634,9 @@
       }
       
       toggleChatOverlay(false); // Close chat if switching main views (optional, but good UX)
+
+      // Phase 5: Clear manual channel override when switching views so context resets to natural default
+      othelloState.manualChannelOverride = null;
 
       othelloState.currentView = viewName;
 
