@@ -3559,14 +3559,23 @@
       globalChatOverlay.classList.toggle('open', isOpen);
       
       if (globalChatFab) {
-         // Optionally hide FAB when open? Or keep it. Let's keep it but maybe it's covered.
-         globalChatFab.classList.toggle('hidden', isOpen);
+         // Keep FAB visible or toggle dependent on UX preference.
+         globalChatFab.classList.toggle('active', isOpen);
       }
 
       if (isOpen) {
-        // Refresh chat context if needed
+        // Refresh chat context based on the underlying view
+        const channel = effectiveChannelForView({ 
+            currentView: othelloState.currentView, 
+            currentMode: othelloState.currentMode 
+        });
+        
+        // Update header logic or visual cue could go here
+        console.log(`[Othello UI] Opened chat overlay. Context: ${channel} (View: ${othelloState.currentView})`);
+        
+        loadChatHistory(); // Triggers fetch for the effective channel
+        
         updateFocusRibbon();
-        // Maybe ensure input focus?
         const ui = document.getElementById('user-input');
         if (ui) ui.focus();
       }
@@ -4126,9 +4135,14 @@
 
     function effectiveChannelForView({ currentView, currentMode }) {
       const view = (currentView || "").toLowerCase();
-      const mode = (currentMode || "").toLowerCase();
+      // Phase 4: Route based on explicit views, falling back to mode if needed (though modes are deprecated)
+      if (view === "today-planner") return "planner"; // Maps to 'planner' context (originally 'today' mode)
+      if (view === "goals") return "companion"; // Goals view uses companion/general chat
+      if (view === "routine-planner") return "routine";
+      if (view === "insights") return "companion"; // Insights uses companion
+      
+      // Fallback
       if (view === "chat") return "companion";
-      if (mode === "today" || mode === "routine") return "planner";
       return "companion";
     }
 

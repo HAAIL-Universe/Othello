@@ -20,9 +20,10 @@ Completed:
 - [x] Phase 1: Identified `othello_ui.html` and `static/othello.js` as key files. Confirmed `switchView` handles tab switching and `sendMessage` uses `/api/message` with mode-based channel selection.
 - [x] Phase 2: Removed Chat tab. Split Middle Tab into explicit Today and Goals tabs. Updated default mode to `today-planner`. Refactored badge logic.
 - [x] Phase 3: Implemented Global Chat Overlay. Moved `#chat-view` and `#input-bar` into a floating sheet. Added FAB triggering. Updated `switchView` to toggle overlay for 'chat'. Refactored `updateFocusRibbon` to respect overlay state.
+- [x] Phase 4: Unified chat UI context routing. Updated `effectiveChannelForView` to map `today-planner` -> `planner` and `goals` -> `companion`. Configured `toggleChatOverlay` to reload chat history based on the underlying view context.
 
 ## Next Action
-Execute Phase 4 (Unify chat UI + context routing).
+Execute Phase 5 (Dialogue selector).
 
 ## Full Unified Diff
 (No changes to code yet)
