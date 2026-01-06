@@ -3548,12 +3548,57 @@
       }
     }
 
+    // ===== CHAT OVERLAY (Phase 3) =====
+    const globalChatOverlay = document.getElementById('global-chat-overlay');
+    const globalChatFab = document.getElementById('global-chat-fab');
+    const chatBackBtn = document.getElementById('chat-back-btn');
+
+    function toggleChatOverlay(show) {
+      if (!globalChatOverlay) return;
+      const isOpen = typeof show === 'boolean' ? show : !globalChatOverlay.classList.contains('open');
+      globalChatOverlay.classList.toggle('open', isOpen);
+      
+      if (globalChatFab) {
+         // Optionally hide FAB when open? Or keep it. Let's keep it but maybe it's covered.
+         globalChatFab.classList.toggle('hidden', isOpen);
+      }
+
+      if (isOpen) {
+        // Refresh chat context if needed
+        updateFocusRibbon();
+        // Maybe ensure input focus?
+        const ui = document.getElementById('user-input');
+        if (ui) ui.focus();
+      }
+    }
+
+    if (globalChatFab) {
+      globalChatFab.addEventListener('click', () => toggleChatOverlay(true));
+    }
+    if (chatBackBtn) {
+      chatBackBtn.addEventListener('click', () => toggleChatOverlay(false));
+    }
+    if (globalChatOverlay) {
+        globalChatOverlay.addEventListener('click', (e) => {
+            if (e.target === globalChatOverlay) {
+                toggleChatOverlay(false);
+            }
+        });
+    }
+
     // ===== TAB NAVIGATION =====
     // Define tabs and views from DOM
     const tabs = Array.from(document.querySelectorAll('.tab'));
     const views = Array.from(document.querySelectorAll('.view'));
 
     function switchView(viewName) {
+      if (viewName === 'chat') {
+        toggleChatOverlay(true);
+        return;
+      }
+      
+      toggleChatOverlay(false); // Close chat if switching main views (optional, but good UX)
+
       othelloState.currentView = viewName;
 
       // Update tabs
@@ -3577,14 +3622,8 @@
         });
       }
 
-      // Show/hide input bar and focus ribbon
-      if (viewName === "chat") {
-        if (inputBar) inputBar.classList.remove("hidden");
-        updateFocusRibbon();
-      } else {
-        if (inputBar) inputBar.classList.add("hidden");
-        if (focusRibbon) focusRibbon.classList.remove("visible");
-      }
+      // Hide focus ribbon in main views (it belongs to chat overlay context now)
+      if (focusRibbon) focusRibbon.classList.remove("visible");
 
       if (viewName !== "today-planner") {
         stopPlannerPolling("view-change");
@@ -3773,7 +3812,11 @@
       renderDraftPreview();
       
       if (!focusRibbon) return;
-      if (othelloState.currentView !== "chat") {
+      
+      // Phase 3 Update: Chat is now an overlay.
+      const isChatOpen = globalChatOverlay && globalChatOverlay.classList.contains('open');
+      // If chat overlay is closed, hide ribbon (unless we are in legacy chat view handling)
+      if (!isChatOpen && othelloState.currentView !== "chat") {
         focusRibbon.classList.remove("visible");
         return;
       }

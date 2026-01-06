@@ -139,12 +139,8 @@
     <!-- CONTENT CONTAINER -->
     <div class="content-container">
 
-      <!-- CHAT VIEW (Overlay Backup / Inactive) -->
-      <div id="chat-view" class="view">
-        <div id="draft-preview" class="draft-preview" style="display:none;"></div>
-        <div id="chat-placeholder" class="chat-placeholder">Start a conversation</div>
-        <div id="chat-log" class="chat-log"></div>
-      </div>
+      <!-- Chat View moved to Global Overlay -->
+      <div id="moved-chat-placeholder" style="display:none;"></div>
 
       <!-- TODAY PLANNER VIEW (Home) -->
       <div id="today-planner-view" class="view active">
@@ -293,13 +289,8 @@
 
     <div id="toast-container"></div>
 
-    <!-- INPUT BAR (only visible in Chat view) -->
-    <div class="input-bar" id="input-bar">
-      <input id="user-input" placeholder="Tell Othello what you're working towards..." />
-      <button id="mic-btn" class="mic-btn" title="Start voice input">🎤</button>
-      <button id="cancel-transcript-btn" class="cancel-transcript-btn hidden" title="Clear transcript">Cancel</button>
-      <button id="send">Send</button>
-    </div>
+    <!-- Input Bar moved to Global Overlay -->
+    <div id="moved-input-placeholder" style="display:none;"></div>
 
     <!-- GOAL DETAIL VIEW (overlay) -->
     <div id="goal-detail" class="goal-detail">
@@ -339,6 +330,36 @@
   </div>
 
   <div id="toast" class="toast"></div>
+
+  <!-- GLOBAL CHAT OVERLAY (Phase 3) -->
+  <div id="global-chat-overlay" class="global-chat-overlay">
+    <div class="chat-sheet">
+      <div class="chat-sheet__header">
+        <div style="font-weight: 700;">Companion Chat</div>
+        <button id="chat-back-btn" class="chat-back-btn">×</button>
+      </div>
+
+      <!-- Moved Chat View Content -->
+      <div id="chat-view" class="view" style="display:flex;">
+        <div id="draft-preview" class="draft-preview" style="display:none;"></div>
+        <div id="chat-placeholder" class="chat-placeholder">Start a conversation</div>
+        <div id="chat-log" class="chat-log"></div>
+      </div>
+
+      <!-- Moved Input Bar -->
+      <div class="input-bar" id="input-bar">
+        <input id="user-input" placeholder="Tell Othello what you're working towards..." />
+        <button id="mic-btn" class="mic-btn" title="Start voice input">🎤</button>
+        <button id="cancel-transcript-btn" class="cancel-transcript-btn hidden" title="Clear transcript">Cancel</button>
+        <button id="send">Send</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- FAB -->
+  <button id="global-chat-fab" class="global-chat-fab">
+    <span>💬</span>
+  </button>
 
   <!-- JS -->
   <script src="/static/othello.js"></script>
