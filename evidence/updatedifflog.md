@@ -1,33 +1,40 @@
-﻿diff --git a/static/othello.js b/static/othello.js
-index 4319420a..b162b6e9 100644
---- a/static/othello.js
-+++ b/static/othello.js
-@@ -36,6 +36,7 @@
-     const archiveStatus = document.getElementById('archive-status');
-     const archiveGoalLabel = document.getElementById('archive-goal-label');
-     let settingsWarningLogged = false;
-+    let pendingChatRequests = 0; // Moved to top-level to avoid TDZ errors
-     const BOOT_STATE = {
-       CHECKING_AUTH: "checking_auth",
-       NEEDS_LOGIN: "needs_login",
-@@ -5740,7 +5741,6 @@
-     }
+﻿diff --git a/static/othello.css b/static/othello.css
+index 6b0b2d80..908a47d0 100644
+--- a/static/othello.css
++++ b/static/othello.css
+@@ -2114,16 +2114,16 @@ body.chat-open #global-chat-fab {
+ /* KITT Scanner (Knight Rider) Effect */
+ .kitt-scanner {
+   position: absolute;
+-  top: 0;
++  bottom: 0; /* Anchor to bottom of header */
+   left: 0;
+   right: 0;
+-  height: 4px;
++  height: 3px; /* Thin line */
+   overflow: hidden;
+-  border-radius: 4px 4px 0 0;
++  border-radius: 0;
+   opacity: 0;
+   transition: opacity 0.3s ease;
+   pointer-events: none;
+-  z-index: 50; /* Below controls */
++  z-index: 105; /* Above header border/controls if needed, but safe */
+ }
  
-     // KITT Scanner Logic
--    let pendingChatRequests = 0;
-     function setChatThinking(isThinking) {
-         const sheet = document.querySelector('.chat-sheet');
-         if(sheet) {
-@@ -5749,10 +5749,12 @@
-         }
-     }
-     function beginThinking() {
-+        if (typeof pendingChatRequests !== 'number') pendingChatRequests = 0;
-         pendingChatRequests++;
-         setChatThinking(true);
-     }
-     function endThinking() {
-+        if (typeof pendingChatRequests !== 'number') pendingChatRequests = 0;
-         pendingChatRequests = Math.max(0, pendingChatRequests - 1);
-         if (pendingChatRequests === 0) setChatThinking(false);
-     }
+ .chat-sheet.is-thinking .kitt-scanner {
+@@ -2137,10 +2137,11 @@ body.chat-open #global-chat-fab {
+   top: 0;
+   bottom: 0;
+   width: 15%;
+-  background: var(--accent, #e5e7eb); /* Fallback color */
+-  box-shadow: 0 0 10px var(--accent, #e5e7eb), 0 0 5px var(--accent, #e5e7eb);
++  /* Red KITT scanner style */
++  background: rgba(255, 60, 60, 0.9);
++  box-shadow: 0 0 10px rgba(255, 60, 60, 0.8), 0 0 5px rgba(255, 80, 80, 0.6);
+   border-radius: 2px;
+-  opacity: 0.8;
++  opacity: 0.9;
+   will-change: left, right;
+ }
+ 
