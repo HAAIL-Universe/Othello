@@ -5666,11 +5666,15 @@
         const channel = mode === "companion" ? "companion" : "planner";
         console.debug(`[Othello UI] sendMessage mode=${mode} channel=${channel} view=${othelloState.currentView}`);
         console.log("[Othello UI] Sending plain-message payload:", text);
+        
+        // Fallback to currently viewed goal if no active goal is set
+        const effectiveGoalId = othelloState.activeGoalId || othelloState.currentDetailGoalId || null;
+
         const payload = { 
             message: text,
             channel,
-            goal_id: othelloState.activeGoalId || null,
-            active_goal_id: othelloState.activeGoalId || null,
+            goal_id: effectiveGoalId,
+            active_goal_id: effectiveGoalId,
             current_mode: othelloState.currentMode,
             current_view: othelloState.currentView,
             client_message_id: clientMessageId,
@@ -6538,6 +6542,23 @@
           <div class="detail-section">
             <div class="detail-section__title">Draft</div>
             <div class="detail-section__body" style="white-space: pre-wrap;">${formatMessageText(goal.draft_text)}</div>
+          </div>
+        `;
+      }
+
+      // Seed Steps (Checklist)
+      if (goal.checklist && Array.isArray(goal.checklist) && goal.checklist.length > 0) {
+        const stepsHtml = goal.checklist.map((step, idx) => {
+            const stepText = typeof step === 'string' ? step : (step.text || JSON.stringify(step));
+            return `<div class="intent-item"><div class="intent-item__text">${idx + 1}. ${formatMessageText(stepText)}</div></div>`;
+        }).join("");
+        
+        contentHtml += `
+          <div class="detail-section">
+            <div class="detail-section__title">Seed Steps</div>
+            <div class="intent-list">
+              ${stepsHtml}
+            </div>
           </div>
         `;
       }

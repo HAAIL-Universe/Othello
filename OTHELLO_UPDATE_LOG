@@ -33,3 +33,7 @@
 2025-12-11 - Planner Actions & Commitments
 - Today Planner items now include inline Done/Skip/Move to Tomorrow controls that post to /api/plan/update and refresh the tab immediately so status chips stay in sync.
 - Companion Chat shows a lightweight commitment bar on bot messages with structured steps, letting users save steps as long-term goals, inject tasks into Today Plan, or park them as ideas without leaving chat.
+2026-01-05 - Goal Focus & Seed Steps
+- Fixed goal focus binding in chat: messages now fallback to the currently viewed goal if no active goal is set.
+- Implemented seed step persistence: confirmed draft steps are now saved to the goal checklist.
+- Updated UI to render seed steps in the goal detail view.

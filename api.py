@@ -2622,7 +2622,8 @@ def _apply_suggestion_decisions(
         if kind == "goal":
             title = payload.get("title") or payload.get("body") or "Untitled Goal"
             description = payload.get("description") or payload.get("body") or ""
-            goal = create_goal({"title": title, "description": description}, user_id)
+            steps = payload.get("steps") or []
+            goal = create_goal({"title": title, "description": description, "checklist": steps}, user_id)
             if not goal:
                 results.append({"ok": False, "error": "goal_create_failed", "suggestion_id": suggestion_id})
                 continue
