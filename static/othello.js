@@ -6368,61 +6368,64 @@
         };
     }
 
+    let voice = {
+      recognition: null,
+      active: false
+    };
+
     // Voice & Silence Logic
     function startVoiceInput() {
-        console.debug("[Composer] Starting voice input...");
+        console.debug("[voice] start requested");
         
         // Robust check for SpeechRecognition
         const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
         if (!SpeechRecognition) {
             alert("Speech recognition not supported in this browser.");
-            console.error("[Composer] SpeechRecognition API missing");
+            console.error("[voice] SpeechRecognition API missing");
             return;
         }
 
-        // Prepare recognition instance if missing (re-init safety)
-        if (!recognition) {
-             console.log("[Composer] Re-initializing SpeechRecognition");
+        // Lazy Initialize
+        if (!voice.recognition) {
+             console.log("[voice] initializing new SpeechRecognition instance");
              try {
-                 recognition = new SpeechRecognition();
-                 recognition.continuous = true;
-                 recognition.interimResults = true;
-                 recognition.lang = "en-GB";
+                 const rec = new SpeechRecognition();
+                 rec.continuous = true;
+                 rec.interimResults = true;
+                 rec.lang = "en-GB";
                  
-                 recognition.onstart = () => {
+                 rec.onstart = () => {
+                    console.debug("[voice] onstart");
+                    voice.active = true;
                     isRecording = true;
                     sttFullTranscript = "";
                     sttLastInterim = "";
-                    pendingMicStart = false;
-                    if (input) input.value = ""; // Clear on fresh start? User might want append. Let's clear for now as per "idle" state.
-                    console.debug("[Composer] Recognition started");
-                    updateComposerUI();
-                 };
-                 
-                 recognition.onend = () => {
-                    console.debug("[Composer] Recognition ended");
-                    isRecording = false;
+                    if (input) input.value = ""; 
                     updateComposerUI();
                     
-                    if (pendingMicStart) {
-                      pendingMicStart = false;
-                      setTimeout(() => {
-                        try { recognition.start(); } catch (err) { console.warn("[Composer] restart error:", err); }
-                      }, 50);
-                    }
+                    // Start silence monitoring only when voice actually starts
+                    startSilenceDetection();
                  };
                  
-                 recognition.onerror = (event) => {
-                    console.warn("[Composer] Speech error:", event.error);
+                 rec.onend = () => {
+                    console.debug("[voice] onend");
+                    voice.active = false;
+                    isRecording = false;
+                    updateComposerUI();
+                    stopSilenceDetection();
+                 };
+                 
+                 rec.onerror = (event) => {
+                    console.warn("[voice] onerror", event.error);
                     if (event.error === "not-allowed" || event.error === "service-not-allowed") {
                         alert("Microphone access denied. Please allow microphone access.");
                     }
-                    if (event.error === "aborted") return;
+                    voice.active = false;
                     isRecording = false;
                     updateComposerUI();
                  };
                  
-                 recognition.onresult = (event) => {
+                 rec.onresult = (event) => {
                     let interimBuffer = "";
                     let newFinal = "";
                     for (let i = event.resultIndex; i < event.results.length; i++) {
@@ -6451,30 +6454,31 @@
                     }
                     updateComposerUI();
                  };
+                 
+                 voice.recognition = rec;
 
              } catch(e) {
-                 console.error("[Composer] Failed to create SpeechRecognition", e);
+                 console.error("[voice] Failed to create SpeechRecognition", e);
                  alert("Voice input failed to initialize.");
                  return;
              }
         }
         
         try {
-            recognition.start();
+            voice.recognition.start();
         } catch(e) { 
-            console.warn("[Composer] Rec start error:", e);
-            // If already started, ignore
-            if (e.name !== "InvalidStateError") {
+            console.warn("[voice] start error:", e);
+            if (e.name === "InvalidStateError") {
+                 // Already active? ignore
+            } else {
                 alert("Could not start voice input: " + e.message);
             }
         }
-        
-        startSilenceDetection();
     }
-    
+
     function stopVoiceInput() {
-        if (recognition) {
-            try { recognition.stop(); } catch(e) {}
+        if (voice.recognition) {
+            try { voice.recognition.stop(); } catch(e) {}
         }
         stopSilenceDetection();
     }
@@ -6502,7 +6506,8 @@
             lastParaInsertAt = Date.now(); 
             
             silenceInterval = setInterval(() => {
-                if (!isRecording) {
+                // Check local state or voice active
+                if (!isRecording && !voice.active) {
                     stopSilenceDetection();
                     return;
                 }
@@ -6572,21 +6577,18 @@
         console.log("[Composer] Paragraph break inserted via silence");
     }
 
-    // Initialize UI with robust binding
-    function initComposerControls() {
-        const _input = document.getElementById('user-input');
-        const _btn = document.getElementById('composer-action-btn');
-        if (!_input || !_btn) {
-            console.warn("[Composer] Elements not found, retrying in 100ms");
-            setTimeout(initComposerControls, 100);
-            return;
+    // Delegated Event Handling (Robust)
+    document.addEventListener("click", (e) => {
+        // Find closest button with our ID or class
+        let btn = e.target.closest("#composer-action-btn");
+        if (!btn && e.target.closest(".composer-action-btn")) {
+             btn = e.target.closest(".composer-action-btn");
         }
-
-        // Re-bind listener (idempotent)
-        _btn.onclick = (e) => {
+        
+        if (btn) {
             e.preventDefault();
             e.stopPropagation();
-            console.debug("[Composer] Action clicked. Mode:", composerMode);
+            console.log("[composer] mic click fired");
             
             if (composerMode === "idle") {
                  startVoiceInput();
@@ -6595,18 +6597,11 @@
             } else if (composerMode === "typing") {
                  sendMessage();
             }
-        };
-        
-        // Initial render
-        updateComposerUI();
-    }
-    
-    // Boot up
-    if (document.readyState === "loading") {
-        document.addEventListener("DOMContentLoaded", initComposerControls);
-    } else {
-        initComposerControls();
-    }
+        }
+    }, true); // Capture phase to beat other handlers
+
+    // Initial render
+    updateComposerUI();
 
     // ===== GOALS FUNCTIONS =====
     function extractListItems(text) {
