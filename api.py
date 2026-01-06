@@ -1851,7 +1851,8 @@ def _attach_goal_intent_suggestion(
         # We modify the suggestion dict passed by reference so the caller can inject it into meta
         suggestion.update(suggestion_data)
         
-        return True
+        # Phase 22: Allow fall-through to populate generic meta
+        # return True
 
     if suggestion_id is not None:
         suggestion = dict(suggestion)

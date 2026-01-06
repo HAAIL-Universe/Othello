@@ -4414,7 +4414,8 @@
           clientMessageId: entry.clientMessageId,
           statusEl,
           panelEl: actionsEl,
-          suggestionId: item.suggestionId
+          suggestionId: item.suggestionId,
+          payload: item.suggestion ? item.suggestion.payload : null
         });
         if (prevActiveGoalId !== othelloState.activeGoalId) {
           setActiveGoal(prevActiveGoalId);
@@ -5701,6 +5702,16 @@
             othelloState.activeConversationId = data.conversation_id;
         }
         const meta = data && data.meta ? data.meta : null;
+
+        // Phase 22: Capture virtual goal intent for User message
+        if (meta && meta.suggestions && Array.isArray(meta.suggestions)) {
+           meta.suggestions.forEach(s => {
+               if (s.type === 'goal_intent' && s.client_message_id) {
+                   addSecondarySuggestion(s.client_message_id, s);
+               }
+           });
+        }
+
         const isRoutineReady = !!(meta && meta.intent === "routine_ready" && meta.routine_suggestion_id);
         let replyText = data.reply || "[no reply]";
         if (isRoutineReady) {
