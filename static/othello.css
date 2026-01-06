@@ -2053,3 +2053,74 @@ body.chat-open #global-chat-fab {
   outline: none;
   border-color: var(--accent);
 }
+
+/* KITT Scanner (Knight Rider) Effect */
+.kitt-scanner {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 4px 4px 0 0;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+  pointer-events: none;
+  z-index: 50; /* Below controls */
+}
+
+.chat-sheet.is-thinking .kitt-scanner {
+  opacity: 1;
+}
+
+.kitt-scanner::before,
+.kitt-scanner::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 15%;
+  background: var(--accent, #e5e7eb); /* Fallback color */
+  box-shadow: 0 0 10px var(--accent, #e5e7eb), 0 0 5px var(--accent, #e5e7eb);
+  border-radius: 2px;
+  opacity: 0.8;
+  will-change: left, right;
+}
+
+.chat-sheet.is-thinking .kitt-scanner::before {
+  left: 50%;
+  transform: translateX(-50%);
+  animation: scanner-split-left 1.5s ease-in-out infinite alternate;
+}
+
+.chat-sheet.is-thinking .kitt-scanner::after {
+  right: 50%;
+  transform: translateX(50%);
+  animation: scanner-split-right 1.5s ease-in-out infinite alternate;
+}
+
+@keyframes scanner-split-left {
+  0% { left: 50%; width: 5%; opacity: 0.5; }
+  100% { left: 0%; width: 20%; opacity: 1; }
+}
+
+@keyframes scanner-split-right {
+  0% { right: 50%; width: 5%; opacity: 0.5; }
+  100% { right: 0%; width: 20%; opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-sheet.is-thinking .kitt-scanner::before,
+  .chat-sheet.is-thinking .kitt-scanner::after {
+    animation: none;
+    width: 100%;
+    left: 0;
+    right: 0;
+    opacity: 0.2;
+    transform: none;
+  }
+  .chat-sheet.is-thinking .kitt-scanner::after {
+    display: none;
+  }
+}
+

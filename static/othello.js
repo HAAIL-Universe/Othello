@@ -8721,3 +8721,33 @@
 
     // ===== INITIALIZATION =====
     // Boot sequence (bootUnified) handles auth + data fetches
+
+// Phase 4: Hook scanner to existing status
+(function() {
+  const statusEl = document.getElementById('status');
+  // Use a more generic selector or id if available, but users instruction identified .chat-sheet in HTML
+  // We need to wait for DOM maybe? No, script is at end of body.
+  const chatSheet = document.querySelector('.chat-sheet');
+  
+  if (!statusEl || !chatSheet) {
+    console.warn('[Othello UI] Scanner init skipped: elements not found.');
+    return;
+  }
+
+  const observer = new MutationObserver(() => {
+    const text = (statusEl.textContent || '').toLowerCase();
+    // Signal 'is-thinking' if text contains active keywords and not just 'Online'/'Offline'
+    // Keywords based on codebase grep: Thinking, Saving, Updating, Dismissing, Adding, Preparing
+    const activeKeywords = ['thinking', 'working', 'saving', 'updating', 'dismissing', 'adding', 'preparing'];
+    const isThinking = activeKeywords.some(k => text.includes(k));
+    
+    if (isThinking) {
+      chatSheet.classList.add('is-thinking');
+    } else {
+      chatSheet.classList.remove('is-thinking');
+    }
+  });
+
+  observer.observe(statusEl, { childList: true, characterData: true, subtree: true });
+})();
+
