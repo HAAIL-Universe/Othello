@@ -100,7 +100,7 @@
     <!-- TAB NAVIGATION -->
     <nav class="tab-bar">
       <button class="tab active" data-view="today-planner" id="planner-tab">
-        <span class="tab-label">Today</span>
+        <span class="tab-label">Planner</span>
         <span class="tab-badge hidden" id="planner-tab-badge"></span>
       </button>
       <button class="tab" data-view="goals" id="goals-tab">
@@ -111,6 +111,12 @@
         <span class="tab-label">Insights</span>
         <span class="tab-badge hidden" id="insights-tab-badge"></span>
       </button>
+
+      <!-- Planner Sub-Menu -->
+      <div id="planner-menu" class="planner-menu hidden">
+          <button data-subview="today" class="planner-menu-item active">Today</button>
+          <button data-subview="routine" class="planner-menu-item">Routine</button>
+      </div>
     </nav>
 
     <!-- FOCUS RIBBON (shown when a goal is active in Chat view) -->

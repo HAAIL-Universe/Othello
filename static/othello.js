@@ -3560,6 +3560,9 @@
       const isOpen = typeof show === 'boolean' ? show : !globalChatOverlay.classList.contains('open');
       globalChatOverlay.classList.toggle('open', isOpen);
       
+      // Directive: Hide FAB when open (via body class)
+      document.body.classList.toggle('chat-open', isOpen);
+      
       if (globalChatFab) {
          globalChatFab.classList.toggle('active', isOpen);
       }
@@ -3668,7 +3671,10 @@
       // Update tabs
       if (!tabs || !tabs.length) return;
       tabs.forEach(tab => {
-        if (tab.dataset.view === viewName) {
+        const target = tab.dataset.view;
+        // Planner tab stays active for both planner subviews
+        const isPlannerActive = (viewName === 'today-planner' || viewName === 'routine-planner') && target === 'today-planner';
+        if (tab.dataset.view === viewName || isPlannerActive) {
           tab.classList.add("active");
         } else {
           tab.classList.remove("active");
@@ -3716,9 +3722,51 @@
     if (tabs && tabs.length) {
       tabs.forEach(tab => {
         tab.addEventListener("click", () => {
+          const view = tab.dataset.view;
+          const plannerMenu = document.getElementById('planner-menu');
+
+          // Planner Tab Special Handling (Submenu)
+          if (view === 'today-planner') {
+              if (tab.classList.contains('active')) {
+                   if (plannerMenu) plannerMenu.classList.toggle('hidden');
+              } else {
+                   if (plannerMenu) plannerMenu.classList.add('hidden');
+                   switchView('today-planner');
+              }
+              return;
+          }
+
+          if (plannerMenu) plannerMenu.classList.add('hidden');
           switchView(tab.dataset.view);
         });
       });
+    }
+    
+    // Planner Menu Handling
+    const plannerMenu = document.getElementById('planner-menu');
+    if (plannerMenu) {
+        plannerMenu.addEventListener('click', (e) => {
+            const btn = e.target.closest('.planner-menu-item');
+            if (btn) {
+                const sub = btn.dataset.subview;
+                if (sub === 'today') switchView('today-planner');
+                if (sub === 'routine') switchView('routine-planner');
+                plannerMenu.classList.add('hidden');
+                
+                // Update active state in menu
+                Array.from(plannerMenu.children).forEach(c => c.classList.remove('active'));
+                btn.classList.add('active');
+            }
+        });
+        
+        // Close menu when clicking outside
+        document.addEventListener('click', (e) => {
+            if (!plannerMenu.classList.contains('hidden') && 
+                !e.target.closest('.planner-menu') && 
+                !e.target.closest('#planner-tab')) {
+                plannerMenu.classList.add('hidden');
+            }
+        });
     }
 
     document.addEventListener("visibilitychange", () => {
@@ -4378,10 +4426,15 @@
 
       // Scroll to latest message
       requestAnimationFrame(() => {
+        // Fix: Scroll #chat-log if in overlay mode, as it's the scroll container
+        const chatLog = document.getElementById("chat-log");
         const chatView = document.getElementById("chat-view");
-        if (chatView) {
-          chatView.scrollTo({
-            top: chatView.scrollHeight,
+        // Prefer chat-log if it exists, otherwise chat-view
+        const scroller = chatLog || chatView;
+        
+        if (scroller) {
+          scroller.scrollTo({
+            top: scroller.scrollHeight,
             behavior: "smooth"
           });
         }
