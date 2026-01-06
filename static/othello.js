@@ -4574,7 +4574,7 @@
     }
 
     async function createGoalFromSuggestion(opts) {
-      const { title, description, clientMessageId, statusEl, panelEl, onSuccess, suggestionId } = opts;
+      const { title, description, clientMessageId, statusEl, panelEl, onSuccess, suggestionId, payload } = opts;
       const trimmedTitle = (title || "").trim();
       const trimmedDesc = (description || "").trim();
       if (trimmedTitle.length < 3) {
@@ -4584,78 +4584,34 @@
       disablePanelButtons(panelEl, true);
       if (statusEl) statusEl.textContent = "Saving goal...";
       try {
-        let goal = null;
-        let goalId = null;
-        if (suggestionId) {
-          const payload = await v1Request(
-            `/v1/suggestions/${suggestionId}/accept`,
-            {
-              method: "POST",
-              headers: {"Content-Type": "application/json"},
-              credentials: "include",
-              body: JSON.stringify({
-                reason: "confirm",
-                payload: {
-                  title: trimmedTitle,
-                  body: trimmedDesc,
-                  description: trimmedDesc
-                }
-              })
-            },
-            "Confirm goal suggestion"
-          );
-          const results = payload && payload.data && Array.isArray(payload.data.results)
-            ? payload.data.results
-            : [];
-          const result = results[0] || null;
-          goal = result && result.goal ? result.goal : null;
-          goalId = goal && typeof goal.id === "number" ? goal.id : null;
-        } else {
-          const res = await fetch(GOALS_API, {
-            method: "POST",
-            headers: {"Content-Type": "application/json"},
-            credentials: "include",
-            body: JSON.stringify({
-              title: trimmedTitle,
-              description: trimmedDesc,
-              source_client_message_id: clientMessageId
-            })
-          });
-          if (!res.ok) {
-            const contentType = res.headers.get("content-type") || "";
-            let errMsg = "Unable to create goal.";
-            if (contentType.includes("application/json")) {
-              const data = await res.json();
-              errMsg = (data && (data.message || data.error)) || errMsg;
-            }
-            if (statusEl) statusEl.textContent = errMsg;
-            disablePanelButtons(panelEl, false);
-            return false;
-          }
-          const data = await res.json();
-          goal = data && data.goal ? data.goal : null;
-          goalId = goal && typeof goal.id === "number" ? goal.id : data.goal_id;
+        // Phase 21: Direct Chat Action (No v1/create)
+        // If it's a virtual suggestion (no real ID) or even if it is, we prefer the chat action route
+        // to keep the conversation in sync.
+        
+        // Use global sendMessage if available (it should be)
+        if (typeof sendMessage === 'function') {
+             await sendMessage("", {
+                 ui_action: "create_goal_from_message",
+                 source_message_id: clientMessageId,
+                 title: trimmedTitle,
+                 description: trimmedDesc,
+                 payload: payload || (othelloState.goalIntentSuggestions[clientMessageId] ? othelloState.goalIntentSuggestions[clientMessageId].payload : null)
+             });
+             // The API will return 'focus_goal' action which we handle in socket message
+             return true;
         }
-        clearGoalIntentUI(clientMessageId);
-        showToast("Saved as goal");
-        await refreshGoals();
-        if (goalId != null) {
-          setActiveGoal(goalId);
-          if (typeof onSuccess === "function") {
-            await onSuccess(goalId);
-          }
-          if (othelloState.currentView === "goals") {
-            showGoalDetail(goalId);
-          }
-        }
-        return true;
-      } catch (err) {
-        console.error("[Othello UI] create goal failed:", err);
-        if (statusEl) statusEl.textContent = err && err.message ? err.message : "Network error.";
+
+        // Fallback (shouldn't be reached in normal flow)
+        console.warn("sendMessage not found, falling back to legacy create");
+        return false;
+      } catch (e) {
+        console.error("Failed to create goal", e);
+        if (statusEl) statusEl.textContent = "Error saving goal.";
         disablePanelButtons(panelEl, false);
         return false;
       }
     }
+
 
     async function addNoteToFocusedGoal(opts) {
       const { text, clientMessageId, statusEl, panelEl } = opts;

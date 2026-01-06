@@ -1120,7 +1120,7 @@ def _generate_goal_draft_payload(user_input: str) -> Dict[str, Any]:
         "Required keys:\n"
         "- title: string (concise goal title)\n"
         "- target_days: integer or null (number of days to achieve)\n"
-        "- steps: array of strings (actionable steps)\n"
+        "- steps: array of strings (actionable steps) - keep these high-level and few (3-5 max). If the user request is vague, provide only 1-2 starting steps.\n"
         "- body: string or null (additional context/description)\n"
         "Return ONLY valid JSON."
     )
@@ -1818,59 +1818,32 @@ def _attach_goal_intent_suggestion(
             logger.info("API: Goal intent detected but input is vague (%d chars). Skipping automatic drafting.", len(raw_text))
             return False
 
-        # Phase 21: Generating full draft immediately to persist seed steps
+        # Phase 21: No-Persistence "Goal Candidate" (Voice-First)
+        # We do NOT create a draft in the DB. We just return metadata so the UI can show the ? marker.
+        # When confirmed, the UI will call create_goal_from_message.
+        
         draft_payload = _generate_goal_draft_payload(raw_text)
+        title = draft_payload.get("title") or suggestion.get("title_suggestion") or _extract_goal_title_suggestion(raw_text) or "New Goal"
+        body = draft_payload.get("body") or suggestion.get("body_suggestion") or raw_text
         
-        # Ensure title fallback
-        if not draft_payload.get("title"):
-             draft_payload["title"] = suggestion.get("title_suggestion") or _extract_goal_title_suggestion(raw_text) or "New Goal"
-
-        payload = draft_payload
-        payload["description"] = payload.get("body")
-        payload["confidence"] = suggestion.get("confidence")
-        
-        title = payload["title"] # Required for deduplication below
-
-        provenance = {
-            "source": "api_message_goal_intent",
-            "request_id": request_id,
+        # Virtual Suggestion (No ID, Not in DB)
+        # We attach this to the response so the UI knows to offer "Create Goal"
+        # The 'suggestion_id' is deliberately None.
+        suggestion_data = {
+            "title_suggestion": title,
+            "body_suggestion": body,
+            "confidence": suggestion.get("confidence"),
             "client_message_id": client_message_id,
+            "is_virtual": True,
+            # Pass full payload for the UI to use if it wants
+            "payload": draft_payload
         }
         
-        # Deduplication: check for existing pending goal suggestions with same title
-        existing_dup = None
-        try:
-            pending_goals = suggestions_repository.list_suggestions(user_id=user_id, kind="goal", status="pending")
-            norm_title = (title or "").strip().lower()
-            for p in pending_goals:
-                p_payload = p.get("payload") or {}
-                p_title = (p_payload.get("title") or "").strip().lower()
-                if p_title == norm_title:
-                    existing_dup = p
-                    break
-        except Exception:
-            pass
+        # We modify the suggestion dict passed by reference so the caller can inject it into meta
+        suggestion.update(suggestion_data)
+        
+        return True
 
-        try:
-            if existing_dup:
-                created = existing_dup
-                logger.info("API: Returning existing draft for duplicate title '%s'", title)
-            else:
-                created = suggestions_repository.create_suggestion(
-                    user_id=user_id,
-                    kind="goal",
-                    payload=payload,
-                    provenance=provenance,
-                )
-            if isinstance(created, dict):
-                suggestion_id = created.get("id")
-        except Exception:
-            logger.warning(
-                "API: goal suggestion create failed request_id=%s client_message_id=%s",
-                request_id,
-                client_message_id,
-                exc_info=True,
-            )
     if suggestion_id is not None:
         suggestion = dict(suggestion)
         suggestion["suggestion_id"] = suggestion_id
@@ -4294,6 +4267,53 @@ def handle_message():
                 return user_error
             user_id = None
 
+        # Phase 21: Manual Create Goal (Voice-First Confirmation)
+        if user_id and ui_action == "create_goal_from_message":
+             source_message_id = data.get("source_message_id")
+             override_title = data.get("title")
+             override_desc = data.get("description")
+             
+             final_title = (override_title or "New Goal").strip()
+             final_body = (override_desc or "").strip()
+             final_steps = []
+             
+             try:
+                 # If we have a payload passed (e.g. from the virtual suggestion on client), use it
+                 passed_payload = data.get("payload")
+                 if isinstance(passed_payload, dict):
+                     final_title = passed_payload.get("title") or final_title
+                     final_body = passed_payload.get("body") or final_body
+                     final_steps = passed_payload.get("steps") or []
+                 
+                 # Create the goal
+                 goal_id = goals_repository.create_goal(
+                     user_id=user_id,
+                     title=final_title,
+                     description=final_body,
+                     target_days=None 
+                 )
+                 
+                 # Add steps if present
+                 if goal_id and final_steps:
+                     for step in final_steps:
+                         goals_repository.add_goal_step(user_id, goal_id, str(step))
+                         
+                 return jsonify({
+                     "reply": f"Goal '{final_title}' created.",
+                     "goal_id": goal_id,
+                     "ui_action_call": "focus_goal",
+                     "ui_action_payload": {"goal_id": goal_id},
+                     "redirect_to": f"/goals/{goal_id}", 
+                     "agent_status": {"planner_active": True},
+                     "request_id": request_id
+                 })
+             except Exception as e:
+                 logger.error("Failed to create goal from message: %s", e)
+                 return jsonify({
+                     "reply": "I couldn't create the goal right now.",
+                     "request_id": request_id
+                 })
+
         # Draft Focus: Confirm Goal Intent
         # Tightened routing:
         # A) data.ui_action == "confirm_draft"
@@ -4436,6 +4456,29 @@ def handle_message():
                 "reply": "Could not dismiss draft.",
                 "request_id": request_id
             })
+
+        # Phase 21: Danger Zone - Clear All Pending Drafts
+        if user_id and data.get("ui_action") == "clear_pending_drafts":
+            try:
+                # Assuming simple SQL delete via direct connection or repo method if exists.
+                # Repo doesn't have delete_all, so we might iterate or use raw SQL.
+                # Let's iterate for safety/audit (though slower).
+                pending = suggestions_repository.list_suggestions(user_id, status="pending", kind="goal")
+                count = 0
+                for p in pending:
+                    suggestions_repository.update_suggestion_status(user_id, p["id"], "dismissed", decided_reason="user_clear_all")
+                    count += 1
+                return jsonify({
+                    "reply": f"Cleared {count} pending drafts.",
+                    "cleared_count": count,
+                    "request_id": request_id
+                })
+            except Exception as e:
+                logger.error("Failed to clear drafts: %s", e)
+                return jsonify({
+                    "reply": "Failed to clear drafts.",
+                    "request_id": request_id
+                })
 
         # Draft Focus: Create Draft (Voice-First)
         # Trigger: "create a goal draft", "start a goal draft", etc.
