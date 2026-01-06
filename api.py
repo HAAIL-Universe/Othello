@@ -4306,7 +4306,13 @@ def handle_message():
                      },
                      user_id=user_id
                  )
-                 goal_id = created_goal.get("id")
+                 
+                 # Robust ID extraction (Phase 22.1 Hotfix)
+                 if isinstance(created_goal, dict):
+                     goal_id = created_goal.get("id")
+                 else:
+                     # Fallback if repository returns int ID directly
+                     goal_id = created_goal
                  
                  # Add steps if present
                  if goal_id and final_steps:

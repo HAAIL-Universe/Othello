@@ -1,4 +1,4 @@
-# Cycle Status: COMPLETE (Phase 22.1 - Virtual Goal Apply)
+# Cycle Status: COMPLETE (Phase 22.1 - Virtual Goal Apply Hotfix)
 
 ## Todo Ledger
 Planned:
@@ -6,9 +6,11 @@ Planned:
 - [x] Phase 22.1: Frontend: Route createGoalFromSuggestion with context.
 - [x] Phase 22.1: Backend: Accept virtual inputs in create_goal_from_message.
 - [x] Phase 22.1: Backend: Append goal event for context seed.
+- [x] Phase 22.1 Hotfix: Robust goal_id extraction in api.py.
 Completed:
 - [x] static/othello.js: Implemented context collection and updated payload.
 - [x] api.py: Handled goal_context, virtual payload, and event logging.
+- [x] api.py: Added type check for created_goal return value.
 Remaining:
 - [ ] Done.
 
@@ -18,11 +20,12 @@ Stop and commit.
 ## Root Cause Anchors
 - static/othello.js:4577 (Added collectGoalContext and updated createGoalFromSuggestion)
 - api.py:4281 (Updated create_goal_from_message to accept context and virtual payload)
+- api.py:4315 (Hotfix for robust goal_id extraction)
 
 ## Full Unified Diff
 ```diff
 diff --git a/api.py b/api.py
-index 661a07fa..11972ec1 100644
+index 661a07fa..89173fe2 100644
 --- a/api.py
 +++ b/api.py
 @@ -26,6 +26,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
@@ -41,7 +44,7 @@ index 661a07fa..11972ec1 100644
               override_title = data.get("title")
               override_desc = data.get("description")
               
-@@ -4296,17 +4298,34 @@ def handle_message():
+@@ -4296,17 +4298,39 @@ def handle_message():
                       final_steps = passed_payload.get("steps") or []
                   
                   # Create the goal
@@ -58,7 +61,13 @@ index 661a07fa..11972ec1 100644
 +                     },
 +                     user_id=user_id
                   )
-+                 goal_id = created_goal.get("id")
++                 
++                 # Robust ID extraction (Phase 22.1 Hotfix)
++                 if isinstance(created_goal, dict):
++                     goal_id = created_goal.get("id")
++                 else:
++                     # Fallback if repository returns int ID directly
++                     goal_id = created_goal
                   
                   # Add steps if present
                   if goal_id and final_steps:
@@ -81,7 +90,7 @@ index 661a07fa..11972ec1 100644
                           
                   return jsonify({
                       "reply": f"Goal '{final_title}' created.",
-@@ -4320,7 +4339,7 @@ def handle_message():
+@@ -4320,7 +4344,7 @@ def handle_message():
               except Exception as e:
                   logger.error("Failed to create goal from message: %s", e)
                   return jsonify({
