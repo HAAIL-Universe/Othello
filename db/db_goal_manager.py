@@ -258,11 +258,14 @@ class DbGoalManager:
             payload = d.get("payload") or {}
             # Ensure it looks like a goal so the UI renders it
             # We prefix ID with 'draft:' so UI can distinguish action clicks
+            created_at_val = d.get("created_at")
+            created_at_str = created_at_val.isoformat() if hasattr(created_at_val, 'isoformat') else str(created_at_val or "")
+            
             draft_entries.append({
                 "id": f"draft:{d['id']}",
                 "text": payload.get("title") or "New Draft",
                 "deadline": f"{payload.get('target_days', 7)} days",
-                "created_at": d.get("created_at").isoformat(),
+                "created_at": created_at_str,
                 "draft_text": payload.get("body"), # Show body as draft text
                 "checklist": payload.get("steps", []),
                 "is_draft": True,

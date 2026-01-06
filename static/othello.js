@@ -5668,7 +5668,22 @@
         console.log("[Othello UI] Sending plain-message payload:", text);
         
         // Fallback to currently viewed goal if no active goal is set
-        const effectiveGoalId = othelloState.activeGoalId || othelloState.currentDetailGoalId || null;
+        let effectiveGoalId = othelloState.activeGoalId || othelloState.currentDetailGoalId || null;
+        if (effectiveGoalId && String(effectiveGoalId).startsWith("draft:")) {
+            effectiveGoalId = null;
+        }
+
+        // Infer draft context if viewing a draft
+        let draftId = othelloState.activeDraft ? othelloState.activeDraft.draft_id : null;
+        let draftType = othelloState.activeDraft ? othelloState.activeDraft.draft_type : null;
+        
+        if (!draftId && othelloState.currentDetailGoalId && String(othelloState.currentDetailGoalId).startsWith("draft:")) {
+            const parts = String(othelloState.currentDetailGoalId).split(":");
+            if (parts.length > 1) {
+                 draftId = parseInt(parts[1], 10);
+                 draftType = "goal";
+            }
+        }
 
         const payload = { 
             message: text,
@@ -5679,8 +5694,8 @@
             current_view: othelloState.currentView,
             client_message_id: clientMessageId,
             conversation_id: othelloState.activeConversationId,
-            draft_id: othelloState.activeDraft ? othelloState.activeDraft.draft_id : null,
-            draft_type: othelloState.activeDraft ? othelloState.activeDraft.draft_type : null,
+            draft_id: draftId,
+            draft_type: draftType,
             ...extraData
         };
         console.debug("[Othello UI] Sending /api/message payload:", payload);
@@ -6805,6 +6820,9 @@
 
     async function fetchGoalDetail(goalId) {
       if (!goalId) return;
+      // Guard: Do not fetch drafts from the goals API
+      if (String(goalId).startsWith("draft:")) return;
+
       try {
         const resp = await fetch(`/api/goals/${goalId}`, { credentials: "include" });
         if (resp.status === 401 || resp.status === 403) {
@@ -7045,13 +7063,9 @@
             
             // Handle draft IDs (e.g. "draft:123")
             if (goalId.startsWith("draft:")) {
-                 // For drafts, we want to simply trigger the clarification intent without a goal_id context?
-                 // Or pass the draft_id.
-                 // ui_action "clarify_goal_intent" in api.py just sets prompt text.
-                 // It relies on current context.
-                 // If we are looking at a draft, we should probably just send the text.
+                 const realId = goalId.split(":")[1];
                  hideGoalDetail();
-                 sendMessage("", { ui_action: "clarify_goal_intent" }); 
+                 sendMessage("", { ui_action: "clarify_goal_intent", draft_id: realId }); 
                  return;
             }
 

@@ -4397,7 +4397,30 @@ def handle_message():
                     # 1. Try deterministic edit
                     updated_payload, handled, reply_suffix = _apply_goal_draft_deterministic_edit(current_payload, user_input)
                     
-                    # Diff Logic (Step Diff)
+                    # 2. Fallback to LLM if not handled (Semantic Edit)
+                    if not handled:
+                        updated_payload = _patch_goal_draft_payload(current_payload, user_input)
+                        reply_suffix = "Updated the draft."
+                        
+                        # Auto-Generate Logic (Voice Flow) - Tightened
+                        # Only auto-generate if we previously flagged this draft as needing seed steps (via clarification)
+                        # OR if it's very clearly an initial elaboration.
+                        needs_seed_steps = updated_payload.get("needs_seed_steps")
+                        if not updated_payload.get("steps"):
+                             new_body = updated_payload.get("body") or ""
+                             # Explicitly check the flag set by clarify_goal_intent
+                             if needs_seed_steps and len(new_body) > 5:
+                                 updated_payload = _generate_draft_steps_payload(updated_payload)
+                                 # Clear the flag
+                                 updated_payload.pop("needs_seed_steps", None)
+                                 steps_count = len(updated_payload.get("steps", []))
+                                 if steps_count > 0:
+                                     reply_suffix += f" I've also auto-generated {steps_count} starting steps for you."
+                             elif needs_seed_steps:
+                                 # Keep the flag if body is too short
+                                 pass
+
+                    # Diff Logic (Step Diff) - Computed AFTER all updates
                     diff_meta = {}
                     before_steps = current_payload.get("steps", []) or []
                     after_steps = updated_payload.get("steps", []) or []
@@ -4405,6 +4428,8 @@ def handle_message():
                     if len(before_steps) != len(after_steps) or before_steps != after_steps:
                         # Simple diff detection
                         diff_meta["goal_title"] = updated_payload.get("title", "Goal")
+                        diff_meta["steps_changed"] = True
+                        
                         # Try to find specific index change
                         if len(before_steps) == len(after_steps):
                             for i, (b, a) in enumerate(zip(before_steps, after_steps)):
@@ -4414,36 +4439,23 @@ def handle_message():
                                     diff_meta["after_text"] = a
                                     break
                     
-                    # 2. Fallback to LLM if not handled (Semantic Edit)
-                    if not handled:
-                        updated_payload = _patch_goal_draft_payload(current_payload, user_input)
-                        reply_suffix = "Updated the draft."
-                        
-                        # Auto-Generate Logic (Voice Flow)
-                        # If description likely changed (not just steps), and steps are empty, auto-generate.
-                        # Heuristic: If we are here, user said something that wasn't a command.
-                        # If steps are empty, assuming it's an elaboration/answer.
-                        if not updated_payload.get("steps"):
-                             # Check if body changed, or just safe assumption: if 0 steps, generate.
-                             # But avoid generating if user just said "No".
-                             # Let's assume meaningful update if body length > 5
-                             new_body = updated_payload.get("body") or ""
-                             if len(new_body) > 5:
-                                 updated_payload = _generate_draft_steps_payload(updated_payload)
-                                 steps_count = len(updated_payload.get("steps", []))
-                                 if steps_count > 0:
-                                     reply_suffix += f" I've also auto-generated {steps_count} starting steps for you."
-
                     # Update DB
                     updated_suggestion = suggestions_repository.update_suggestion_payload(user_id, draft_id, updated_payload)
                     
                     title = updated_payload.get("title", "Goal")
                     steps_count = len(updated_payload.get("steps", []))
                     
-                    # Format Response with Diff
+                    # Format Response with Diff - Safe
                     reply_msg = f"{reply_suffix}"
-                    if diff_meta:
-                        reply_msg = f"{diff_meta['goal_title']}\nUpdated step {diff_meta['step_index']}\nBefore: {diff_meta['before_text']}\nAfter: {diff_meta['after_text']}"
+                    if diff_meta.get("steps_changed"):
+                        if diff_meta.get("step_index") and diff_meta.get("before_text") and diff_meta.get("after_text"):
+                            reply_msg = f"{diff_meta.get('goal_title', 'Goal')}\nUpdated step {diff_meta['step_index']}\nBefore: {diff_meta['before_text']}\nAfter: {diff_meta['after_text']}"
+                        else:
+                            # Steps added/removed or multiple changes
+                            # Limit to first 3 steps in summary to keep it concise? Or just count.
+                            step_list_str = ", ".join([f"{i+1}. {s}" for i, s in enumerate(after_steps[:3])])
+                            if len(after_steps) > 3: step_list_str += "..."
+                            reply_msg = f"{diff_meta.get('goal_title', 'Goal')}\nUpdated steps.\nNow: {step_list_str}"
                     elif not reply_msg.strip():
                          reply_msg = f"Draft: '{title}' ({steps_count} steps)."
                     else:
@@ -4649,6 +4661,18 @@ def handle_message():
 
         # Phase 18: Intent Clarification
         if user_id and ui_action == "clarify_goal_intent":
+             # Phase 20: If confirming a draft, flag it for auto-seed steps
+             if data.get("draft_id"):
+                 try:
+                     did = int(data.get("draft_id"))
+                     d = suggestions_repository.get_suggestion(user_id, did)
+                     if d and d.get("status") == "pending":
+                         p = d.get("payload", {})
+                         p["needs_seed_steps"] = True
+                         suggestions_repository.update_suggestion_payload(user_id, did, p)
+                 except (ValueError, TypeError):
+                     pass
+
              # Force the agent to ask clarifying questions
              user_input = "Please ask me 1-3 targeted clarifying questions to help me refine the intent of this goal. Be concise."
 
