@@ -87,17 +87,6 @@
       <div class="brand">
         <div class="brand-row">
           <div class="brand-title">Othello</div>
-          <div class="mode-switch">
-            <button class="mode-pill" id="mode-toggle" aria-haspopup="listbox" aria-expanded="false">
-              <span id="current-mode-label">Companion Chat</span>
-              <span class="chevron">▼</span>
-            </button>
-            <div class="mode-dropdown" id="mode-dropdown" role="listbox">
-              <button class="mode-option" data-mode="companion" role="option">Companion Chat</button>
-              <button class="mode-option" data-mode="today" role="option">Today Planner</button>
-              <button class="mode-option" data-mode="routine" role="option">Routine Planner</button>
-            </div>
-          </div>
         </div>
         <div class="brand-subtitle" id="mode-subtitle">Personal Goal Architect</div>
       </div>
@@ -335,7 +324,11 @@
   <div id="global-chat-overlay" class="global-chat-overlay">
     <div class="chat-sheet">
       <div class="chat-sheet__header">
-        <div style="font-weight: 700;">Companion Chat</div>
+        <select id="chat-context-selector" class="chat-context-selector">
+          <option value="companion">Companion Chat</option>
+          <option value="planner">Daily Plan Engine</option>
+          <option value="routine">Routine Coach</option>
+        </select>
         <button id="chat-back-btn" class="chat-back-btn">×</button>
       </div>
 

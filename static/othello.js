@@ -813,6 +813,7 @@
     const othelloState = {
       currentView: "today-planner",
       currentMode: "today", // companion | today | routine
+      manualChannelOverride: null, // Phase 5: For Dialogue Selector
       goals: [],
       activeGoalId: null,
       activeConversationId: null, // New Chat support
@@ -3552,6 +3553,7 @@
     const globalChatOverlay = document.getElementById('global-chat-overlay');
     const globalChatFab = document.getElementById('global-chat-fab');
     const chatBackBtn = document.getElementById('chat-back-btn');
+    const chatContextSelector = document.getElementById('chat-context-selector');
 
     function toggleChatOverlay(show) {
       if (!globalChatOverlay) return;
@@ -3559,18 +3561,24 @@
       globalChatOverlay.classList.toggle('open', isOpen);
       
       if (globalChatFab) {
-         // Keep FAB visible or toggle dependent on UX preference.
          globalChatFab.classList.toggle('active', isOpen);
       }
 
       if (isOpen) {
-        // Refresh chat context based on the underlying view
+        // Phase 5: Initialize selector based on current effective channel
+        // Reset override when opening (to match context), unless we want persistence?
+        // Let's reset to ensure "context sensitive" default behavior.
+        othelloState.manualChannelOverride = null;
+
         const channel = effectiveChannelForView({ 
             currentView: othelloState.currentView, 
             currentMode: othelloState.currentMode 
         });
         
-        // Update header logic or visual cue could go here
+        if (chatContextSelector) {
+            chatContextSelector.value = channel;
+        }
+
         console.log(`[Othello UI] Opened chat overlay. Context: ${channel} (View: ${othelloState.currentView})`);
         
         loadChatHistory(); // Triggers fetch for the effective channel
@@ -3579,6 +3587,25 @@
         const ui = document.getElementById('user-input');
         if (ui) ui.focus();
       }
+    }
+    
+    // Phase 5: Handle selector changes
+    if (chatContextSelector) {
+        chatContextSelector.addEventListener('change', (e) => {
+            const newChannel = e.target.value;
+            console.log(`[Othello UI] Switching chat context to: ${newChannel}`);
+            
+            // Force reload chat history with new channel
+            // Note: We need to make sure effectiveChannelForView respects this override
+            // OR we just pass the channel directly to loadChatHistory if we refactor it.
+            // But strict state management suggests updating the state.
+            
+            // However, effectiveChannelForView derives from View/Mode. 
+            // We should use an override state.
+            othelloState.manualChannelOverride = newChannel;
+            
+            loadChatHistory();
+        });
     }
 
     if (globalChatFab) {
@@ -4134,6 +4161,11 @@
     }
 
     function effectiveChannelForView({ currentView, currentMode }) {
+      // Phase 5: Check manual override first
+      if (othelloState.manualChannelOverride) {
+          return othelloState.manualChannelOverride;
+      }
+      
       const view = (currentView || "").toLowerCase();
       // Phase 4: Route based on explicit views, falling back to mode if needed (though modes are deprecated)
       if (view === "today-planner") return "planner"; // Maps to 'planner' context (originally 'today' mode)
