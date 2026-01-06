@@ -1208,6 +1208,8 @@ def _patch_goal_draft_payload(current_payload: Dict[str, Any], user_instruction:
         "You are a goal editing engine. Update the existing goal draft JSON based on the user's instruction.\n"
         "Return the FULL updated JSON object with keys: title, target_days, steps, body.\n"
         "Do not lose existing information unless instructed to change it.\n"
+        "Crucial: If the user provides details, answers, or context (e.g., 'It is for my health'), update the 'body' string with this intent info.\n"
+        "Do NOT set step 1 unless explicitly asked to add a step.\n"
         "Return ONLY valid JSON."
     )
     
@@ -4395,19 +4397,61 @@ def handle_message():
                     # 1. Try deterministic edit
                     updated_payload, handled, reply_suffix = _apply_goal_draft_deterministic_edit(current_payload, user_input)
                     
-                    # 2. Fallback to LLM if not handled
+                    # Diff Logic (Step Diff)
+                    diff_meta = {}
+                    before_steps = current_payload.get("steps", []) or []
+                    after_steps = updated_payload.get("steps", []) or []
+                    
+                    if len(before_steps) != len(after_steps) or before_steps != after_steps:
+                        # Simple diff detection
+                        diff_meta["goal_title"] = updated_payload.get("title", "Goal")
+                        # Try to find specific index change
+                        if len(before_steps) == len(after_steps):
+                            for i, (b, a) in enumerate(zip(before_steps, after_steps)):
+                                if b != a:
+                                    diff_meta["step_index"] = i + 1
+                                    diff_meta["before_text"] = b
+                                    diff_meta["after_text"] = a
+                                    break
+                    
+                    # 2. Fallback to LLM if not handled (Semantic Edit)
                     if not handled:
                         updated_payload = _patch_goal_draft_payload(current_payload, user_input)
                         reply_suffix = "Updated the draft."
-                    
+                        
+                        # Auto-Generate Logic (Voice Flow)
+                        # If description likely changed (not just steps), and steps are empty, auto-generate.
+                        # Heuristic: If we are here, user said something that wasn't a command.
+                        # If steps are empty, assuming it's an elaboration/answer.
+                        if not updated_payload.get("steps"):
+                             # Check if body changed, or just safe assumption: if 0 steps, generate.
+                             # But avoid generating if user just said "No".
+                             # Let's assume meaningful update if body length > 5
+                             new_body = updated_payload.get("body") or ""
+                             if len(new_body) > 5:
+                                 updated_payload = _generate_draft_steps_payload(updated_payload)
+                                 steps_count = len(updated_payload.get("steps", []))
+                                 if steps_count > 0:
+                                     reply_suffix += f" I've also auto-generated {steps_count} starting steps for you."
+
                     # Update DB
                     updated_suggestion = suggestions_repository.update_suggestion_payload(user_id, draft_id, updated_payload)
                     
                     title = updated_payload.get("title", "Goal")
                     steps_count = len(updated_payload.get("steps", []))
                     
+                    # Format Response with Diff
+                    reply_msg = f"{reply_suffix}"
+                    if diff_meta:
+                        reply_msg = f"{diff_meta['goal_title']}\nUpdated step {diff_meta['step_index']}\nBefore: {diff_meta['before_text']}\nAfter: {diff_meta['after_text']}"
+                    elif not reply_msg.strip():
+                         reply_msg = f"Draft: '{title}' ({steps_count} steps)."
+                    else:
+                         # Append summary if not a diff
+                         reply_msg += f" Draft: '{title}' ({steps_count} steps)."
+
                     response = {
-                        "reply": f"{reply_suffix} Draft: '{title}' ({steps_count} steps).",
+                        "reply": reply_msg,
                         "draft_context": {
                             "draft_id": draft_id,
                             "draft_type": "goal",

@@ -60,6 +60,13 @@ class LLMWrapper:
             with open(model_cache_path, "w") as f:
                 f.write(self.model)
 
+    def chat_completion(self, *args, **kwargs):
+        """
+        Adapter method to call current OpenAI client chat completions directly.
+        Fixes compatibility issues where code uses .chat_completion instead of .client.chat.completions.create.
+        """
+        return self.client.chat.completions.create(*args, **kwargs)
+
     def generate(
         self,
         prompt: str,

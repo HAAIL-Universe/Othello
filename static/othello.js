@@ -6477,24 +6477,41 @@
       othelloState.goals.forEach(goal => {
         const card = document.createElement("div");
         card.className = "goal-card";
+        if (goal.is_draft) {
+             card.classList.add("goal-card--draft");
+        }
         
         const isActive = goal.id === othelloState.activeGoalId;
         const updateCount = othelloState.goalUpdateCounts[goal.id] || 0;
 
+        let badge = "";
+        if (goal.is_draft) {
+             badge = '<div class="goal-card__badge" style="background:var(--accent-color);color:#000;">Draft</div>';
+        } else if (isActive) {
+             badge = '<div class="goal-card__badge">Active</div>';
+        }
+
         card.innerHTML = `
           <div class="goal-card__header">
             <div>
-              <div class="goal-card__id">Goal #${goal.id}</div>
-              <div class="goal-card__title">${formatMessageText(goal.text || "Untitled Goal")}</div>
+              <div class="goal-card__id">${goal.is_draft ? 'Draft' : 'Goal #' + goal.id}</div>
+              <div class="goal-card__title">${formatMessageText(goal.text || "Untitled")}</div>
             </div>
-            ${isActive ? '<div class="goal-card__badge">Active</div>' : ''}
+            ${badge}
           </div>
-          ${goal.deadline ? `<div class="goal-card__meta">Deadline: ${formatMessageText(goal.deadline)}</div>` : ''}
+          ${goal.deadline ? `<div class="goal-card__meta">Target: ${formatMessageText(goal.deadline)}</div>` : ''}
+          ${goal.is_draft ? `<div class="goal-card__meta">Seed Steps: ${(goal.checklist||[]).length}</div>` : ''}
           ${updateCount > 0 ? `<div class="goal-card__meta">${updateCount} update${updateCount !== 1 ? 's' : ''} this session</div>` : ''}
         `;
 
         card.addEventListener("click", () => {
-          showGoalDetail(goal.id);
+          if (goal.is_draft) {
+              // Open draft ribbon context directly? 
+              // Better: Show detail panel with draft info.
+              showGoalDetail(goal.id); 
+          } else {
+              showGoalDetail(goal.id);
+          }
         });
 
         goalsList.appendChild(card);
@@ -6820,7 +6837,57 @@
       othelloState.currentDetailGoalId = goalId;
 
       if (goal) {
-        renderGoalDetail(goal);
+        if (goal.is_draft) {
+             // Render Draft Detail
+             detailGoalId.textContent = "Draft";
+             detailGoalTitle.innerHTML = formatMessageText(goal.text || "New Draft");
+             let contentHtml = "";
+             
+             // Intent/Body
+             if (goal.draft_text) {
+                contentHtml += `
+                  <div class="detail-section">
+                    <div class="detail-section__title">Description / Intent</div>
+                    <div class="detail-section__body" style="white-space: pre-wrap;">${formatMessageText(goal.draft_text)}</div>
+                  </div>
+                  <div class="detail-actions" style="padding: 0 16px 16px 16px;">
+                    <button class="action-btn clarify-intent-btn" data-goal-id="${goal.id}" style="font-size: 0.9em; padding: 6px 12px; border: 1px solid var(--border-color); background: var(--bg-secondary); border-radius: 4px; cursor: pointer; display: flex; align-items: center; gap: 6px;">
+                       <span class="codicon codicon-question"></span> Clarify Intent
+                    </button>
+                  </div>
+                `;
+             }
+
+             // Steps
+             if (goal.checklist && goal.checklist.length > 0) {
+                 const stepsHtml = goal.checklist.map((step, idx) => {
+                    return `<div class="intent-item"><div class="intent-item__text">${idx + 1}. ${formatMessageText(step)}</div></div>`;
+                 }).join("");
+                  contentHtml += `
+                  <div class="detail-section">
+                    <div class="detail-section__title">Draft Steps</div>
+                    <div class="intent-list">${stepsHtml}</div>
+                  </div>`;
+             } else {
+                 contentHtml += `<div class="detail-section"><div class="detail-section__body" style="font-style:italic; opacity:0.7;">No steps generated yet. Use chat to "generate steps".</div></div>`;
+             }
+             
+             // Actions (Confirm/Dismiss wrappers handled by chat usually, but we can add buttons here if needed)
+             // Using data-draft-id for actions
+             const realId = goal.real_draft_id;
+             contentHtml += `
+               <div class="detail-section" style="margin-top:20px; border-top:1px solid var(--border-color); padding-top:10px;">
+                  <div style="display:flex; gap:10px;">
+                      <button onclick="sendMessage('', {ui_action:'confirm_draft', draft_id:${realId}})" class="commitment-btn">Confirm Goal</button>
+                      <button onclick="sendMessage('', {ui_action:'dismiss_draft', draft_id:${realId}})" style="background:var(--bg-secondary); border:1px solid var(--border-color); color:var(--text-color); padding:8px 16px; border-radius:4px; cursor:pointer;">Dismiss</button>
+                  </div>
+               </div>
+             `;
+
+             detailContent.innerHTML = contentHtml;
+        } else {
+             renderGoalDetail(goal);
+        }
       } else {
         detailGoalId.textContent = `Goal #${goalId}`;
         detailGoalTitle.textContent = "Loading...";
@@ -6832,7 +6899,10 @@
       }
 
       goalDetail.classList.add("visible");
-      fetchGoalDetail(goalId);
+      // Only fetch if it's a real goal, otherwise we have data in memory
+      if (!goal || !goal.is_draft) {
+          fetchGoalDetail(goalId);
+      }
     }
 
     async function archiveGoal(goalId) {
@@ -6970,9 +7040,21 @@
 
         const clarifyBtn = e.target.closest(".clarify-intent-btn");
         if (clarifyBtn) {
-            const goalId = clarifyBtn.getAttribute("data-goal-id");
+            let goalId = clarifyBtn.getAttribute("data-goal-id");
             if (!goalId) return;
             
+            // Handle draft IDs (e.g. "draft:123")
+            if (goalId.startsWith("draft:")) {
+                 // For drafts, we want to simply trigger the clarification intent without a goal_id context?
+                 // Or pass the draft_id.
+                 // ui_action "clarify_goal_intent" in api.py just sets prompt text.
+                 // It relies on current context.
+                 // If we are looking at a draft, we should probably just send the text.
+                 hideGoalDetail();
+                 sendMessage("", { ui_action: "clarify_goal_intent" }); 
+                 return;
+            }
+
             // Phase 18: Clarify Intent Action
             hideGoalDetail(); // Close detail to show chat
             sendMessage("", { ui_action: "clarify_goal_intent", goal_id: goalId });

@@ -1,22 +1,19 @@
-# Cycle Status: COMPLETE (Phase 18)
+# Cycle Status: COMPLETE (Phase 19)
 
 ## Todo Ledger
 Planned:
-- [x] Phase 18: Intent clarification + focus context + show seed steps bundle
+- [x] Phase 19: Fix LLMWrapper mismatch & bundle voice/UI improvements.
 Completed:
-- [x] Phase 18: Implemented 'Show Seed Steps' API lane.
-- [x] Phase 18: Injected Seed Steps into LLM Context (build_goal_context).
-- [x] Phase 18: Added 'Clarify Intent' button (static/othello.js).
+- [x] Fix: Added chat_completion adapter to LLMWrapper.
+- [x] Feat: Auto-generate steps after clarification/intent update.
+- [x] Feat: Map intent to ody in LLM prompts.
+- [x] Feat: Show pending drafts in GOALS tab (API & UI).
+- [x] Feat: Step edit diff formatting.
 Remaining:
 - [ ] Next phase tasks...
 
 ## Next Action
-Stop and commit refactor/ui-consolidation.
+Stop and commit.
 
-## Phase 18 Summary
-Features delivered:
-1. **Show Seed Steps**: Direct API access to goal checklist without LLM latency.
-2. **Focus Context**: Active goals now expose their seed steps to the planner LLM automatically.
-3. **Intent Clarification**: One-click prompt injection to ask clarifying questions.
-
-Files modified: api.py, db/db_goal_manager.py, static/othello.js.
+## Full Unified Diff
+(See git show for details)

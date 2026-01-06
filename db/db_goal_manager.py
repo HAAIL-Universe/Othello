@@ -18,7 +18,7 @@ from typing import List, Optional, Dict, Any, Union
 from datetime import datetime
 import logging
 
-from db import goals_repository
+from db import goals_repository, suggestions_repository
 from db.database import execute_and_fetch_one
 
 
@@ -237,14 +237,39 @@ class DbGoalManager:
     
     def list_goals(self, user_id: str) -> List[Dict[str, Any]]:
         """
-        Return all goals for the default user in legacy format.
+        Return all goals for the default user in legacy format, PLUS pending drafts.
         """
         uid = self._require_user_id(user_id)
+        
+        # 1. Fetch real goals
         db_goals = goals_repository.list_goals(uid, include_archived=False)
-        return [
+        goals = [
             self._db_to_legacy_format(uid, g, include_conversation=False)
             for g in db_goals
         ]
+        
+        # 2. Fetch pending goal drafts
+        drafts = suggestions_repository.list_suggestions(
+            user_id=uid, status="pending", kind="goal"
+        )
+        
+        draft_entries = []
+        for d in drafts:
+            payload = d.get("payload") or {}
+            # Ensure it looks like a goal so the UI renders it
+            # We prefix ID with 'draft:' so UI can distinguish action clicks
+            draft_entries.append({
+                "id": f"draft:{d['id']}",
+                "text": payload.get("title") or "New Draft",
+                "deadline": f"{payload.get('target_days', 7)} days",
+                "created_at": d.get("created_at").isoformat(),
+                "draft_text": payload.get("body"), # Show body as draft text
+                "checklist": payload.get("steps", []),
+                "is_draft": True,
+                "real_draft_id": d["id"]
+            })
+            
+        return draft_entries + goals
     
     def get_goal(
         self,
