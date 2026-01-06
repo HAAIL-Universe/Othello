@@ -773,8 +773,9 @@
     const statusEl = document.getElementById('status');
     const modeLabel = document.getElementById('current-mode-label');
     const modeSubtitle = document.getElementById('mode-subtitle');
-    const middleTab = document.getElementById('middle-tab');
-    const middleTabBadge = document.getElementById('middle-tab-badge');
+    const plannerTabBadge = document.getElementById('planner-tab-badge');
+    const goalsTabBadge = document.getElementById('goals-tab-badge');
+    const middleTabBadge = null; // Deprecated
     const insightsTabBadge = document.getElementById('insights-tab-badge');
     const focusRibbonTitle = document.getElementById('focus-ribbon-title');
     const viewFocusBtn = document.getElementById('view-focus-btn');
@@ -946,22 +947,29 @@
     }
 
     function updateTabBadges() {
-      const mode = othelloState.currentMode;
-      const badgeMap = {
-        companion: insightsCounts.goal_pending,
-        today: insightsCounts.plan_pending,
-        routine: insightsCounts.routine_pending,
-      };
-      const middleCount = badgeMap[mode] || 0;
-      if (middleTabBadge) {
-        if (middleCount > 0) {
-          middleTabBadge.textContent = middleCount;
-          middleTabBadge.classList.remove("hidden");
+      // Planner Tab Logic (Today)
+      const planCount = insightsCounts.plan_pending || 0;
+      if (plannerTabBadge) {
+        if (planCount > 0) {
+          plannerTabBadge.textContent = planCount;
+          plannerTabBadge.classList.remove("hidden");
         } else {
-          middleTabBadge.classList.add("hidden");
+          plannerTabBadge.classList.add("hidden");
         }
       }
 
+      // Goals Tab Logic
+      const goalCount = insightsCounts.goal_pending || 0;
+      if (goalsTabBadge) {
+        if (goalCount > 0) {
+          goalsTabBadge.textContent = goalCount;
+          goalsTabBadge.classList.remove("hidden");
+        } else {
+          goalsTabBadge.classList.add("hidden");
+        }
+      }
+
+      // Insights Tab Logic (Aggregated Total)
       const total = totalPendingInsights();
       if (insightsTabBadge) {
         if (total > 0) {
@@ -3668,12 +3676,9 @@
           opt.classList.toggle("active", opt.dataset.mode === mode);
         });
       }
+      
       const tabCfg = MODE_TAB_CONFIG[mode];
-      if (tabCfg && middleTab) {
-        const labelEl = middleTab.querySelector('.tab-label');
-        if (labelEl) labelEl.textContent = tabCfg.label;
-        middleTab.dataset.view = tabCfg.view;
-      }
+      // middleTab manipulation removed - tabs are now static.
 
       const allowed = MODE_ALLOWED_VIEWS[mode] || [];
       // Default to the primary view for the mode (Goals/Planner), never "chat" as main view

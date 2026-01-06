@@ -110,9 +110,13 @@
 
     <!-- TAB NAVIGATION -->
     <nav class="tab-bar">
-      <button class="tab active" data-view="goals" id="middle-tab">
+      <button class="tab active" data-view="today-planner" id="planner-tab">
+        <span class="tab-label">Today</span>
+        <span class="tab-badge hidden" id="planner-tab-badge"></span>
+      </button>
+      <button class="tab" data-view="goals" id="goals-tab">
         <span class="tab-label">Goals</span>
-        <span class="tab-badge hidden" id="middle-tab-badge"></span>
+        <span class="tab-badge hidden" id="goals-tab-badge"></span>
       </button>
       <button class="tab" data-view="insights" id="insights-tab">
         <span class="tab-label">Insights</span>
@@ -135,15 +139,15 @@
     <!-- CONTENT CONTAINER -->
     <div class="content-container">
 
-      <!-- CHAT VIEW -->
-      <div id="chat-view" class="view active">
+      <!-- CHAT VIEW (Overlay Backup / Inactive) -->
+      <div id="chat-view" class="view">
         <div id="draft-preview" class="draft-preview" style="display:none;"></div>
         <div id="chat-placeholder" class="chat-placeholder">Start a conversation</div>
         <div id="chat-log" class="chat-log"></div>
       </div>
 
-      <!-- TODAY PLANNER PLACEHOLDER -->
-      <div id="today-planner-view" class="view">
+      <!-- TODAY PLANNER VIEW (Home) -->
+      <div id="today-planner-view" class="view active">
         <div class="planner-shell" id="planner-shell">
           <div style="display: flex; justify-content: flex-end; margin-bottom: 0.5rem;">
              <button id="week-view-toggle" class="planner-action-btn" style="font-size: 0.8rem; padding: 0.4rem 0.8rem;">Week View</button>
