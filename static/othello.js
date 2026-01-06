@@ -3585,6 +3585,7 @@
         console.log(`[Othello UI] Opened chat overlay. Context: ${channel} (View: ${othelloState.currentView})`);
         
         loadChatHistory(); // Triggers fetch for the effective channel
+        scrollChatToBottom(true);
         
         updateFocusRibbon();
         const ui = document.getElementById('user-input');
@@ -4196,6 +4197,15 @@
       return chatLog;
     }
 
+    function scrollChatToBottom(force=false) {
+      const c = getChatContainer();
+      if (!c) return;
+      const nearBottom = (c.scrollHeight - (c.scrollTop + c.clientHeight)) < 40;
+      if (force || nearBottom) {
+         requestAnimationFrame(() => { c.scrollTop = c.scrollHeight; });
+      }
+    }
+
     function clearChatState() {
       // Use strict resolved container
       const container = getChatContainer();
@@ -4322,12 +4332,7 @@
           });
           
           // Force scroll to bottom after initial load
-          requestAnimationFrame(() => {
-              const chatLog = getChatContainer();
-              if (chatLog) {
-                  chatLog.scrollTop = chatLog.scrollHeight;
-              }
-          });
+          scrollChatToBottom(true);
         };
         if (renderedCount > 0) {
           renderMessages(messages);
@@ -4466,20 +4471,7 @@
       }
 
       // Scroll to latest message (Smart Scroll - Phase B3)
-      requestAnimationFrame(() => {
-        const scroller = container;
-        if (scroller) {
-            // Determine if we should auto-scroll
-            // Threshold: 40px as requested (was 150)
-            const distanceFromBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
-            const isNearBottom = distanceFromBottom < 40;
-            
-            // If we are near the bottom, or if the content is small (just filling up), force scroll.
-            if (isNearBottom || scroller.scrollHeight <= scroller.clientHeight * 1.5) {
-                 scroller.scrollTop = scroller.scrollHeight;
-            }
-        }
-      });
+      scrollChatToBottom(false);
       return { row, bubble };
     }
 

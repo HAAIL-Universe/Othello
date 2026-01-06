@@ -1965,15 +1965,19 @@
 }
 
 .chat-sheet #chat-log {
-  flex: 1 1 auto;
+  flex: 1 1 0;
   overflow-y: auto; /* The log scrolls */
   padding: 1rem;
   display: flex;
   flex-direction: column;
-  /* Fixed: Removed justify-content: flex-end to prevent clipping of top messages. */
-  /* We rely on JS to scroll to bottom. */
   gap: 0.5rem;
   min-height: 0; /* Critical for flex scrolling */
+}
+
+/* Spacer technique to keep content at bottom when sparse */
+.chat-sheet #chat-log::before {
+  content: "";
+  flex: 1 1 auto;
 }
 
 /* Adjust Input Bar for the sheet */
