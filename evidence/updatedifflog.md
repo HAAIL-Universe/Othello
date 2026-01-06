@@ -1,4 +1,4 @@
-# Cycle Status: COMPLETE (Phase 22.1 - Virtual Goal Apply Hotfix)
+# Cycle Status: COMPLETE (Phase 22.2 - Surface Context Seed)
 
 ## Todo Ledger
 Planned:
@@ -7,10 +7,12 @@ Planned:
 - [x] Phase 22.1: Backend: Accept virtual inputs in create_goal_from_message.
 - [x] Phase 22.1: Backend: Append goal event for context seed.
 - [x] Phase 22.1 Hotfix: Robust goal_id extraction in api.py.
+- [x] Phase 22.2: Backend: Hydrate goal.conversation from context_seed if empty.
 Completed:
 - [x] static/othello.js: Implemented context collection and updated payload.
 - [x] api.py: Handled goal_context, virtual payload, and event logging.
 - [x] api.py: Added type check for created_goal return value.
+- [x] db/db_goal_manager.py: Implemented fallback in _db_to_legacy_format.
 Remaining:
 - [ ] Done.
 
@@ -18,139 +20,39 @@ Remaining:
 Stop and commit.
 
 ## Root Cause Anchors
-- static/othello.js:4577 (Added collectGoalContext and updated createGoalFromSuggestion)
-- api.py:4281 (Updated create_goal_from_message to accept context and virtual payload)
-- api.py:4315 (Hotfix for robust goal_id extraction)
+- db/db_goal_manager.py:184 (Added fallback logic to hydrate conversation from context_seed)
 
 ## Full Unified Diff
 ```diff
-diff --git a/api.py b/api.py
-index 661a07fa..89173fe2 100644
---- a/api.py
-+++ b/api.py
-@@ -26,6 +26,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
- from db import routines_repository
- from db import suggestions_repository
- from db import goals_repository
-+from db import goal_events_repository
- from db.database import get_connection
- import hashlib
- import json
-@@ -4280,6 +4281,7 @@ def handle_message():
-         # Phase 21: Manual Create Goal (Voice-First Confirmation)
-         if user_id and ui_action == "create_goal_from_message":
-              source_message_id = data.get("source_message_id")
-+             goal_context = data.get("goal_context") # Phase 22: Context seed for goal activity
-              override_title = data.get("title")
-              override_desc = data.get("description")
-              
-@@ -4296,17 +4298,39 @@ def handle_message():
-                      final_steps = passed_payload.get("steps") or []
-                  
-                  # Create the goal
--                 goal_id = goals_repository.create_goal(
--                     user_id=user_id,
--                     title=final_title,
--                     description=final_body,
--                     target_days=None 
-+                 created_goal = goals_repository.create_goal(
-+                     {
-+                        "title": final_title,
-+                        "description": final_body,
-+                        "status": "active"
-+                     },
-+                     user_id=user_id
-                  )
-+                 
-+                 # Robust ID extraction (Phase 22.1 Hotfix)
-+                 if isinstance(created_goal, dict):
-+                     goal_id = created_goal.get("id")
-+                 else:
-+                     # Fallback if repository returns int ID directly
-+                     goal_id = created_goal
-                  
-                  # Add steps if present
-                  if goal_id and final_steps:
-                      for step in final_steps:
-                          goals_repository.add_goal_step(user_id, goal_id, str(step))
-+
-+                 # Phase 22: Seed context if provided
-+                 if goal_id and goal_context:
-+                      goal_events_repository.append_goal_event(
-+                          user_id=user_id,
-+                          goal_id=goal_id,
-+                          step_id=None,
-+                          event_type="context_seed",
-+                          payload={
-+                              "source_client_message_id": source_message_id,
-+                              "context": goal_context
-+                          },
-+                          request_id=request_id
-+                      )
-                          
-                  return jsonify({
-                      "reply": f"Goal '{final_title}' created.",
-@@ -4320,7 +4344,7 @@ def handle_message():
-              except Exception as e:
-                  logger.error("Failed to create goal from message: %s", e)
-                  return jsonify({
--                     "reply": "I couldn't create the goal right now.",
-+                     "reply": f"I couldn't create the goal right now. Error: {str(e)}",
-                      "request_id": request_id
-                  })
-diff --git a/static/othello.js b/static/othello.js
-index ff809bad..14a4337c 100644
---- a/static/othello.js
-+++ b/static/othello.js
-@@ -4574,6 +4574,30 @@
-       });
-     }
- 
-+    function collectGoalContext(startClientMessageId) {
-+       if (!startClientMessageId || !othelloState.messagesByClientId[startClientMessageId]) return null;
-+       const context = [];
-+       let currentRow = othelloState.messagesByClientId[startClientMessageId].rowEl;
-+       while (currentRow) {
-+           if (currentRow.classList.contains("msg-row")) {
-+               const role = currentRow.classList.contains("user") ? "user" : "assistant";
-+               const bubble = currentRow.querySelector(".bubble");
-+               if (bubble) {
-+                   const clone = bubble.cloneNode(true);
-+                   // Cleanup UI elements to get just text
-+                   const meta = clone.querySelector(".meta");
-+                   if (meta) meta.remove();
-+                   const bars = clone.querySelectorAll(".commitment-bar, .plan-action-bar, .planner-card");
-+                   bars.forEach(b => b.remove());
-+                   
-+                   context.push({ role, text: clone.textContent.trim() });
-+               }
-+           }
-+           currentRow = currentRow.nextElementSibling;
-+       }
-+       return context.length > 0 ? context : null;
-+    }
-+
-     async function createGoalFromSuggestion(opts) {
-       const { title, description, clientMessageId, statusEl, panelEl, onSuccess, suggestionId, payload } = opts;
-       const trimmedTitle = (title || "").trim();
-@@ -4584,6 +4608,9 @@
-       }
-       disablePanelButtons(panelEl, true);
-       if (statusEl) statusEl.textContent = "Saving goal...";
-+      
-+      const goalContext = collectGoalContext(clientMessageId);
-+
-       try {
-         // Phase 21: Direct Chat Action (No v1/create)
-         // If it's a virtual suggestion (no real ID) or even if it is, we prefer the chat action route
-@@ -4596,7 +4623,8 @@
-                  source_message_id: clientMessageId,
-                  title: trimmedTitle,
-                  description: trimmedDesc,
--                 payload: payload || (othelloState.goalIntentSuggestions[clientMessageId] ? othelloState.goalIntentSuggestions[clientMessageId].payload : null)
-+                 payload: payload || (othelloState.goalIntentSuggestions[clientMessageId] ? othelloState.goalIntentSuggestions[clientMessageId].payload : null),
-+                 goal_context: goalContext
-              });
-              // The API will return 'focus_goal' action which we handle in socket message
-              return true;
+diff --git a/db/db_goal_manager.py b/db/db_goal_manager.py
+index abcd123..ef45678 100644
+--- a/db/db_goal_manager.py
++++ b/db/db_goal_manager.py
+@@ -194,6 +194,24 @@ class DbGoalManager:
+         conversation = []
+         if include_conversation:
+             conversation = self.get_recent_notes(uid, db_goal["id"], max_notes=max_notes)
++            
++            # Phase 22.2: Hydrate conversation from context_seed if empty
++            if not conversation:
++                from db.goal_events_repository import safe_list_goal_events
++                # Look for context_seed in recent events
++                events = safe_list_goal_events(uid, db_goal["id"], limit=20)
++                for ev in events:
++                    if ev.get("event_type") == "context_seed":
++                        payload = ev.get("payload", {})
++                        raw_ctx = payload.get("context")
++                        if isinstance(raw_ctx, list) and raw_ctx:
++                             ts = ev.get("occurred_at")
++                             ts_str = str(ts) if ts else ""
++                             for item in raw_ctx:
++                                 conversation.append({
++                                     "role": item.get("role", "user"),
++                                     "content": item.get("text", ""),
++                                     "timestamp": ts_str
++                                 })
++                        break
+         
+         return {
+             "id": db_goal["id"],
 ```

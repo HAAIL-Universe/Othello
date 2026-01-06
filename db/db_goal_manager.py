@@ -180,6 +180,26 @@ class DbGoalManager:
         conversation = []
         if include_conversation:
             conversation = self.get_recent_notes(uid, db_goal["id"], max_notes=max_notes)
+            
+            # Phase 22.2: Hydrate conversation from context_seed if empty
+            if not conversation:
+                from db.goal_events_repository import safe_list_goal_events
+                # Look for context_seed in recent events
+                events = safe_list_goal_events(uid, db_goal["id"], limit=20)
+                for ev in events:
+                    if ev.get("event_type") == "context_seed":
+                        payload = ev.get("payload", {})
+                        raw_ctx = payload.get("context")
+                        if isinstance(raw_ctx, list) and raw_ctx:
+                             ts = ev.get("occurred_at")
+                             ts_str = str(ts) if ts else ""
+                             for item in raw_ctx:
+                                 conversation.append({
+                                     "role": item.get("role", "user"),
+                                     "content": item.get("text", ""),
+                                     "timestamp": ts_str
+                                 })
+                        break
         
         return {
             "id": db_goal["id"],
