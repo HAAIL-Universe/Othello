@@ -761,6 +761,10 @@
 
     let recognition = null;
     let isRecording = false;
+    let voice = {
+      recognition: null,
+      active: false
+    };
     // Composer State
     let composerMode = "idle"; // idle | typing | recording
     let silenceInterval = null;
@@ -6438,11 +6442,6 @@
     
     // [Phase 4] Previous delegated click listener removed.
     // Click handling is now managed by bindComposerActionButton() + handleComposerAction().
-
-    let voice = {
-      recognition: null,
-      active: false
-    };
 
     // Voice & Silence Logic
     function startVoiceInput() {
