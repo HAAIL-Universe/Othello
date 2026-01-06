@@ -6299,74 +6299,76 @@
     // --- COMPOSER & VOICE LOGIC ---
 
     function updateComposerUI() {
+      // Robust element resolution (Fix 2)
+      const input = document.getElementById("user-input");
+      const composerActionBtn = document.getElementById("composer-action-btn");
+      const inputBarContainer = document.querySelector(".input-bar-container") || document.getElementById("input-bar");
+
       if (!input || !composerActionBtn) return;
       const val = (input.value || "").trim();
       
-      // Determine mode
-      if (isRecording) {
-        composerMode = "recording";
+      // Determine mode (Fix 1: consistent state)
+      // Check multiple sources for recording state
+      const isVoiceActive = (typeof isRecording !== 'undefined' && isRecording) || 
+                            (typeof voice !== 'undefined' && voice.active);
+
+      let currentMode = "idle";
+      if (isVoiceActive) {
+        currentMode = "recording";
       } else if (val.length > 0) {
-        composerMode = "typing";
+        currentMode = "typing";
       } else {
-        composerMode = "idle";
+        currentMode = "idle";
       }
+      
+      // Update global for legacy support
+      if (typeof composerMode !== 'undefined') composerMode = currentMode;
 
       // Update Wrapper
       if (inputBarContainer) {
-          if (composerMode === "recording") inputBarContainer.classList.add("is-recording");
+          if (currentMode === "recording") inputBarContainer.classList.add("is-recording");
           else inputBarContainer.classList.remove("is-recording");
       }
-      if (composerMode === "recording") input.classList.add("composer-ghost");
+      if (currentMode === "recording") input.classList.add("composer-ghost");
       else input.classList.remove("composer-ghost");
 
       // Update Button
       composerActionBtn.className = "composer-action-btn"; // reset classes
       
-      if (composerMode === "idle") {
+      if (currentMode === "idle") {
+        composerActionBtn.setAttribute("data-action", "mic");
         composerActionBtn.setAttribute("aria-label", "Start voice input");
         composerActionBtn.innerHTML = `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path><path d="M19 10v2a7 7 0 0 1-14 0v-2"></path><line x1="12" y1="19" x2="12" y2="23"></line><line x1="8" y1="23" x2="16" y2="23"></line></svg>`;
-      } else if (composerMode === "recording") {
+      } else if (currentMode === "recording") {
         composerActionBtn.classList.add("record-mode");
+        composerActionBtn.setAttribute("data-action", "stop");
         composerActionBtn.setAttribute("aria-label", "Stop recording");
         composerActionBtn.innerHTML = `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="6" y="6" width="12" height="12" rx="2" ry="2"></rect></svg>`;
-      } else if (composerMode === "typing") {
+      } else if (currentMode === "typing") {
         composerActionBtn.classList.add("send-mode");
+        composerActionBtn.setAttribute("data-action", "send");
         composerActionBtn.setAttribute("aria-label", "Send message");
         composerActionBtn.innerHTML = `<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>`;
       }
     }
 
-    // Input listener
-    if (input) {
-        input.addEventListener("input", () => {
+    // Delegated Input and Keydown Handling
+    document.addEventListener("input", (e) => {
+        if (e.target && e.target.id === "user-input") {
              updateComposerUI();
-        });
-        
-        input.onkeydown = (e) => {
-            if (e.key === "Enter") {
-                if (e.ctrlKey || e.metaKey) {
-                    e.preventDefault();
-                    sendMessage();
-                } else {
-                    // Allow normal newline
-                }
-            }
-        };
-    }
-    
-    // Action Button listener
-    if (composerActionBtn) {
-        composerActionBtn.onclick = (e) => {
-            e.preventDefault();
-            if (composerMode === "idle") {
-                 startVoiceInput();
-            } else if (composerMode === "recording") {
-                 stopVoiceInput();
-            } else if (composerMode === "typing") {
+        }
+    });
+
+    document.addEventListener("keydown", (e) => {
+        if (e.target && e.target.id === "user-input" && e.key === "Enter") {
+             if (e.ctrlKey || e.metaKey) {
+                 e.preventDefault();
                  sendMessage();
-            }
-        };
-    }
+             }
+        }
+    });
+    
+    // Note: Click handling is now managed by the delegated "click" listener below
 
     let voice = {
       recognition: null,
@@ -6380,8 +6382,9 @@
         // Robust check for SpeechRecognition
         const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
         if (!SpeechRecognition) {
-            alert("Speech recognition not supported in this browser.");
             console.error("[voice] SpeechRecognition API missing");
+            addMessage("bot", "[Client error] Voice input not supported in this browser.");
+            alert("Speech recognition not supported in this browser.");
             return;
         }
 
@@ -6400,7 +6403,8 @@
                     isRecording = true;
                     sttFullTranscript = "";
                     sttLastInterim = "";
-                    if (input) input.value = ""; 
+                    const inputEl = document.getElementById("user-input");
+                    if (inputEl) inputEl.value = ""; 
                     updateComposerUI();
                     
                     // Start silence monitoring only when voice actually starts
@@ -6418,6 +6422,7 @@
                  rec.onerror = (event) => {
                     console.warn("[voice] onerror", event.error);
                     if (event.error === "not-allowed" || event.error === "service-not-allowed") {
+                        addMessage("bot", "[Client error] Microphone access blocked.");
                         alert("Microphone access denied. Please allow microphone access.");
                     }
                     voice.active = false;
@@ -6448,9 +6453,11 @@
                          const needsSpace = display.length > 0 && !display.match(/\s$/);
                          display += (needsSpace ? " " : "") + sttLastInterim;
                     }
-                    if (input) {
-                        input.value = display;
-                        input.scrollTop = input.scrollHeight;
+                    
+                    const inputEl = document.getElementById("user-input");
+                    if (inputEl) {
+                        inputEl.value = display;
+                        inputEl.scrollTop = inputEl.scrollHeight;
                     }
                     updateComposerUI();
                  };
@@ -6459,11 +6466,12 @@
 
              } catch(e) {
                  console.error("[voice] Failed to create SpeechRecognition", e);
-                 alert("Voice input failed to initialize.");
+                 addMessage("bot", `[Client error] Voice input failed to initialize: ${e.message}`);
                  return;
              }
         }
         
+        console.log("[voice] attempting start");
         try {
             voice.recognition.start();
         } catch(e) { 
@@ -6471,7 +6479,7 @@
             if (e.name === "InvalidStateError") {
                  // Already active? ignore
             } else {
-                alert("Could not start voice input: " + e.message);
+                addMessage("bot", `[Client error] Could not start voice input: ${e.message}`);
             }
         }
     }
@@ -6588,15 +6596,34 @@
         if (btn) {
             e.preventDefault();
             e.stopPropagation();
-            console.log("[composer] mic click fired");
             
-            if (composerMode === "idle") {
-                 startVoiceInput();
-            } else if (composerMode === "recording") {
-                 stopVoiceInput();
-            } else if (composerMode === "typing") {
-                 sendMessage();
+            const inputEl = document.getElementById("user-input");
+            const hasText = (inputEl && inputEl.value.trim().length > 0) || false;
+            
+            // Derive recording state from multiple sources for safety
+            const isMicActive = btn.classList.contains("mic-active") || 
+                                btn.classList.contains("record-mode") || 
+                                btn.dataset.action === "mic-active" || 
+                                btn.dataset.action === "stop";
+            
+            const recording = (typeof isRecording !== 'undefined' && isRecording) || 
+                              (typeof voice !== 'undefined' && voice.active) || 
+                              isMicActive;
+
+            console.log("[composer] mic click fired", { hasText, recording, val: inputEl?.value });
+            
+            if (recording) {
+                 if (typeof stopVoiceInput === 'function') stopVoiceInput();
+            } else if (hasText) {
+                 if (typeof sendMessage === 'function') sendMessage();
+            } else {
+                 if (typeof startVoiceInput === 'function') startVoiceInput();
             }
+            
+            // Force UI update to reflect state change immediately
+            setTimeout(() => {
+                if (typeof updateComposerUI === 'function') updateComposerUI();
+            }, 50);
         }
     }, true); // Capture phase to beat other handlers
 
