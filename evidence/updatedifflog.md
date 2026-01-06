@@ -1,62 +1,67 @@
-# Cycle Status: COMPLETE (Phase 22.3 - Auto-Focus Goal)
+# Cycle Status: COMPLETE (Phase 22.4 - Conversation Context Fix)
 
 ## Todo Ledger
 Planned:
-- [x] Phase 22.1: Frontend: Collect context for virtual goals.
-- [x] Phase 22.1: Frontend: Route createGoalFromSuggestion with context.
-- [x] Phase 22.1: Backend: Accept virtual inputs in create_goal_from_message.
-- [x] Phase 22.1: Backend: Append goal event for context seed.
-- [x] Phase 22.1 Hotfix: Robust goal_id extraction in api.py.
-- [x] Phase 22.2: Backend: Hydrate goal.conversation from context_seed if empty.
-- [x] Phase 22.3: Frontend: Auto-focus goal after virtual creation.
+- [x] Phase 22.4: Locate LLM prompt construction in api.py / architect_brain.
+- [x] Phase 22.4: Optimize _load_companion_context for relevance and noise reduction.
+- [x] Phase 22.4: Filter out non-chat sources (system logs) from LLM context.
+- [x] Phase 22.4: Enforce chronological order [Oldest -> Newest] for LLM.
 Completed:
-- [x] static/othello.js: Implemented context collection and updated payload.
-- [x] api.py: Handled goal_context, virtual payload, and event logging.
-- [x] api.py: Added type check for created_goal return value.
-- [x] db/db_goal_manager.py: Implemented fallback in _db_to_legacy_format.
-- [x] static/othello.js: Added ui_action_call handling in sendMessage.
+- [x] api.py: Updated _load_companion_context to filter sources, trim content, and respect max_turns.
 Remaining:
 - [ ] Done.
 
 ## Next Action
-Stop and commit.
+Commit and Push.
 
 ## Root Cause Anchors
-- static/othello.js:5724 (Added ui_action_call handling for focus_goal)
+- api.py:1540 (Refined context loading loop to exclude system noise and ensure token safety)
 
 ## Full Unified Diff
 ```diff
-diff --git a/static/othello.js b/static/othello.js
-index 14a4337c..b712211e 100644
---- a/static/othello.js
-+++ b/static/othello.js
-@@ -5722,6 +5722,23 @@
-         }
- 
-         const data = await res.json();
-+        
-+        // Phase 22.3: Handle UI Actions from backend (Auto-Focus)
-+        if (data.ui_action_call === "focus_goal" && data.ui_action_payload && data.ui_action_payload.goal_id) {
-+             const goalId = data.ui_action_payload.goal_id;
-+             setActiveGoal(goalId);
-+             if (othelloState.currentView !== "goals") {
-+                 switchView("goals");
-+             }
-+             // showGoalDetail will render loading state and fetch valid data
-+             showGoalDetail(goalId);
-+        } else if (data.redirect_to && typeof data.redirect_to === 'string') {
-+             const goalMatch = data.redirect_to.match(/\/goals\/(\d+)/);
-+             if (goalMatch && goalMatch[1]) {
-+                 const goalId = parseInt(goalMatch[1], 10);
-+                 setActiveGoal(goalId);
-+                 if (othelloState.currentView !== "goals") {
-+                     switchView("goals");
-+                 }
-+                 showGoalDetail(goalId);
-+             }
-+        }
+diff --git a/api.py b/api.py
+index 4df74254..771dbba9 100644
+--- a/api.py
++++ b/api.py
+@@ -1538,20 +1538,35 @@ def _load_companion_context(
+         return []
+     messages: List[Dict[str, str]] = []
+     total_chars = 0
++    # Process Newest -> Oldest (reversed rows)
+     for row in reversed(rows):
++        source = (row.get("source") or "").strip().lower()
++        # Filter out internal/system messages
++        if source not in {"user", "assistant", "text"}:
++            continue
 +
-         if (data.conversation_id) {
-             othelloState.activeConversationId = data.conversation_id;
-         }
+         content = (row.get("transcript") or "").strip()
+         if not content:
+             continue
+-        source = (row.get("source") or "").strip().lower()
++
+         role = "assistant" if source == "assistant" else "user"
+-        if total_chars and total_chars + len(content) > max_chars:
++        
++        # Per-message safety cap (e.g. 2000 chars)
++        if len(content) > 2000:
++            content = content[:2000] + "..."
++
++        # Total context cap check (accumulative)
++        if total_chars + len(content) > max_chars:
+             break
+-        if len(content) > max_chars:
+-            content = content[:max_chars]
++
+         messages.append({"role": role, "content": content})
+         total_chars += len(content)
+-        if len(messages) >= limit:
++        
++        # Stop if we hit the turn limit (e.g. 12)
++        if len(messages) >= max_turns:
+             break
++
++    # Restore chronological order (Oldest -> Newest)
+     messages.reverse()
+     if messages:
+         logger.debug(
 ```

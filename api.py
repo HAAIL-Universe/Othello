@@ -1538,20 +1538,35 @@ def _load_companion_context(
         return []
     messages: List[Dict[str, str]] = []
     total_chars = 0
+    # Process Newest -> Oldest (reversed rows)
     for row in reversed(rows):
+        source = (row.get("source") or "").strip().lower()
+        # Filter out internal/system messages
+        if source not in {"user", "assistant", "text"}:
+            continue
+
         content = (row.get("transcript") or "").strip()
         if not content:
             continue
-        source = (row.get("source") or "").strip().lower()
+            
         role = "assistant" if source == "assistant" else "user"
-        if total_chars and total_chars + len(content) > max_chars:
+        
+        # Per-message safety cap (e.g. 2000 chars)
+        if len(content) > 2000:
+            content = content[:2000] + "..."
+
+        # Total context cap check (accumulative)
+        if total_chars + len(content) > max_chars:
             break
-        if len(content) > max_chars:
-            content = content[:max_chars]
+            
         messages.append({"role": role, "content": content})
         total_chars += len(content)
-        if len(messages) >= limit:
+        
+        # Stop if we hit the turn limit (e.g. 12)
+        if len(messages) >= max_turns:
             break
+
+    # Restore chronological order (Oldest -> Newest)
     messages.reverse()
     if messages:
         logger.debug(
