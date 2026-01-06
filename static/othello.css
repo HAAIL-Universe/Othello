@@ -2114,6 +2114,7 @@ body.chat-open #global-chat-fab {
 /* KITT Scanner (Knight Rider) Effect */
 .kitt-scanner {
   position: absolute;
+  top: auto !important;
   bottom: 0; /* Anchor to bottom of header */
   left: 0;
   right: 0;
