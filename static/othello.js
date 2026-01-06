@@ -3590,30 +3590,55 @@
     }
     
     // Phase 5: Handle selector changes
-    if (chatContextSelector) {
-        chatContextSelector.addEventListener('change', (e) => {
-            const newChannel = e.target.value;
-            console.log(`[Othello UI] Switching chat context to: ${newChannel}`);
-            
-            // Force reload chat history with new channel
-            // Note: We need to make sure effectiveChannelForView respects this override
-            // OR we just pass the channel directly to loadChatHistory if we refactor it.
-            // But strict state management suggests updating the state.
-            
-            // However, effectiveChannelForView derives from View/Mode. 
-            // We should use an override state.
-            othelloState.manualChannelOverride = newChannel;
-            
-            loadChatHistory();
-        });
-    }
+    // Refactored to bindChatOverlayHandlers for robustness
+    function bindChatOverlayHandlers() {
+        const overlayInput = document.getElementById('user-input');
+        const overlaySend = document.getElementById('send');
+        const overlayClose = document.getElementById('chat-back-btn');
+        const overlaySelector = document.getElementById('chat-context-selector');
+        const fab = document.getElementById('global-chat-fab');
 
-    if (globalChatFab) {
-      globalChatFab.addEventListener('click', () => toggleChatOverlay(true));
+        if (overlaySelector) {
+            overlaySelector.onchange = (e) => {
+                const newChannel = e.target.value;
+                console.log(`[Othello UI] Switching chat context to: ${newChannel}`);
+                othelloState.manualChannelOverride = newChannel;
+                loadChatHistory();
+            };
+        }
+
+        if (overlayClose) {
+            overlayClose.onclick = (e) => {
+                e.stopPropagation();
+                toggleChatOverlay(false);
+            };
+        }
+
+        if (fab) {
+            fab.onclick = () => toggleChatOverlay(true);
+        }
+
+        if (overlaySend) {
+            overlaySend.onclick = () => {
+                console.debug("[Othello UI] Send clicked in overlay");
+                sendMessage();
+            };
+        }
+
+        if (overlayInput) {
+             overlayInput.onkeydown = (e) => {
+                 if (e.key === "Enter" && !e.shiftKey) { // Allow Shift+Enter?
+                     e.preventDefault();
+                     console.debug("[Othello UI] Enter pressed in overlay input");
+                     sendMessage();
+                 }
+             };
+        }
     }
-    if (chatBackBtn) {
-      chatBackBtn.addEventListener('click', () => toggleChatOverlay(false));
-    }
+    
+    // Initial Bind
+    bindChatOverlayHandlers();
+
     if (globalChatOverlay) {
         globalChatOverlay.addEventListener('click', (e) => {
             if (e.target === globalChatOverlay) {
@@ -5579,8 +5604,12 @@
           extraData = {};
       }
 
-      // Canonical text variable
-      let rawText = (override !== null ? override : (input?.value ?? ""));
+      // Canonical text variable (Refetch input safely)
+      const currentInput = document.getElementById('user-input');
+      let rawText = (override !== null ? override : (currentInput?.value ?? ""));
+      
+      console.debug(`[Othello UI] sendMessage triggered. Text length: ${rawText.length}`);
+      
       if (typeof rawText !== "string") {
           rawText = String(rawText ?? "");
       }
