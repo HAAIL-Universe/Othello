@@ -25,6 +25,7 @@ from werkzeug.exceptions import HTTPException
 from werkzeug.middleware.proxy_fix import ProxyFix
 from db import routines_repository
 from db import suggestions_repository
+from db import goals_repository
 from db.database import get_connection
 import hashlib
 import json
@@ -4564,6 +4565,48 @@ def handle_message():
                     return jsonify(response)
             except (ValueError, TypeError):
                 pass
+
+        # Phase 18: Show Seed Steps
+        # Trigger: ui_action="show_seed_steps" or text command "show seed steps"
+        is_show_steps = (ui_action == "show_seed_steps")
+        if not is_show_steps and user_input:
+             if re.search(r"^(show|list)\s+((me|the)\s+)?(seed\s+)?steps", user_input.strip().lower()):
+                 is_show_steps = True
+
+        if is_show_steps and user_id:
+            target_goal_id = data.get("goal_id") or data.get("active_goal_id")
+            if target_goal_id:
+                try:
+                    target_goal_id = int(target_goal_id)
+                    goal = goals_repository.get_goal(target_goal_id, user_id)
+                    if goal:
+                        checklist = goal.get("checklist", [])
+                        if not checklist:
+                             reply = f"Goal '{goal.get('title')}' has no seed steps recorded."
+                        else:
+                             reply = f"Seed Steps for '{goal.get('title')}':\n"
+                             for i, step in enumerate(checklist, 1):
+                                 txt = step if isinstance(step, str) else step.get('text', str(step))
+                                 reply += f"\n{i}. {txt}"
+                        
+                        return jsonify({
+                            "reply": reply,
+                            "agent_status": {"planner_active": False},
+                            "request_id": request_id
+                        })
+                except Exception as e:
+                    logger.error(f"Error fetching seed steps: {e}")
+                    pass
+            elif is_show_steps and ui_action == "show_seed_steps":
+                 return jsonify({
+                    "reply": "Please select a goal first.",
+                    "request_id": request_id
+                 })
+
+        # Phase 18: Intent Clarification
+        if user_id and ui_action == "clarify_goal_intent":
+             # Force the agent to ask clarifying questions
+             user_input = "Please ask me 1-3 targeted clarifying questions to help me refine the intent of this goal. Be concise."
 
         # --- Phase 3.2: Chat Command Router ---
         if user_id:

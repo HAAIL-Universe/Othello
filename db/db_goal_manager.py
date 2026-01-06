@@ -132,6 +132,16 @@ class DbGoalManager:
         ]
         if goal.get("deadline"):
             lines.append(f"Deadline: {goal['deadline']}")
+        
+        # Phase 18: Focus Context (Inject Seed Steps)
+        checklist = goal.get("checklist")
+        if checklist and isinstance(checklist, list) and len(checklist) > 0:
+            lines.append("")
+            lines.append("Seed Steps (Initial Checklist):")
+            for item in checklist:
+                step_text = item if isinstance(item, str) else item.get('text', str(item))
+                lines.append(f"- [ ] {step_text}")
+
         lines.append("")
         
         notes = self.get_recent_notes(uid, goal_id, max_notes=max_notes)
@@ -178,6 +188,7 @@ class DbGoalManager:
             "created_at": db_goal["created_at"].isoformat() if hasattr(db_goal["created_at"], "isoformat") else str(db_goal["created_at"]),
             "conversation": conversation,  # Include for UI
             "description": db_goal.get("description", ""),
+            "checklist": db_goal.get("checklist", []),
             "status": db_goal.get("status", "active"),
             "priority": db_goal.get("priority", "medium"),
             "plan": db_goal.get("plan", ""),

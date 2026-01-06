@@ -6616,6 +6616,15 @@
         `;
       }
 
+      // Phase 18: Clarify Intent Button
+      contentHtml += `
+          <div class="detail-actions" style="padding: 0 16px 16px 16px;">
+            <button class="action-btn clarify-intent-btn" data-goal-id="${goal.id}" style="font-size: 0.9em; padding: 6px 12px; border: 1px solid var(--border-color); background: var(--bg-secondary); border-radius: 4px; cursor: pointer; display: flex; align-items: center; gap: 6px;">
+               <span class="codicon codicon-question"></span> Clarify Intent
+            </button>
+          </div>
+      `;
+
       // Deadline
       if (goal.deadline) {
         contentHtml += `
@@ -6958,6 +6967,18 @@
           }
           return;
         }
+
+        const clarifyBtn = e.target.closest(".clarify-intent-btn");
+        if (clarifyBtn) {
+            const goalId = clarifyBtn.getAttribute("data-goal-id");
+            if (!goalId) return;
+            
+            // Phase 18: Clarify Intent Action
+            hideGoalDetail(); // Close detail to show chat
+            sendMessage("", { ui_action: "clarify_goal_intent", goal_id: goalId });
+            return;
+        }
+
         const btn = e.target.closest(".plan-from-activity-btn");
         const intentBtn = e.target.closest(".intent-plan-btn");
         if (btn) {
