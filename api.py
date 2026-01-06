@@ -1539,17 +1539,30 @@ def _load_companion_context(
     messages: List[Dict[str, str]] = []
     total_chars = 0
     # Process Newest -> Oldest (reversed rows)
+    seen_sources = set()
     for row in reversed(rows):
         source = (row.get("source") or "").strip().lower()
-        # Filter out internal/system messages
-        if source not in {"user", "assistant", "text"}:
-            continue
+        if source: 
+            seen_sources.add(source)
 
-        content = (row.get("transcript") or "").strip()
+        # Robust Content Extraction
+        content = (
+            row.get("transcript") or 
+            row.get("content") or 
+            row.get("message") or 
+            row.get("text") or 
+            row.get("body") or 
+            ""
+        ).strip()
+        
         if not content:
             continue
-            
-        role = "assistant" if source == "assistant" else "user"
+
+        # Tolerant Role Mapping
+        if source in {"user", "text"}:
+            role = "user"
+        else:
+            role = "assistant"
         
         # Per-message safety cap (e.g. 2000 chars)
         if len(content) > 2000:
@@ -1558,8 +1571,8 @@ def _load_companion_context(
         # Total context cap check (accumulative)
         if total_chars + len(content) > max_chars:
             break
-            
-        messages.append({"role": role, "content": content})
+
+        messages.append({"role": role, "content": content, "_source": source})
         total_chars += len(content)
         
         # Stop if we hit the turn limit (e.g. 12)
@@ -1570,10 +1583,11 @@ def _load_companion_context(
     messages.reverse()
     if messages:
         logger.debug(
-            "API: loaded history messages=%s chars=%s channel=%s",
+            "API: loaded history messages=%s chars=%s channel=%s sources=%s",
             len(messages),
             total_chars,
             channel_name,
+            list(seen_sources)[:5]
         )
     return messages
 
@@ -5578,8 +5592,20 @@ def handle_message():
         def _respond(payload: Dict[str, Any]):
             reply_text = payload.get("reply") if isinstance(payload, dict) else None
             _persist_chat_exchange(reply_text)
-            if isinstance(payload, dict) and conversation_id:
-                payload["conversation_id"] = conversation_id
+            if isinstance(payload, dict):
+                if conversation_id:
+                    payload["conversation_id"] = conversation_id
+                
+                # Context Debug Injection
+                if companion_context is not None:
+                     if "meta" not in payload:
+                         payload["meta"] = {}
+                     payload["meta"]["context_debug"] = {
+                         "turns_loaded": len(companion_context),
+                         "total_chars": sum(len(str(m.get("content", ""))) for m in companion_context),
+                         "roles_represented": list(set(m.get("role", "unknown") for m in companion_context))
+                     }
+
             return jsonify(payload)
 
         logger.info(
