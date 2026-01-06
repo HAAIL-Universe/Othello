@@ -1943,6 +1943,63 @@
   flex-shrink: 0; /* Don't shrink header */
 }
 
+/* KITT Scanner Effect */
+.chat-sheet { 
+  --kitt-h: 4px; 
+  --kitt-dot: 18px; 
+  --kitt-pad: 6px; 
+  --kitt-ms: 900ms; 
+}
+
+.kitt-scanner {
+  position: absolute;
+  left: 0; 
+  right: 0; 
+  top: 0; /* Top of header */
+  height: var(--kitt-h);
+  border-radius: 999px;
+  overflow: hidden;
+  opacity: 0;
+  transition: opacity 120ms ease;
+  pointer-events: none;
+  z-index: 1; /* Above controls if overlapping slightly, but top focused */
+}
+
+.chat-sheet.is-thinking .kitt-scanner { 
+  opacity: 1; 
+}
+
+.kitt-scanner::before,
+.kitt-scanner::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  width: var(--kitt-dot);
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, transparent, rgba(255,80,80,.95), transparent);
+  box-shadow: 0 0 10px rgba(255,60,60,.85), 0 0 22px rgba(255,60,60,.45);
+}
+
+@keyframes kitt-left {
+  0%, 100% { left: 50%; transform: translateX(-50%); }
+  50% { left: calc(var(--kitt-pad) + var(--kitt-dot) / 2); transform: translateX(-50%); }
+}
+
+@keyframes kitt-right {
+  0%, 100% { left: 50%; transform: translateX(-50%); }
+  50% { left: calc(100% - var(--kitt-pad) - var(--kitt-dot) / 2); transform: translateX(-50%); }
+}
+
+.chat-sheet.is-thinking .kitt-scanner::before { animation: kitt-left var(--kitt-ms) ease-in-out infinite; }
+.chat-sheet.is-thinking .kitt-scanner::after  { animation: kitt-right var(--kitt-ms) ease-in-out infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  .chat-sheet.is-thinking .kitt-scanner::before,
+  .chat-sheet.is-thinking .kitt-scanner::after { animation: none; }
+  .chat-sheet.is-thinking .kitt-scanner { opacity: 1; }
+}
+
 .chat-back-btn {
   background: none;
   border: none;

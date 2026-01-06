@@ -811,6 +811,7 @@
 
     // App state
     const othelloState = {
+      connectivity: 'online', // online | offline | degraded
       currentView: "today-planner",
       currentMode: "today", // companion | today | routine
       manualChannelOverride: null, // Phase 5: For Dialogue Selector
@@ -3555,10 +3556,54 @@
     const chatBackBtn = document.getElementById('chat-back-btn');
     const chatContextSelector = document.getElementById('chat-context-selector');
 
+    
+    // Connectivity State Management
+    function updateConnectivity(status, message = "") {
+        othelloState.connectivity = status;
+        const pill = document.querySelector('.status-pill');
+        const text = pill ? pill.querySelector('#status') : null;
+        const dot = pill ? pill.querySelector('.dot') : null;
+        
+        if (text) {
+            if (status === 'online') text.textContent = "Online";
+            else if (status === 'offline') text.textContent = "Offline";
+            else if (status === 'degraded') text.textContent = message || "Degraded";
+        }
+        
+        if (pill) {
+            pill.classList.remove('offline', 'degraded');
+            if (status !== 'online') pill.classList.add(status);
+        }
+    }
+
+    // Ping Logic
+    let pingInterval = null;
+    function startConnectivityPing() {
+        if (pingInterval) return;
+        pingInterval = setInterval(async () => {
+             try {
+                 const res = await fetch('/api/capabilities', { method: 'GET', cache: 'no-store' });
+                 if (res.ok) updateConnectivity('online');
+                 else updateConnectivity('degraded', `Status ${res.status}`);
+             } catch (e) {
+                 updateConnectivity('offline');
+             }
+        }, 15000);
+    }
+
+    function stopConnectivityPing() {
+        if (pingInterval) {
+            clearInterval(pingInterval);
+            pingInterval = null;
+        }
+    }
+
     function toggleChatOverlay(show) {
       if (!globalChatOverlay) return;
       const isOpen = typeof show === 'boolean' ? show : !globalChatOverlay.classList.contains('open');
-      globalChatOverlay.classList.toggle('open', isOpen);
+      if (globalChatOverlay) {
+        globalChatOverlay.classList.toggle('open', isOpen);
+      }
       
       // Directive: Hide FAB when open (via body class)
       document.body.classList.toggle('chat-open', isOpen);
@@ -3567,7 +3612,12 @@
          globalChatFab.classList.toggle('active', isOpen);
       }
 
+      if (!isOpen) {
+          stopConnectivityPing();
+      }
+
       if (isOpen) {
+        startConnectivityPing();
         // Phase 5: Initialize selector based on current effective channel
         // But only if we haven't manually overridden it yet for this session? 
         // Actually, better to reset to context on open, unless user changed it *while* open.
@@ -5678,6 +5728,24 @@
       }
     }
 
+    // KITT Scanner Logic
+    let pendingChatRequests = 0;
+    function setChatThinking(isThinking) {
+        const sheet = document.querySelector('.chat-sheet');
+        if(sheet) {
+            if(isThinking) sheet.classList.add('is-thinking');
+            else sheet.classList.remove('is-thinking');
+        }
+    }
+    function beginThinking() {
+        pendingChatRequests++;
+        setChatThinking(true);
+    }
+    function endThinking() {
+        pendingChatRequests = Math.max(0, pendingChatRequests - 1);
+        if (pendingChatRequests === 0) setChatThinking(false);
+    }
+
     async function sendMessage(overrideText = null, extraData = {}) {
       // 1) Robust String Safety & Diagnostic
       let override = overrideText;
@@ -5897,48 +5965,71 @@
             ...extraData
         };
         console.debug("[Othello UI] Sending /api/message payload:", payload);
-        const res = await fetch(API, {
-          method: "POST",
-          headers: {"Content-Type": "application/json"},
-          credentials: "include",
-          body: JSON.stringify(payload)
-        });
-
-        console.log("[Othello UI] /api/message status", res.status);
-
-        if (!res.ok) {
-          const contentType = res.headers.get("content-type") || "";
-          if (contentType.includes("application/json")) {
-            let errorData = null;
+        
+        beginThinking();
+        let data;
+        let res;
+        try {
+            console.log(`[Othello UI] Fetching ${API}...`);
             try {
-              errorData = await res.json();
-            } catch (e) {
-              console.warn("[Othello UI] Could not parse JSON error body:", e);
+                res = await fetch(API, {
+                  method: "POST",
+                  headers: {"Content-Type": "application/json"},
+                  credentials: "include",
+                  body: JSON.stringify(payload)
+                });
+            } catch (netErr) {
+                console.error("[Othello UI] Network failure:", netErr);
+                addMessage("bot", "[Connection error: backend unreachable]");
+                updateConnectivity('offline');
+                statusEl.textContent = "Offline";
+                return; // Finally will still run to clear thinking
             }
-            console.error("[Othello UI] sendMessage HTTP error:", res.status, errorData);
-            const errMsg = (errorData && (errorData.message || errorData.error)) || "Unable to process your message.";
-            const reqId = errorData && errorData.request_id;
-            if (reqId) {
-              console.error("[Othello UI] sendMessage request_id:", reqId);
+
+            console.log("[Othello UI] /api/message status", res.status);
+
+            if (!res.ok) {
+              updateConnectivity('degraded', `Error ${res.status}`);
+              const contentType = res.headers.get("content-type") || "";
+              if (contentType.includes("application/json")) {
+                let errorData = null;
+                try {
+                  errorData = await res.json();
+                } catch (e) {
+                  console.warn("[Othello UI] Could not parse JSON error body:", e);
+                }
+                console.error("[Othello UI] sendMessage HTTP error:", res.status, errorData);
+                const errMsg = (errorData && (errorData.message || errorData.error)) || "Unable to process your message.";
+                const reqId = errorData && errorData.request_id;
+                if (reqId) {
+                  console.error("[Othello UI] sendMessage request_id:", reqId);
+                }
+                const detailSuffix = reqId ? ` (request_id: ${reqId})` : "";
+                addMessage("bot", `[Error ${res.status}]: ${errMsg}${detailSuffix}`);
+              } else {
+                let errorText = "";
+                try {
+                  errorText = await res.text();
+                } catch (e) {
+                  console.warn("[Othello UI] Could not read error response body:", e);
+                }
+                const preview = (errorText || "").slice(0, 200);
+                console.error("[Othello UI] sendMessage non-JSON error:", res.status, preview);
+                addMessage("bot", `[Error ${res.status}]: Unable to process your message. Please try again.`);
+              }
+              // Do NOT set statusEl to "Error" blindly if we want connectivity state to rule. 
+              // But for immediate feedback, "Error" is fine, assuming it reverts to connectivity state later?
+              // Logic: updateConnectivity sets the pill text.
+              // So we should let updateConnectivity win or specifically set it here.
+              // We already called updateConnectivity('degraded').
+              return;
             }
-            const detailSuffix = reqId ? ` (request_id: ${reqId})` : "";
-            addMessage("bot", `[Error ${res.status}]: ${errMsg}${detailSuffix}`);
-          } else {
-            let errorText = "";
-            try {
-              errorText = await res.text();
-            } catch (e) {
-              console.warn("[Othello UI] Could not read error response body:", e);
-            }
-            const preview = (errorText || "").slice(0, 200);
-            console.error("[Othello UI] sendMessage non-JSON error:", res.status, preview);
-            addMessage("bot", `[Error ${res.status}]: Unable to process your message. Please try again.`);
-          }
-          statusEl.textContent = "Error";
-          return;
+
+            updateConnectivity('online');
+            data = await res.json();
+        } finally {
+            endThinking();
         }
-
-        const data = await res.json();
         
         // Phase 22.3: Handle UI Actions from backend (Auto-Focus)
         if (data.ui_action_call === "focus_goal" && data.ui_action_payload && data.ui_action_payload.goal_id) {
