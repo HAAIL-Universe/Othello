@@ -6352,7 +6352,7 @@
 
       btn.dataset.bound = "1";
       // Use capture for priority
-      btn.addEventListener("pointerdown", handleComposerAction, true);
+      // changed to click-only for toggle behavior (no push-to-talk)
       btn.addEventListener("click", handleComposerAction, true);
 
       console.info("[composer] bound composer-action-btn", reason);
