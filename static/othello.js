@@ -5917,56 +5917,53 @@
         console.debug("[Othello UI] Sending /api/message payload:", payload);
         
         beginThinking();
-        let res;
+        let data;
         try {
-            res = await fetch(API, {
+            const res = await fetch(API, {
               method: "POST",
               headers: {"Content-Type": "application/json"},
               credentials: "include",
               body: JSON.stringify(payload)
             });
-        } catch (err) {
+
+            console.log("[Othello UI] /api/message status", res.status);
+
+            if (!res.ok) {
+              const contentType = res.headers.get("content-type") || "";
+              if (contentType.includes("application/json")) {
+                let errorData = null;
+                try {
+                  errorData = await res.json();
+                } catch (e) {
+                  console.warn("[Othello UI] Could not parse JSON error body:", e);
+                }
+                console.error("[Othello UI] sendMessage HTTP error:", res.status, errorData);
+                const errMsg = (errorData && (errorData.message || errorData.error)) || "Unable to process your message.";
+                const reqId = errorData && errorData.request_id;
+                if (reqId) {
+                  console.error("[Othello UI] sendMessage request_id:", reqId);
+                }
+                const detailSuffix = reqId ? ` (request_id: ${reqId})` : "";
+                addMessage("bot", `[Error ${res.status}]: ${errMsg}${detailSuffix}`);
+              } else {
+                let errorText = "";
+                try {
+                  errorText = await res.text();
+                } catch (e) {
+                  console.warn("[Othello UI] Could not read error response body:", e);
+                }
+                const preview = (errorText || "").slice(0, 200);
+                console.error("[Othello UI] sendMessage non-JSON error:", res.status, preview);
+                addMessage("bot", `[Error ${res.status}]: Unable to process your message. Please try again.`);
+              }
+              statusEl.textContent = "Error";
+              return;
+            }
+
+            data = await res.json();
+        } finally {
             endThinking();
-            throw err;
         }
-
-        console.log("[Othello UI] /api/message status", res.status);
-
-        if (!res.ok) {
-          const contentType = res.headers.get("content-type") || "";
-          if (contentType.includes("application/json")) {
-            let errorData = null;
-            try {
-              errorData = await res.json();
-            } catch (e) {
-              console.warn("[Othello UI] Could not parse JSON error body:", e);
-            }
-            console.error("[Othello UI] sendMessage HTTP error:", res.status, errorData);
-            const errMsg = (errorData && (errorData.message || errorData.error)) || "Unable to process your message.";
-            const reqId = errorData && errorData.request_id;
-            if (reqId) {
-              console.error("[Othello UI] sendMessage request_id:", reqId);
-            }
-            const detailSuffix = reqId ? ` (request_id: ${reqId})` : "";
-            addMessage("bot", `[Error ${res.status}]: ${errMsg}${detailSuffix}`);
-          } else {
-            let errorText = "";
-            try {
-              errorText = await res.text();
-            } catch (e) {
-              console.warn("[Othello UI] Could not read error response body:", e);
-            }
-            const preview = (errorText || "").slice(0, 200);
-            console.error("[Othello UI] sendMessage non-JSON error:", res.status, preview);
-            addMessage("bot", `[Error ${res.status}]: Unable to process your message. Please try again.`);
-          }
-          statusEl.textContent = "Error";
-          endThinking();
-          return;
-        }
-
-        const data = await res.json();
-        endThinking();
         
         // Phase 22.3: Handle UI Actions from backend (Auto-Focus)
         if (data.ui_action_call === "focus_goal" && data.ui_action_payload && data.ui_action_payload.goal_id) {
