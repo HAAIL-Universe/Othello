@@ -5678,6 +5678,24 @@
       }
     }
 
+    // KITT Scanner Logic
+    let pendingChatRequests = 0;
+    function setChatThinking(isThinking) {
+        const sheet = document.querySelector('.chat-sheet');
+        if(sheet) {
+            if(isThinking) sheet.classList.add('is-thinking');
+            else sheet.classList.remove('is-thinking');
+        }
+    }
+    function beginThinking() {
+        pendingChatRequests++;
+        setChatThinking(true);
+    }
+    function endThinking() {
+        pendingChatRequests = Math.max(0, pendingChatRequests - 1);
+        if (pendingChatRequests === 0) setChatThinking(false);
+    }
+
     async function sendMessage(overrideText = null, extraData = {}) {
       // 1) Robust String Safety & Diagnostic
       let override = overrideText;
@@ -5897,12 +5915,20 @@
             ...extraData
         };
         console.debug("[Othello UI] Sending /api/message payload:", payload);
-        const res = await fetch(API, {
-          method: "POST",
-          headers: {"Content-Type": "application/json"},
-          credentials: "include",
-          body: JSON.stringify(payload)
-        });
+        
+        beginThinking();
+        let res;
+        try {
+            res = await fetch(API, {
+              method: "POST",
+              headers: {"Content-Type": "application/json"},
+              credentials: "include",
+              body: JSON.stringify(payload)
+            });
+        } catch (err) {
+            endThinking();
+            throw err;
+        }
 
         console.log("[Othello UI] /api/message status", res.status);
 
@@ -5935,10 +5961,12 @@
             addMessage("bot", `[Error ${res.status}]: Unable to process your message. Please try again.`);
           }
           statusEl.textContent = "Error";
+          endThinking();
           return;
         }
 
         const data = await res.json();
+        endThinking();
         
         // Phase 22.3: Handle UI Actions from backend (Auto-Focus)
         if (data.ui_action_call === "focus_goal" && data.ui_action_payload && data.ui_action_payload.goal_id) {
