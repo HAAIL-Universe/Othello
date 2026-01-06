@@ -6500,8 +6500,10 @@
         const updateCount = othelloState.goalUpdateCounts[goal.id] || 0;
 
         let badge = "";
+        let actions = "";
         if (goal.is_draft) {
              badge = '<div class="goal-card__badge" style="background:var(--accent-color);color:#000;">Draft</div>';
+             actions = `<div class="goal-card__dismiss" title="Dismiss Draft" style="cursor:pointer;font-weight:bold;margin-left:8px;padding:2px 6px;">×</div>`;
         } else if (isActive) {
              badge = '<div class="goal-card__badge">Active</div>';
         }
@@ -6512,12 +6514,40 @@
               <div class="goal-card__id">${goal.is_draft ? 'Draft' : 'Goal #' + goal.id}</div>
               <div class="goal-card__title">${formatMessageText(goal.text || "Untitled")}</div>
             </div>
-            ${badge}
+            <div style="display:flex;align-items:center;">
+                ${badge}
+                ${actions}
+            </div>
           </div>
           ${goal.deadline ? `<div class="goal-card__meta">Target: ${formatMessageText(goal.deadline)}</div>` : ''}
           ${goal.is_draft ? `<div class="goal-card__meta">Seed Steps: ${(goal.checklist||[]).length}</div>` : ''}
           ${updateCount > 0 ? `<div class="goal-card__meta">${updateCount} update${updateCount !== 1 ? 's' : ''} this session</div>` : ''}
         `;
+
+        if (goal.is_draft) {
+             const dismissBtn = card.querySelector(".goal-card__dismiss");
+             if (dismissBtn) {
+                 dismissBtn.addEventListener("click", async (e) => {
+                     e.stopPropagation();
+                     if (!confirm("Dismiss this draft?")) return;
+                     if (!goal.real_draft_id) return;
+                     try {
+                         const res = await fetch(`/v1/suggestions/${goal.real_draft_id}/dismiss`, {
+                             method: "POST",
+                             headers: { "Content-Type": "application/json" },
+                             credentials: "include",
+                             body: JSON.stringify({ reason: "user_dismissed_gui" })
+                         });
+                         if (res.ok) {
+                             await refreshGoals();
+                         }
+                     } catch(err) {
+                         console.error("Dismiss failed", err);
+                     }
+                 });
+             }
+        }
+
 
         card.addEventListener("click", () => {
           if (goal.is_draft) {
