@@ -4177,7 +4177,12 @@
 
     // ===== CHAT FUNCTIONS =====
     function clearChatState() {
-      if (chatLog) chatLog.innerHTML = "";
+      // Use resolved container
+      const chatLog = document.getElementById("chat-log");
+      const chatView = document.getElementById("chat-view");
+      const container = chatLog || chatView;
+      if (container) container.innerHTML = "";
+      
       const chatPlaceholder = document.getElementById("chat-placeholder");
       if (chatPlaceholder) chatPlaceholder.classList.remove("hidden");
       othelloState.messagesByClientId = {};
@@ -4301,10 +4306,8 @@
           // Force scroll to bottom after initial load
           requestAnimationFrame(() => {
               const chatLog = document.getElementById("chat-log");
-              const chatView = document.getElementById("chat-view");
-              const scroller = chatLog || chatView;
-              if (scroller) {
-                  scroller.scrollTop = scroller.scrollHeight;
+              if (chatLog) {
+                  chatLog.scrollTop = chatLog.scrollHeight;
               }
           });
         };
@@ -4368,6 +4371,11 @@
         chatPlaceholder.classList.add("hidden");
       }
 
+      // Resolve container explicitly (Fix for invisible messages)
+      const chatLog = document.getElementById("chat-log");
+      const chatView = document.getElementById("chat-view");
+      const container = chatLog || chatView;
+
       const row = document.createElement("div");
       row.className = `msg-row ${role}`;
 
@@ -4420,7 +4428,11 @@
       }
 
       row.appendChild(bubble);
-      chatLog.appendChild(row);
+      
+      // Append to the resolved container
+      if (container) {
+         container.appendChild(row);
+      }
 
       if (role === "user" && clientMessageId) {
         othelloState.messagesByClientId[clientMessageId] = {
@@ -4437,10 +4449,8 @@
       // Scroll to latest message (Smart Scroll)
       requestAnimationFrame(() => {
         // Fix: Scroll #chat-log if in overlay mode, as it's the scroll container
-        const chatLog = document.getElementById("chat-log");
-        const chatView = document.getElementById("chat-view");
-        // Prefer chat-log if it exists, otherwise chat-view
-        const scroller = chatLog || chatView;
+        // Always prefer the one we just appended to
+        const scroller = container;
         
         if (scroller) {
             // Determine if we should auto-scroll

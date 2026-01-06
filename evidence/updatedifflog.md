@@ -19,6 +19,7 @@ Planned:
 - [x] Fix: Chat Layout (Input Bottom, No Overlap, Hide FAB).
 - [x] Feat: Planner Menu (Sub-surface switching).
 - [x] Fix: Chat Anchor (Bottom-anchored messages, Smart Scroll).
+- [x] Fix: Visible Chat Container (Canonical #chat-log resolution).
 
 Completed:
 - [x] Phase 1: Identified `othello_ui.html` and `static/othello.js` as key files. Confirmed `switchView` handles tab switching and `sendMessage` uses `/api/message` with mode-based channel selection.
@@ -29,76 +30,79 @@ Completed:
 - [x] Fix 1: Resolved regression where Send button was disconnected. Added `bindChatOverlayHandlers` to robustly re-attach events. Fixed CSS `pointer-events`/`z-index` for header controls. Safe input lookup in `sendMessage`.
 - [x] Fix 2: Corrected Chat Overlay Layout (Flexbox column). Input pinned to bottom. FAB hidden when open. Added Planner Sub-menu for Today/Routine switching.
 - [x] Fix 3: Implemented bottom-anchored chat log via CSS `justify-content: flex-end`. Refined auto-scroll to be instant (removing "fly off top" animation) and conditional on position.
+- [x] Fix 4: Addressed invisible message issue by forcing `addMessage` and `clearChatState` to resolve `#chat-log` explicitly at runtime, ensuring messages are appended to the visible flex container.
 
 ## Next Action
 Stop and commit. Cycle complete.
 
 ## Full Unified Diff
-diff --git a/static/othello.css b/static/othello.css
-index 45fd446d..0075f2d8 100644
---- a/static/othello.css
-+++ b/static/othello.css
-@@ -1965,6 +1965,10 @@
-   overflow-y: auto; /* The log scrolls */
-   padding: 1rem;
-   height: auto;
-+  display: flex;
-+  flex-direction: column;
-+  justify-content: flex-end; /* anchor messages to bottom */
-+  gap: 0.5rem;
- }
- 
- /* Adjust Input Bar for the sheet */
 diff --git a/static/othello.js b/static/othello.js
-index 38189859..fd520b75 100644
+index fd520b75..c9239c4e 100644
 --- a/static/othello.js
 +++ b/static/othello.js
-@@ -4297,6 +4297,16 @@
-             const role = msg && msg.source === "assistant" ? "bot" : "user";
-             addMessage(role, text);
+@@ -4177,7 +4177,12 @@
+ 
+     // ===== CHAT FUNCTIONS =====
+     function clearChatState() {
+-      if (chatLog) chatLog.innerHTML = "";
++      // Use resolved container
++      const chatLog = document.getElementById("chat-log");
++      const chatView = document.getElementById("chat-view");
++      const container = chatLog || chatView;
++      if (container) container.innerHTML = "";
++      
+       const chatPlaceholder = document.getElementById("chat-placeholder");
+       if (chatPlaceholder) chatPlaceholder.classList.remove("hidden");
+       othelloState.messagesByClientId = {};
+@@ -4301,10 +4306,8 @@
+           // Force scroll to bottom after initial load
+           requestAnimationFrame(() => {
+               const chatLog = document.getElementById("chat-log");
+-              const chatView = document.getElementById("chat-view");
+-              const scroller = chatLog || chatView;
+-              if (scroller) {
+-                  scroller.scrollTop = scroller.scrollHeight;
++              if (chatLog) {
++                  chatLog.scrollTop = chatLog.scrollHeight;
+               }
            });
-+
-+          // Force scroll to bottom after initial load
-+          requestAnimationFrame(() => {
-+              const chatLog = document.getElementById("chat-log");
-+              const chatView = document.getElementById("chat-view");
-+              const scroller = chatLog || chatView;
-+              if (scroller) {
-+                  scroller.scrollTop = scroller.scrollHeight;
-+              }
-+          });
          };
-         if (renderedCount > 0) {
-           renderMessages(messages);
-@@ -4424,7 +4434,7 @@
-         refreshSecondarySuggestionUI(othelloState.messagesByClientId[clientMessageId]);
+@@ -4368,6 +4371,11 @@
+         chatPlaceholder.classList.add("hidden");
        }
  
--      // Scroll to latest message
-+      // Scroll to latest message (Smart Scroll)
++      // Resolve container explicitly (Fix for invisible messages)
++      const chatLog = document.getElementById("chat-log");
++      const chatView = document.getElementById("chat-view");
++      const container = chatLog || chatView;
++
+       const row = document.createElement("div");
+       row.className = `msg-row ${role}`;
+ 
+@@ -4420,7 +4428,11 @@
+       }
+ 
+       row.appendChild(bubble);
+-      chatLog.appendChild(row);
++      
++      // Append to the resolved container
++      if (container) {
++         container.appendChild(row);
++      }
+ 
+       if (role === "user" && clientMessageId) {
+         othelloState.messagesByClientId[clientMessageId] = {
+@@ -4437,10 +4449,8 @@
+       // Scroll to latest message (Smart Scroll)
        requestAnimationFrame(() => {
          // Fix: Scroll #chat-log if in overlay mode, as it's the scroll container
-         const chatLog = document.getElementById("chat-log");
-@@ -4433,10 +4443,17 @@
-         const scroller = chatLog || chatView;
+-        const chatLog = document.getElementById("chat-log");
+-        const chatView = document.getElementById("chat-view");
+-        // Prefer chat-log if it exists, otherwise chat-view
+-        const scroller = chatLog || chatView;
++        // Always prefer the one we just appended to
++        const scroller = container;
  
          if (scroller) {
--          scroller.scrollTo({
--            top: scroller.scrollHeight,
--            behavior: "smooth"
--          });
-+            // Determine if we should auto-scroll
-+            const distanceFromBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
-+            // If we are somewhat near the bottom (or if the content was just added and it was empty/short)
-+            // we force scroll. But if user is reading up history, we leave it be.
-+            // For new messages (which this function handles), we usually want to jump if we are close enough.
-+            // 80px seems reasonable (about 1-2 messages).
-+            // We also scroll if the total height is small (just filling up).
-+
-+            if (distanceFromBottom < 150 || scroller.scrollHeight <= scroller.clientHeight * 1.5) {
-+                 scroller.scrollTop = scroller.scrollHeight; // Instant scroll (no smooth) to prevent "flying"
-+            }
-         }
-       });
-       return { row, bubble };
+             // Determine if we should auto-scroll
 
