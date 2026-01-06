@@ -26,6 +26,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from db import routines_repository
 from db import suggestions_repository
 from db import goals_repository
+from db import goal_events_repository
 from db.database import get_connection
 import hashlib
 import json
@@ -4280,6 +4281,7 @@ def handle_message():
         # Phase 21: Manual Create Goal (Voice-First Confirmation)
         if user_id and ui_action == "create_goal_from_message":
              source_message_id = data.get("source_message_id")
+             goal_context = data.get("goal_context") # Phase 22: Context seed for goal activity
              override_title = data.get("title")
              override_desc = data.get("description")
              
@@ -4296,17 +4298,34 @@ def handle_message():
                      final_steps = passed_payload.get("steps") or []
                  
                  # Create the goal
-                 goal_id = goals_repository.create_goal(
-                     user_id=user_id,
-                     title=final_title,
-                     description=final_body,
-                     target_days=None 
+                 created_goal = goals_repository.create_goal(
+                     {
+                        "title": final_title,
+                        "description": final_body,
+                        "status": "active"
+                     },
+                     user_id=user_id
                  )
+                 goal_id = created_goal.get("id")
                  
                  # Add steps if present
                  if goal_id and final_steps:
                      for step in final_steps:
                          goals_repository.add_goal_step(user_id, goal_id, str(step))
+
+                 # Phase 22: Seed context if provided
+                 if goal_id and goal_context:
+                      goal_events_repository.append_goal_event(
+                          user_id=user_id,
+                          goal_id=goal_id,
+                          step_id=None,
+                          event_type="context_seed",
+                          payload={
+                              "source_client_message_id": source_message_id,
+                              "context": goal_context
+                          },
+                          request_id=request_id
+                      )
                          
                  return jsonify({
                      "reply": f"Goal '{final_title}' created.",
@@ -4320,7 +4339,7 @@ def handle_message():
              except Exception as e:
                  logger.error("Failed to create goal from message: %s", e)
                  return jsonify({
-                     "reply": "I couldn't create the goal right now.",
+                     "reply": f"I couldn't create the goal right now. Error: {str(e)}",
                      "request_id": request_id
                  })
 

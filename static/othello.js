@@ -4574,6 +4574,30 @@
       });
     }
 
+    function collectGoalContext(startClientMessageId) {
+       if (!startClientMessageId || !othelloState.messagesByClientId[startClientMessageId]) return null;
+       const context = [];
+       let currentRow = othelloState.messagesByClientId[startClientMessageId].rowEl;
+       while (currentRow) {
+           if (currentRow.classList.contains("msg-row")) {
+               const role = currentRow.classList.contains("user") ? "user" : "assistant";
+               const bubble = currentRow.querySelector(".bubble");
+               if (bubble) {
+                   const clone = bubble.cloneNode(true);
+                   // Cleanup UI elements to get just text
+                   const meta = clone.querySelector(".meta");
+                   if (meta) meta.remove();
+                   const bars = clone.querySelectorAll(".commitment-bar, .plan-action-bar, .planner-card");
+                   bars.forEach(b => b.remove());
+                   
+                   context.push({ role, text: clone.textContent.trim() });
+               }
+           }
+           currentRow = currentRow.nextElementSibling;
+       }
+       return context.length > 0 ? context : null;
+    }
+
     async function createGoalFromSuggestion(opts) {
       const { title, description, clientMessageId, statusEl, panelEl, onSuccess, suggestionId, payload } = opts;
       const trimmedTitle = (title || "").trim();
@@ -4584,6 +4608,9 @@
       }
       disablePanelButtons(panelEl, true);
       if (statusEl) statusEl.textContent = "Saving goal...";
+      
+      const goalContext = collectGoalContext(clientMessageId);
+
       try {
         // Phase 21: Direct Chat Action (No v1/create)
         // If it's a virtual suggestion (no real ID) or even if it is, we prefer the chat action route
@@ -4596,7 +4623,8 @@
                  source_message_id: clientMessageId,
                  title: trimmedTitle,
                  description: trimmedDesc,
-                 payload: payload || (othelloState.goalIntentSuggestions[clientMessageId] ? othelloState.goalIntentSuggestions[clientMessageId].payload : null)
+                 payload: payload || (othelloState.goalIntentSuggestions[clientMessageId] ? othelloState.goalIntentSuggestions[clientMessageId].payload : null),
+                 goal_context: goalContext
              });
              // The API will return 'focus_goal' action which we handle in socket message
              return true;
