@@ -106,3 +106,4 @@ index fd520b75..c9239c4e 100644
          if (scroller) {
              // Determine if we should auto-scroll
 
+- [x] Harden: Strict Chat Transcript (#chat-log only)
