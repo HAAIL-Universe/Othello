@@ -3906,8 +3906,11 @@
       if (!MODE_LABELS[mode]) return;
       othelloState.currentMode = mode;
       persistMode(mode);
-      modeLabel.textContent = MODE_LABELS[mode];
-      modeSubtitle.textContent = MODE_SUBTITLES[mode] || "";
+      
+      if (modeLabel) modeLabel.textContent = MODE_LABELS[mode];
+      else console.warn("[UI] setMode called but modeLabel missing");
+
+      if (modeSubtitle) modeSubtitle.textContent = MODE_SUBTITLES[mode] || "";
 
       if (modeOptions && modeOptions.length) {
         modeOptions.forEach(opt => {

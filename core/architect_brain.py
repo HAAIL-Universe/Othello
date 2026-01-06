@@ -577,16 +577,6 @@ class Architect:
             
             # Build XML-only planning prompt
             system_prompt = load_prompt("strict_planning_xml")
-                "<category>health|career|finance|learning|relationship|other</category>\n"
-                "<plan_steps>\n"
-                "<step index=\"1\" status=\"pending\">First actionable step</step>\n"
-                "<step index=\"2\" status=\"pending\">Second actionable step</step>\n"
-                "<!-- Add more steps as needed -->\n"
-                "</plan_steps>\n"
-                "<next_action>The most important immediate next step</next_action>\n"
-                "</goal_update>\n\n"
-                "OUTPUT ONLY THE XML. NO OTHER TEXT.\n"
-            )
             
             # Build messages
             messages = [
