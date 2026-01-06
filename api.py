@@ -1084,6 +1084,34 @@ def _record_suggestion_dismissal(
     return True
 
 
+def _normalize_goal_draft_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """Ensure draft payload always has valid types."""
+    if not isinstance(payload, dict):
+        payload = {}
+    
+    # Ensure steps is a list
+    steps = payload.get("steps")
+    if not isinstance(steps, list):
+        payload["steps"] = []
+    
+    # Ensure target_days is int or None
+    td = payload.get("target_days")
+    if td is not None:
+        try:
+            payload["target_days"] = int(td)
+        except (ValueError, TypeError):
+            payload["target_days"] = None
+            
+    # Normalize strings
+    for k in ["title", "body", "description"]:
+        if payload.get(k) is None:
+            payload[k] = ""
+        else:
+            payload[k] = str(payload[k]).strip()
+            
+    return payload
+
+
 def _generate_goal_draft_payload(user_input: str) -> Dict[str, Any]:
     from core.llm_wrapper import LLMWrapper
     
@@ -1109,7 +1137,7 @@ def _generate_goal_draft_payload(user_input: str) -> Dict[str, Any]:
             response_format={"type": "json_object"}
         )
         content = response.choices[0].message.content
-        return json.loads(content)
+        return _normalize_goal_draft_payload(json.loads(content))
     except Exception as e:
         logging.error(f"Failed to generate goal draft payload: {e}")
         # Fallback
@@ -1119,6 +1147,7 @@ def _generate_goal_draft_payload(user_input: str) -> Dict[str, Any]:
             "steps": [],
             "body": user_input
         }
+
 
 
 def _apply_goal_draft_deterministic_edit(current_payload: Dict[str, Any], user_instruction: str) -> Tuple[Dict[str, Any], bool, str]:
@@ -1273,7 +1302,7 @@ def _generate_draft_steps_payload(current_payload: Dict[str, Any]) -> Dict[str, 
             response_format={"type": "json_object"}
         )
         content = response.choices[0].message.content
-        return json.loads(content)
+        return _normalize_goal_draft_payload(json.loads(content))
     except Exception as e:
         logging.error(f"Failed to generate draft steps: {e}")
         return current_payload
@@ -1780,14 +1809,28 @@ def _attach_goal_intent_suggestion(
         return False
     suggestion_id = suggestion.get("suggestion_id") or suggestion.get("id")
     if suggestion_id is None and user_id:
-        title = suggestion.get("title_suggestion") or _extract_goal_title_suggestion(user_input)
-        body = suggestion.get("body_suggestion") or (user_input or "").strip()
-        payload = {
-            "title": title,
-            "body": body,
-            "description": body,
-            "confidence": suggestion.get("confidence"),
-        }
+        # Phase 21: Clarification Gating
+        # If the input is too short and lacks planning keywords, defer to regular chat (which will ask questions)
+        raw_text = (user_input or "").strip()
+        is_vague = len(raw_text) < 25 and not any(k in raw_text.lower() for k in ["day", "week", "month", "step", "plan", "build", "create"])
+        
+        if is_vague:
+            logger.info("API: Goal intent detected but input is vague (%d chars). Skipping automatic drafting.", len(raw_text))
+            return False
+
+        # Phase 21: Generating full draft immediately to persist seed steps
+        draft_payload = _generate_goal_draft_payload(raw_text)
+        
+        # Ensure title fallback
+        if not draft_payload.get("title"):
+             draft_payload["title"] = suggestion.get("title_suggestion") or _extract_goal_title_suggestion(raw_text) or "New Goal"
+
+        payload = draft_payload
+        payload["description"] = payload.get("body")
+        payload["confidence"] = suggestion.get("confidence")
+        
+        title = payload["title"] # Required for deduplication below
+
         provenance = {
             "source": "api_message_goal_intent",
             "request_id": request_id,

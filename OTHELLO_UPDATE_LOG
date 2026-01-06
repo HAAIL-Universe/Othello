@@ -3,37 +3,52 @@
 - Seeded JSON-backed routines (data/routines.json) and daily plan persistence (data/day_plans/plan_YYYY-MM-DD.json) to keep plans stable for the day.
 - Exposed API surface: GET /api/today-plan, POST /api/plan/update, POST /api/plan/rebuild for Magistus to fetch and update the day plan without touching internals.
 - Wired DayPlanner to existing DbGoalManager + MemoryManager so goal-step completions propagate to goal progress while routine and plan events are logged for later reflection.
+
 2025-12-10 - Behaviour Profile & Engine Refactor
 - Added core/behavior_profile.py to derive lightweight heuristics (routine success, skip rates, throughput by effort, section density) from recent plans/logs.
 - DayPlanner now consumes BehaviorProfile to bias routine variant selection toward realistic versions and to size daily capacity using recent throughput, mood, and fatigue.
 - Introduced core/othello_engine.py as the importable planning surface; API now delegates to engine methods (generate/rebuild/update) and dropped force regeneration via GET.
 - Lifecycle logging now records section/effort metadata to agentic_memory.json for richer behaviour signals.
+
 2025-12-10 - Tactical Brief & Reflection
 - OthelloEngine now provides deterministic plan summaries for Magistus: use get_today_brief/mood-aware summarise_today_plan to obtain a headline, outline, energy note, and backlog guidance.
 - Added daily reflection generation and storage (data/reflections/reflection_YYYY-MM-DD.json) with streaks, rolling priority completion, routine variants run, and baseline comparison; available via generate_day_reflection.
 - API surface optionally exposes GET /api/today-brief for read-only tactical briefs while keeping the primary integration in OthelloEngine.
+
 2025-12-11 - Plan Schema & Status Guardrails
 - Stabilised Today Plan schema with explicit type markers on routine and goal items plus documented contract in core/day_planner.py.
 - BehaviorProfile now ingests reflections to derive momentum signals (priority streak, baseline state, recent misses) and DayPlanner capacity sizing uses them.
 - Hardened lifecycle updates: strict status validation, preventing regressions from complete, requiring reschedule targets, and logging reschedule metadata for auditability.
+
 2025-12-11 - Removed plan_steps dependency
 - Stripped day planner/behavior flow of the experimental plan_steps table; DbGoalManager now degrades gracefully when that table is absent and Today Plans rely solely on JSON-backed storage.
 - /api/today-plan and /api/today-brief now run without requiring any DB migrations beyond the existing goals schema.
+
 2025-12-11 - DB-backed Today Plans
 - Introduced canonical `plans` and `plan_items` tables (auto-created on startup) to persist daily plan headers and items by date/user, including generation context and metadata.
 - DayPlanner/OthelloEngine now read/write Today Plans from the database as the source of truth, with JSON snapshots kept only for debugging.
 - BehaviorProfile consumes DB-backed plans; /api/today-plan, /api/today-brief, and /api/plan/update operate against the new schema with stable item_ids.
+
 2025-12-11 - Multi-face UI Shell
 - Mode switcher now lives at the top of the Othello UI, letting users swap between Companion Chat, Today Planner, and Routine Planner with the subtitle updating per mode and state persisted via localStorage.
 - Introduced placeholder panels for Today Planner and Routine Planner inside the unified interface, establishing the multi-face shell without touching core chat logic.
 - Architecture is now ready to wire the Today Planner view to live data from /api/today-plan and /api/today-brief in the next step.
+
 2025-12-11 - Mode-aware Middle Tab
 - The middle tab now adapts per mode (Goals / Today Planner / Routine Planner), keeping Chat and Insights intact while routing the middle slot to the right panel.
 - Today Planner content now lives in its own tab with a cleaner brief header and structured routines/goal tasks layout, ready for the live /api/today-plan and /api/today-brief data.
+
 2025-12-11 - Planner Actions & Commitments
 - Today Planner items now include inline Done/Skip/Move to Tomorrow controls that post to /api/plan/update and refresh the tab immediately so status chips stay in sync.
 - Companion Chat shows a lightweight commitment bar on bot messages with structured steps, letting users save steps as long-term goals, inject tasks into Today Plan, or park them as ideas without leaving chat.
+
 2026-01-05 - Goal Focus & Seed Steps
 - Fixed goal focus binding in chat: messages now fallback to the currently viewed goal if no active goal is set.
 - Implemented seed step persistence: confirmed draft steps are now saved to the goal checklist.
 - Updated UI to render seed steps in the goal detail view.
+
+2026-01-06 - Voice Drafting & Reliability (Phase 21)
+- **Core Draft Reliability**: Eliminated 500 errors in draft generation by verifying payload structure (ensures `steps` is never null) via new `_normalize_goal_draft_payload`.
+- **Clarification Gating**: Implemented heuristics in `_attach_goal_intent_suggestion` to detect vague commands (<25 chars, no keywords); now defers to chat clarification instead of creating "skeleton" drafts.
+- **Self-Driving Drafts**: Goal intents now trigger full LLM extraction immediately (persisting seed steps and proper titles) rather than relying on regex fallback, ensuring high-quality initial drafts.
+- **Deduplication**: Confirmed active deduplication logic prevents duplicate "New Goal" drafts from piling up.
