@@ -1,4 +1,5 @@
 import logging
+import re
 from typing import Dict, Optional, List, Union, Any
 from datetime import datetime
 import xml.etree.ElementTree as ET
@@ -130,6 +131,47 @@ class Architect:
         key = self._memory_key(user_id)
         return self.short_term_memory.setdefault(key, [])
 
+    def _select_system_prompt(self, user_text: str, context: Optional[Dict] = None) -> str:
+        """
+        Routes to the appropriate system prompt based on context and user intent.
+        
+        Prompts:
+        - WORK_MODE: For architectural/planning tasks (concise, neutral).
+        - CHAT_PERSONA: For casual/open-ended support (warm, human).
+        """
+        # 1. Strict Goal Context Check
+        # Only use work mode if we have a robust goal object or explicit focus.
+        if context:
+            gc = context.get("goal_context")
+            # Treat as focused if we have structured goal data (id/title) or explicit flag
+            is_focused = context.get("focused", False)
+            has_structured_goal = isinstance(gc, dict) and (gc.get("id") or gc.get("title"))
+            
+            if is_focused or has_structured_goal:
+                return load_prompt("work_mode")
+
+        # 2. Heuristic Intent -> WORK_MODE
+        # Requires [Ask Signal] + [Planning Keyword] to avoid false positives.
+        user_text_lower = user_text.lower()
+        
+        # Signals that imply a request/action
+        ask_signals = [
+            "help", "can you", "could you", "please", "make", "create", "generate", 
+            "draft", "build", "design", "how do i", "what should i"
+        ]
+        has_ask = any(s in user_text_lower for s in ask_signals)
+
+        # Keywords specific to planning (word boundary matched)
+        # Note: 'draft' acts as both signal and keyword, which is fine.
+        triggers_pattern = r"\b(goal|plan|steps|task|tasks|routine|schedule|roadmap|milestone|draft)\b"
+        hits_trigger = bool(re.search(triggers_pattern, user_text_lower))
+
+        if has_ask and hits_trigger:
+            return load_prompt("work_mode")
+            
+        # 3. Default -> CHAT_PERSONA
+        return load_prompt("chat_persona")
+
     async def plan_and_execute(
         self,
         answers: Union[Dict[str, str], str],
@@ -243,7 +285,7 @@ class Architect:
                 del short_term_memory[:-self.context_window * 2]
 
             # ---- Build system prompt + messages ---------------------------------
-            system_prompt = load_prompt("life_architect")
+            system_prompt = self._select_system_prompt(raw_text, context)
             
             # Check if we're in planning mode (active goal context provided)
             has_goal_context = context is not None and context.get("goal_context") is not None
@@ -252,7 +294,7 @@ class Architect:
             if has_goal_context:
                 system_prompt += (
                     "\n\n=== ACTIVE GOAL CONTEXT ===\n"
-                    "Use the goal context to provide concise, conversational guidance."
+                    "Use the goal context to provide concise guidance."
                     " Do not generate XML, code fences, or structured tags."
                     " Do not create, update, or save goals automatically."
                     " Ask at most one clarifying question if needed and keep replies actionable."
@@ -528,16 +570,7 @@ class Architect:
             goal_context = self.goal_mgr.build_goal_context(user_id, goal_id, max_notes=8)
             
             # Build XML-only planning prompt
-            system_prompt = load_prompt("life_architect")
-            system_prompt += (
-                "\n\n=== STRICT PLANNING MODE ===\n"
-                "You are in XML-ONLY output mode. Your entire response MUST be a single "
-                "<goal_update> XML block with NO surrounding text, NO markdown fences, NO prose.\n\n"
-                "Required format:\n"
-                "<goal_update>\n"
-                "<summary>...</summary>\n"
-                "<status>active|paused|completed|dropped</status>\n"
-                "<priority>high|medium|low</priority>\n"
+            system_prompt = load_prompt("strict_planning_xml")
                 "<category>health|career|finance|learning|relationship|other</category>\n"
                 "<plan_steps>\n"
                 "<step index=\"1\" status=\"pending\">First actionable step</step>\n"
