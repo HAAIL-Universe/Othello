@@ -11,16 +11,17 @@
 ## Todo Ledger
 Planned:
 - [x] Phase 1: Discover + Anchor (Identify UI entry points and message pipelines).
-- [ ] Phase 2: Navigation restructure (Planner-first home, remove Chat tab).
+- [x] Phase 2: Navigation restructure (Planner-first home, remove Chat tab).
 - [ ] Phase 3: Global chat bubble + overlay shell.
 - [ ] Phase 4: Unify chat UI + context routing.
 - [ ] Phase 5: Dialogue selector.
 
 Completed:
 - [x] Phase 1: Identified `othello_ui.html` and `static/othello.js` as key files. Confirmed `switchView` handles tab switching and `sendMessage` uses `/api/message` with mode-based channel selection.
+- [x] Phase 2: Removed "Chat" tab from `othello_ui.html`. Updated `othello.js` default state to `today-planner`, changed `loadMode` default to `today`, and updated `setMode` fallback to prefer Planner/Goals over Chat.
 
 ## Next Action
-Stop and commit Phase 1.
+Start Phase 3: Global chat bubble + overlay shell.
 
 ## Full Unified Diff
-(No changes to code yet)
+(Diffs included in git commits)

@@ -810,8 +810,8 @@
 
     // App state
     const othelloState = {
-      currentView: "chat",
-      currentMode: "companion", // companion | today | routine
+      currentView: "today-planner",
+      currentMode: "today", // companion | today | routine
       goals: [],
       activeGoalId: null,
       activeConversationId: null, // New Chat support
@@ -3637,7 +3637,7 @@
           return stored;
         }
       } catch (e) {}
-      return "companion";
+      return "today";
     }
 
     function loadDraftState() {
@@ -3676,7 +3676,8 @@
       }
 
       const allowed = MODE_ALLOWED_VIEWS[mode] || [];
-      const fallback = mode === "companion" ? "chat" : (tabCfg ? tabCfg.view : "chat");
+      // Default to the primary view for the mode (Goals/Planner), never "chat" as main view
+      const fallback = tabCfg ? tabCfg.view : "today-planner";
       const targetView = allowed.includes(othelloState.currentView) ? othelloState.currentView : fallback;
       updateTabBadges();
       refreshInsightsCounts();
