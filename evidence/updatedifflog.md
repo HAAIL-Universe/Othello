@@ -2,102 +2,32 @@
 
 ## Manual Verification Checklist
 
-- [ ] **Fresh load (1 message)**: Ensure the single message sits near the bottom of the visible area, just above the input bar (due to spacer).
-- [ ] **Multiple messages**: Ensure the chat stays pinned to the bottom as new messages arrive.
-- [ ] **Scroll up**: Scroll up to read history. Ensure that incoming new messages (replies) do NOT yank the view back to the bottom.
+- [ ] **Send message**: Send a message in the chat.
+- [ ] **Check visibility**: Verify that the assistant's reply (and your message) is fully visible above the input bar without needing to scroll manually.
+- [ ] **Scroll bottom**: Manually scroll to the very bottom and ensure there is a "gutter" of empty space (approx 72px + 1rem) at the end.
 
 ## Diff
 
 ```diff
 diff --git a/static/othello.css b/static/othello.css
-index 4e87194c..a531c9a2 100644
+index a531c9a2..54e791ea 100644
 --- a/static/othello.css
 +++ b/static/othello.css
-@@ -1965,17 +1965,21 @@ 
- }
+@@ -1898,6 +1898,7 @@
  
- .chat-sheet #chat-log {
--  flex: 1 1 auto;
-+  flex: 1 1 0;
+ /* The Chat Container (panel) */
+ .chat-sheet {
++  --chat-input-h: 72px;
+   width: min(500px, 100%);
+   height: min(800px, 85vh); /* Tall sheet on bottom right */
+   background: var(--bg-1);
+@@ -1968,6 +1969,8 @@
+   flex: 1 1 0;
    overflow-y: auto; /* The log scrolls */
    padding: 1rem;
++  padding-bottom: calc(1rem + var(--chat-input-h));
++  scroll-padding-bottom: calc(1rem + var(--chat-input-h));
    display: flex;
    flex-direction: column;
--  /* Fixed: Removed justify-content: flex-end to prevent clipping of top messages. */
--  /* We rely on JS to scroll to bottom. */
    gap: 0.5rem;
-   min-height: 0; /* Critical for flex scrolling */
- }
- 
-+/* Spacer technique to keep content at bottom when sparse */
-+.chat-sheet #chat-log::before {
-+  content: "";
-+  flex: 1 1 auto;
-+}
-+
- /* Adjust Input Bar for the sheet */
- .chat-sheet .input-bar {
-   position: relative; /* Not fixed anymore */
-diff --git a/static/othello.js b/static/othello.js
-index d407a3a6..7dd8aa7f 100644
---- a/static/othello.js
-+++ b/static/othello.js
-@@ -3585,6 +3585,7 @@
-         console.log(`[Othello UI] Opened chat overlay. Context: ${channel} (View: ${othelloState.currentView})`);                                                  
-         loadChatHistory(); // Triggers fetch for the effective channel
-+        scrollChatToBottom(true);
- 
-         updateFocusRibbon();
-         const ui = document.getElementById('user-input');
-@@ -4196,6 +4197,15 @@
-       return chatLog;
-     }
- 
-+    function scrollChatToBottom(force=false) {
-+      const c = getChatContainer();
-+      if (!c) return;
-+      const nearBottom = (c.scrollHeight - (c.scrollTop + c.clientHeight)) < 40; 
-+      if (force || nearBottom) {
-+         requestAnimationFrame(() => { c.scrollTop = c.scrollHeight; });
-+      }
-+    }
-+
-     function clearChatState() {
-       // Use strict resolved container
-       const container = getChatContainer();
-@@ -4322,12 +4332,7 @@
-           });
- 
-           // Force scroll to bottom after initial load
--          requestAnimationFrame(() => {
--              const chatLog = getChatContainer();
--              if (chatLog) {
--                  chatLog.scrollTop = chatLog.scrollHeight;
--              }
--          });
-+          scrollChatToBottom(true);
-         };
-         if (renderedCount > 0) {
-           renderMessages(messages);
-@@ -4466,20 +4471,7 @@
-       }
- 
-       // Scroll to latest message (Smart Scroll - Phase B3)
--      requestAnimationFrame(() => {
--        const scroller = container;
--        if (scroller) {
--            // Determine if we should auto-scroll
--            // Threshold: 40px as requested (was 150)
--            const distanceFromBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
--            const isNearBottom = distanceFromBottom < 40;
--            
--            // If we are near the bottom, or if the content is small (just filling up), force scroll.
--            if (isNearBottom || scroller.scrollHeight <= scroller.clientHeight * 1.5) {
--                 scroller.scrollTop = scroller.scrollHeight;
--            }
--        }
--      });
-+      scrollChatToBottom(false);
-       return { row, bubble };
-     }
 ```

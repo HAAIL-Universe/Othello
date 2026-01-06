@@ -1898,6 +1898,7 @@
 
 /* The Chat Container (panel) */
 .chat-sheet {
+  --chat-input-h: 72px;
   width: min(500px, 100%);
   height: min(800px, 85vh); /* Tall sheet on bottom right */
   background: var(--bg-1);
@@ -1968,6 +1969,8 @@
   flex: 1 1 0;
   overflow-y: auto; /* The log scrolls */
   padding: 1rem;
+  padding-bottom: calc(1rem + var(--chat-input-h));
+  scroll-padding-bottom: calc(1rem + var(--chat-input-h));
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
