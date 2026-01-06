@@ -4176,19 +4176,20 @@
     }
 
     // ===== CHAT FUNCTIONS =====
-    function getChatLogOrWarn() {
+    function getChatContainer() {
+      // B1: Canonical resolution. We strictly use #chat-log.
+      // We do NOT fallback to #chat-view (parent) to avoid split-brain messages.
       const chatLog = document.getElementById("chat-log");
+      
       if (!chatLog) {
-        console.error("[Othello UI] CRITICAL: #chat-log container missing from DOM. Chat interaction may be invisible.");
-        // Visible UI Error (Safe Failure)
+        console.error("[Othello UI] CRITICAL: #chat-log container missing. Chat interaction impossible.");
+        // Visible UI Error (Phase A/B Requirement)
         const toastContainer = document.getElementById("toast-container");
         if (toastContainer) {
             const errDiv = document.createElement("div");
             errDiv.className = "toast error";
-            errDiv.textContent = "Chat Error: Container #chat-log missing.";
+            errDiv.textContent = "Error: Chat container missing.";
             toastContainer.appendChild(errDiv);
-        } else {
-            alert("Chat Critical Error: #chat-log missing");
         }
         return null;
       }
@@ -4197,7 +4198,7 @@
 
     function clearChatState() {
       // Use strict resolved container
-      const container = getChatLogOrWarn();
+      const container = getChatContainer();
       if (container) container.innerHTML = "";
       
       const chatPlaceholder = document.getElementById("chat-placeholder");
@@ -4322,7 +4323,7 @@
           
           // Force scroll to bottom after initial load
           requestAnimationFrame(() => {
-              const chatLog = getChatLogOrWarn();
+              const chatLog = getChatContainer();
               if (chatLog) {
                   chatLog.scrollTop = chatLog.scrollHeight;
               }
@@ -4388,11 +4389,9 @@
         chatPlaceholder.classList.add("hidden");
       }
 
-      // Resolve container explicitly - STRICT MODE OTHELLO-LOG-ONLY
-      // We strictly require #chat-log. No fallback to #chat-view.
-      const container = getChatLogOrWarn();
+      // Resolve container explicitly (Phase B2)
+      const container = getChatContainer();
       if (!container) {
-          // Fail robustly if UI is broken
           return { row: null, bubble: null };
       }
 
@@ -4466,23 +4465,18 @@
         refreshSecondarySuggestionUI(othelloState.messagesByClientId[clientMessageId]);
       }
 
-      // Scroll to latest message (Smart Scroll)
+      // Scroll to latest message (Smart Scroll - Phase B3)
       requestAnimationFrame(() => {
-        // Fix: Scroll #chat-log if in overlay mode, as it's the scroll container
-        // Always prefer the one we just appended to
         const scroller = container;
-        
         if (scroller) {
             // Determine if we should auto-scroll
+            // Threshold: 40px as requested (was 150)
             const distanceFromBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
-            // If we are somewhat near the bottom (or if the content was just added and it was empty/short)
-            // we force scroll. But if user is reading up history, we leave it be.
-            // For new messages (which this function handles), we usually want to jump if we are close enough.
-            // 80px seems reasonable (about 1-2 messages).
-            // We also scroll if the total height is small (just filling up).
+            const isNearBottom = distanceFromBottom < 40;
             
-            if (distanceFromBottom < 150 || scroller.scrollHeight <= scroller.clientHeight * 1.5) {
-                 scroller.scrollTop = scroller.scrollHeight; // Instant scroll (no smooth) to prevent "flying"
+            // If we are near the bottom, or if the content is small (just filling up), force scroll.
+            if (isNearBottom || scroller.scrollHeight <= scroller.clientHeight * 1.5) {
+                 scroller.scrollTop = scroller.scrollHeight;
             }
         }
       });
