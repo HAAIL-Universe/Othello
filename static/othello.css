@@ -2179,52 +2179,36 @@ body.chat-open #global-chat-fab {
   }
 }
 
-/* --- Duet Chat Mode --- */
-.duet-container {
-  display: none;
-  flex-direction: column;
-  flex: 1;
-  height: 100%;
-  overflow: hidden;
+/* --- Duet Chat Mode (Unified) --- */
+.duet-pin-top {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: rgba(15, 23, 42, 0.98); /* Opaque bg */
+  border-bottom: 1px solid rgba(255,255,255,0.1);
   padding: 0.5rem;
-}
-.duet-part {
-  overflow-y: auto;
-  -webkit-overflow-scrolling: touch;
-  padding: 0.25rem;
-}
-.duet-top {
-  max-height: 60%;
-  border-bottom: 1px solid rgba(255,255,255,0.05);
-  margin-bottom: 0.5rem;
-  scrollbar-width: none;
-}
-.duet-bottom {
-  max-height: 35%;
-  margin-top: 0.5rem;
-  border-top: 1px solid rgba(255,255,255,0.05);
-  scrollbar-width: none;
-}
-.duet-spacer {
-  flex: 1;
-  min-height: 1rem;
-}
-.duet-part::-webkit-scrollbar {
-  display: none; 
+  margin: 0;
+  display: block !important; /* Ensure visibility once populated */
+  box-shadow: 0 4px 12px rgba(0,0,0,0.2);
 }
 
-/* Mode toggling */
+.duet-pin-bottom {
+  position: sticky;
+  bottom: 0;
+  z-index: 10;
+  background: rgba(15, 23, 42, 0.98);
+  border-top: 1px solid rgba(255,255,255,0.1);
+  padding: 0.5rem;
+  margin: 0;
+  display: block !important;
+  box-shadow: 0 -4px 12px rgba(0,0,0,0.2);
+}
+
+/* Ensure chat-log doesn't hide */
 .chat-sheet[data-view-mode="duet"] #chat-log {
-  display: none !important;
-}
-.chat-sheet[data-view-mode="duet"] #duet-container {
   display: flex !important;
 }
 
-.chat-sheet[data-view-mode="history"] #chat-log {
-  display: flex !important;
-}
-.chat-sheet[data-view-mode="history"] #duet-container {
-  display: none !important;
-}
+/* Hide original duet container styles */
+.duet-container { display: none; }
 
