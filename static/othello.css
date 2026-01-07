@@ -6958,3 +6958,60 @@ body.chat-open #global-chat-fab {
 .msg-row.user.can-collapse .bubble { cursor: pointer; }
 .msg-row.user.can-collapse .bubble:hover { filter: brightness(0.95); }
 
+
+/* User Peek Tab (Focus Mode) */
+body.mode-duet-user-peek .duet-pane--bottom {
+  height: 0 !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.duet-peek-tab {
+  position: absolute;
+  bottom: 80px;
+  right: 0;
+  width: 24px;
+  height: 48px;
+  background: var(--accent);
+  border-radius: 8px 0 0 8px;
+  cursor: pointer;
+  z-index: 50;
+  opacity: 0.8;
+  transition: opacity 0.2s;
+  display: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.duet-peek-tab:hover { opacity: 1; }
+.duet-peek-tab::after { content: '\00bb'; color: #000; font-weight: bold; }
+
+body.mode-duet-user-peek .duet-peek-tab { display: flex; }
+
+/* Overlay State */
+body.mode-duet-user-overlay .duet-pane--bottom {
+  height: auto !important;
+  padding: 1rem !important;
+  overflow: visible !important;
+  opacity: 1;
+  pointer-events: auto;
+  position: absolute;
+  bottom: 80px;
+  right: 1rem;
+  width: auto;
+  max-width: 90%;
+  background: transparent;
+  border: none;
+  z-index: 200;
+}
+body.mode-duet-user-overlay .duet-pane--bottom .msg-row {
+  box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+  background: var(--bg-1);
+  border-radius: 12px;
+  padding: 8px;
+}
+/* Hide tab when overlay is open */
+body.mode-duet-user-overlay .duet-peek-tab { display: none; }
+

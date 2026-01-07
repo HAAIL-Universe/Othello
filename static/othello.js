@@ -4433,14 +4433,16 @@
       if (!text) return "";
       const sentenceEnd = text.search(/[.!?]/);
       if (sentenceEnd !== -1) {
-        const firstSentence = text.substring(0, sentenceEnd + 1);
+        let firstSentence = text.substring(0, sentenceEnd + 1);
         if (countWords(firstSentence) <= maxWords * 2) {
-             return firstSentence + " …";
+             // Strip trailing punctuation and append dots directly
+             return firstSentence.replace(/[.!?]+$/, "") + "...";
         }
       }
       const words = text.trim().split(/\s+/);
       if (words.length <= maxWords) return text;
-      return words.slice(0, maxWords).join(" ") + " …";
+      // No space before dots
+      return words.slice(0, maxWords).join(" ") + "...";
     }
 
     function updateBubbleContent(rowEl, simpleText) {
@@ -4535,6 +4537,65 @@
         });
     }
 
+    // --- Focus Peek Tab Behavior ---
+    function updateFocusPeekBehavior() {
+       const isFocus = (typeof isDuetLayout === 'function') ? isDuetLayout() : true;
+       // Only active in focus view and if we have duet panes
+       if (!isFocus) {
+           document.body.classList.remove('mode-duet-user-peek', 'mode-duet-user-overlay');
+           return;
+       }
+       
+       const top = document.getElementById("duet-top");
+       const bottom = document.getElementById("duet-bottom");
+       if (!top || !bottom) return;
+
+       // Ensure peek tab exists
+       let tab = document.getElementById("duet-peek-tab");
+       if (!tab) {
+           const container = document.getElementById("chat-sheet") || document.body;
+           tab = document.createElement("div");
+           tab.id = "duet-peek-tab";
+           tab.className = "duet-peek-tab";
+           // Insert as sibling of duet panes or in body
+           bottom.parentElement.appendChild(tab);
+           
+           tab.addEventListener("click", () => {
+               othelloState.focusUserPeekOpen = !othelloState.focusUserPeekOpen;
+               updateFocusPeekVisuals();
+           });
+       }
+
+       // Measure
+       // Use clientHeight of scrollable container or view
+       const view = document.getElementById("chat-sheet") || document.getElementById("chat-view");
+       if (!view) return;
+       const sheetHeight = view.clientHeight;
+       const topHeight = top.scrollHeight;
+
+       const threshold = sheetHeight * 0.45;
+       const isBotLong = topHeight > threshold;
+       
+       // Handle state
+       if (isBotLong) {
+           // Should be collapsed into tab unless open
+           document.body.classList.add("mode-duet-user-peek");
+           updateFocusPeekVisuals();
+       } else {
+           // Normal mode
+           document.body.classList.remove("mode-duet-user-peek", "mode-duet-user-overlay");
+           othelloState.focusUserPeekOpen = false;
+       }
+    }
+
+    function updateFocusPeekVisuals() {
+        if (othelloState.focusUserPeekOpen) {
+            document.body.classList.add("mode-duet-user-overlay");
+        } else {
+            document.body.classList.remove("mode-duet-user-overlay");
+        }
+    }
+
     // Phase 3: Canonical Move - Refactored for 3-Zone Flex Layout
     function applyDuetPins() {
         // Guard: Do not run pin logic if history panel is open
@@ -4622,6 +4683,11 @@
 
         // 6. Refresh Collapse State (Focus Mode)
         refreshUserCollapseState();
+
+        // 7. Focus Peek Logic (Long Bot Fix)
+        if (typeof updateFocusPeekBehavior === 'function') {
+            requestAnimationFrame(updateFocusPeekBehavior);
+        }
     }
     
     function syncDuetPadding() {}
