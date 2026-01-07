@@ -468,6 +468,15 @@ class Architect:
                 {"role": "assistant", "content": user_facing_response}
             )
 
+            # Debug Sink (Issue 1 Requirement A)
+            agent_status["_debug"] = {
+                "llm_msg_count": len(messages),
+                "llm_roles_sequence": ",".join(m.get('role','?') for m in messages),
+                "system_prompt_flags": {
+                    "has_cant_recall": "can't recall" in system_prompt.lower() or "no access to chat history" in system_prompt.lower()
+                }
+            }
+
             # ---- Optional self-reflection hook ---------------------------------
             try:
                 from core.self_reflection import SelfReflectionEngine

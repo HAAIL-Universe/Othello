@@ -4532,10 +4532,21 @@
       }
     }
 
+    function clearAllChatNodes() {
+      // Helper to clear ALL chat containers (Issue 2)
+      ["chat-log", "duet-top", "duet-bottom", "history-log"].forEach(id => {
+         const el = document.getElementById(id);
+         if (el) {
+             // Keep internal structure if needed, but remove messages.
+             // Usually just clearing innerHTML is fine for logs.
+             el.innerHTML = "";
+         }
+      });
+    }
+
     function clearChatState() {
-      // Use strict resolved container
-      const container = getChatContainer();
-      if (container) container.innerHTML = "";
+      // Use helper to clear all visual containers
+      clearAllChatNodes();
       
       const chatPlaceholder = document.getElementById("chat-placeholder");
       if (chatPlaceholder) chatPlaceholder.classList.remove("hidden");

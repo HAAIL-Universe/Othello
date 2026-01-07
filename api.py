@@ -5772,15 +5772,46 @@ def handle_message():
                 if conversation_id:
                     payload["conversation_id"] = conversation_id
                 
-                # Context Debug Injection
-                if companion_context is not None:
+                # Context Debug Injection (Issue 1 Requirement A)
+                # Check for env var DEBUG_CONTEXT=1
+                if os.environ.get("DEBUG_CONTEXT") == "1":
                      if "meta" not in payload:
                          payload["meta"] = {}
-                     payload["meta"]["context_debug"] = {
-                         "turns_loaded": len(companion_context),
-                         "total_chars": sum(len(str(m.get("content", ""))) for m in companion_context),
-                         "roles_represented": list(set(m.get("role", "unknown") for m in companion_context))
-                     }
+                     
+                     # Get debug data passed back from plan_and_execute via agent_status
+                     _debug_agent_stats = {}
+                     if "agent_status" in payload and isinstance(payload["agent_status"], dict):
+                         _debug_agent_stats = payload["agent_status"].get("_debug", {})
+                     
+                     try:
+                        # Re-peek if not captured in scope
+                        _dbg_peek_ids = []
+                        _dbg_peek_roles = []
+                        _dbg_hist_count = 0
+                        if conversation_id and user_id:
+                            from db.messages_repository import list_messages_for_session
+                            _dbg_msgs = list_messages_for_session(str(user_id), conversation_id, limit=6, channel=None)
+                            _dbg_hist_count = len(_dbg_msgs)
+                            if _dbg_msgs:
+                                _dbg_peek_ids = [str(m.get('id')) for m in _dbg_msgs[:2]]
+                                _dbg_peek_roles = [str(m.get('source')) for m in _dbg_msgs[:2]]
+                                if len(_dbg_msgs) > 2:
+                                    _dbg_peek_ids.extend(["...", str(_dbg_msgs[-1].get('id'))])
+                                    _dbg_peek_roles.extend(["...", str(_dbg_msgs[-1].get('source'))])
+                        
+                        payload["meta"]["context_debug"] = {
+                             "request_id": request_id,
+                             "conversation_id_received": data.get("conversation_id"),
+                             "conversation_id_used": conversation_id,
+                             "history_count_peek": _dbg_hist_count, 
+                             "history_ids_peek": _dbg_peek_ids,
+                             "history_roles_peek": _dbg_peek_roles,
+                             "llm_msg_count": _debug_agent_stats.get("llm_msg_count"),
+                             "llm_roles_sequence": _debug_agent_stats.get("llm_roles_sequence"),
+                             "system_prompt_flags": _debug_agent_stats.get("system_prompt_flags")
+                        }
+                     except Exception:
+                        pass
 
                 # Phase A/B: Expose Route
                 if "selected_route" not in payload:
