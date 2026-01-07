@@ -2180,7 +2180,7 @@ body.chat-open #global-chat-fab {
 }
 
 /* --- Duet Chat Mode (Unified) --- */
-/* Phase 2: Fix the scroll container */
+/* Phase 2b: Fix the scroll container + Z-Index Stacking */
 .chat-sheet {
   display: flex !important;
   flex-direction: column !important;
@@ -2191,11 +2191,16 @@ body.chat-open #global-chat-fab {
 /* Header is rigid */
 .chat-sheet__header {
   flex: 0 0 auto;
+  z-index: 200; /* Header stays absolutely on top */
+  position: relative;
+  box-shadow: 0 1px 0 var(--border);
 }
 
 /* Input is rigid (footer) */
 .input-bar {
   flex: 0 0 auto;
+  z-index: 200; /* Input stays absolutely on top */
+  position: relative;
 }
 
 /* Chat View IS the scroll container now */
@@ -2217,10 +2222,14 @@ body.chat-open #global-chat-fab {
   background: rgba(15, 23, 42, 0.98);
   padding: 0.75rem;
   margin: 0;
-  display: block !important;
+  display: block; /* always block, hidden by JS empty check if needed */
   backdrop-filter: blur(8px);
-  /* Ensure they don't shrink away */
   flex-shrink: 0; 
+}
+
+/* Default hidden until populated */
+.duet-pane:empty {
+    display: none !important;
 }
 
 .duet-pane--top {
@@ -2243,6 +2252,9 @@ body.chat-open #global-chat-fab {
   overflow: visible !important; /* Let parent scroll it */
   height: auto !important;
   padding: 1rem;
+  /* Ensure content doesn't get hidden behind sticky headers due to margin collapse */
+  padding-top: 1rem;
+  padding-bottom: 1rem;
 }
 
 /* Hide empty panes */

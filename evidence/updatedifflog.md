@@ -2,178 +2,209 @@
 
 ## Todo Ledger
 Completed:
-- [x] Fixed Duet Chat Layout (Sticky Pinned Top/Bottom)
+- [x] Fix Overlap & Duplicates (Duet Chat)
 
 ## Next Action
-Commit and Push
+Commit
 
 diff --git a/othello_ui.html b/othello_ui.html
-index 31801668..a78c1b7b 100644
+index a78c1b7b..d6ca18ec 100644
 --- a/othello_ui.html
 +++ b/othello_ui.html
-@@ -337,13 +337,13 @@
- 
-       <!-- Moved Chat View Content -->
+@@ -339,6 +339,7 @@
        <div id="chat-view" class="view" style="display:flex;">
--        <div id="duet-top" class="duet-pin-top" style="display:none;"></div>
-+        <div id="duet-top" class="duet-pane duet-pane--top" style="display:none;"></div>
+         <div id="duet-top" class="duet-pane duet-pane--top" style="display:none;"></div>
          
++        <!-- Only this is scrollable history -->
          <div id="draft-preview" class="draft-preview" style="display:none;"></div>
          <div id="chat-placeholder" class="chat-placeholder">Start a conversation</div>
          <div id="chat-log" class="chat-log"></div>
-         
--        <div id="duet-bottom" class="duet-pin-bottom" style="display:none;"></div>
-+        <div id="duet-bottom" class="duet-pane duet-pane--bottom" style="display:none;"></div>
-       </div>
- 
-       <!-- Moved Input Bar -->
 diff --git a/static/othello.css b/static/othello.css
-index e2a9fefb..3ae6edfa 100644
+index 825c710b..c7cc1ae5 100644
 --- a/static/othello.css
 +++ b/static/othello.css
-@@ -2180,28 +2180,31 @@ body.chat-open #global-chat-fab {
+@@ -2180,7 +2180,7 @@ body.chat-open #global-chat-fab {
  }
  
  /* --- Duet Chat Mode (Unified) --- */
--.duet-pin-top {
-+.duet-pane {
-   position: sticky;
--  top: 0;
--  z-index: 10;
--  background: rgba(15, 23, 42, 0.98); /* Opaque bg */
--  border-bottom: 1px solid rgba(255,255,255,0.1);
-+  z-index: 50; /* Above chat bubbles but below header if needed */
-+  background: rgba(15, 23, 42, 0.98);
-   padding: 0.5rem;
-   margin: 0;
--  display: block !important; /* Ensure visibility once populated */
--  box-shadow: 0 4px 12px rgba(0,0,0,0.2);
-+  display: block !important;
-+  backdrop-filter: blur(8px);
- }
- 
--.duet-pin-bottom {
--  position: sticky;
-+.duet-pane--top {
-+  top: 0;
-+  border-bottom: 1px solid rgba(255,255,255,0.1);
-+  box-shadow: 0 4px 12px rgba(0,0,0,0.3);
-+}
-+
-+.duet-pane--bottom {
-   bottom: 0;
--  z-index: 10;
--  background: rgba(15, 23, 42, 0.98);
-   border-top: 1px solid rgba(255,255,255,0.1);
--  padding: 0.5rem;
--  margin: 0;
--  display: block !important;
--  box-shadow: 0 -4px 12px rgba(0,0,0,0.2);
-+  box-shadow: 0 -4px 12px rgba(0,0,0,0.3);
-+}
-+
-+/* Hide empty panes */
-+#duet-top:empty, #duet-bottom:empty {
-+  display: none !important;
- }
- 
- /* Ensure chat-log doesn't hide */
-@@ -2209,6 +2212,6 @@ body.chat-open #global-chat-fab {
+-/* Phase 2: Fix the scroll container */
++/* Phase 2b: Fix the scroll container + Z-Index Stacking */
+ .chat-sheet {
    display: flex !important;
+   flex-direction: column !important;
+@@ -2191,11 +2191,16 @@ body.chat-open #global-chat-fab {
+ /* Header is rigid */
+ .chat-sheet__header {
+   flex: 0 0 auto;
++  z-index: 200; /* Header stays absolutely on top */
++  position: relative;
++  box-shadow: 0 1px 0 var(--border);
  }
  
--/* Hide original duet container styles */
--.duet-container { display: none; }
-+/* Cleanup old classes if any exist */
-+.duet-pin-top, .duet-pin-bottom, .duet-container { display: none; }
+ /* Input is rigid (footer) */
+ .input-bar {
+   flex: 0 0 auto;
++  z-index: 200; /* Input stays absolutely on top */
++  position: relative;
+ }
  
+ /* Chat View IS the scroll container now */
+@@ -2217,12 +2222,16 @@ body.chat-open #global-chat-fab {
+   background: rgba(15, 23, 42, 0.98);
+   padding: 0.75rem;
+   margin: 0;
+-  display: block !important;
++  display: block; /* always block, hidden by JS empty check if needed */
+   backdrop-filter: blur(8px);
+-  /* Ensure they don't shrink away */
+   flex-shrink: 0; 
+ }
+ 
++/* Default hidden until populated */
++.duet-pane:empty {
++    display: none !important;
++}
++
+ .duet-pane--top {
+   top: 0;
+   border-bottom: 1px solid rgba(255,255,255,0.1);
+@@ -2243,6 +2252,9 @@ body.chat-open #global-chat-fab {
+   overflow: visible !important; /* Let parent scroll it */
+   height: auto !important;
+   padding: 1rem;
++  /* Ensure content doesn't get hidden behind sticky headers due to margin collapse */
++  padding-top: 1rem;
++  padding-bottom: 1rem;
+ }
+ 
+ /* Hide empty panes */
 diff --git a/static/othello.js b/static/othello.js
-index 9727ab1b..7ac74076 100644
+index 3a092bfc..1a19d8a7 100644
 --- a/static/othello.js
 +++ b/static/othello.js
-@@ -4297,21 +4297,25 @@
- 
-     // Unified Duet Logic (Sticky Pins)
-     function isDuetEnabled() {
-+      // Check for the new IDs from step 3
+@@ -4300,76 +4300,81 @@
        return !!document.getElementById("duet-top") && !!document.getElementById("duet-bottom");
      }
  
-     function syncDuetPadding() {
--        const scroll = document.getElementById("chat-log"); // chat-log siblings are pinned
-+        const scroll = document.getElementById("chat-log");
+-    // Phase 3: Move nodes (no duplication)
++    // Phase 3: Canonical Move
+     function applyDuetPins() {
+-        if (!isDuetEnabled()) return;
+-        
+-        const chatLog = document.getElementById("chat-log");
          const top = document.getElementById("duet-top");
          const bottom = document.getElementById("duet-bottom");
--        if (!scroll || !top || !bottom) return;
-         
--        // Add minimal padding so text isn't flush with sticky header/footer
--        const padTop = (top.offsetHeight || 0) + 12;
--        const padBottom = (bottom.offsetHeight || 0) + 12;
-+        if (!scroll || !top || !bottom) return;
+-        if (!chatLog) return;
+-        
+-        // 1. Move any existing pinned items BACK to chatLog (restore history order if needed)
+-        // Actually, simpler approach for V1:
+-        // We only pin the LATEST. 
+-        // Iterate chatLog children. Find last user msg, last bot msg.
+-        // Move them to pins? No, that breaks history flow if they are old.
+-        // Rule: Only pin if it is indeed slaved to the bottom/top.
+-        // Actually, user wants "Latest assistant to TOP", "Latest user to BOTTOM".
+-        // This implies visual displacement.
+-        
+-        // Better Strategy:
+-        // 1. Clear pins.
+-        // 2. Scan chatLog rows.
+-        // 3. Last row -> if user, move to bottom.
+-        // 4. Last ASSISTANT row -> move to top.
+-        // Wait, if last row is user, and row before is assistant, we move BOTH.
+-        // This effectively empties the bottom of the history.
+-        
+-        // Implementation:
+-        // Find all .msg-row in chat main loop or chatLog
+-        const rows = Array.from(chatLog.querySelectorAll('.msg-row'));
+-        if (rows.length === 0) return;
+-        
+-        // Find last user row
++        const chatLog = document.getElementById("chat-log");
 +
-+        // Calc exact heights
-+        const topH = top.getBoundingClientRect().height;
-+        const botH = bottom.getBoundingClientRect().height;
++        // Fallback for safety
++        if (!top || !bottom || !chatLog) return;
++
++        // 1. Move ALL pinned items BACK to chatLog first to restore order
++        // This ensures scanning always finds true chronological last messages
++        while (top.firstChild) chatLog.appendChild(top.firstChild);
++        while (bottom.firstChild) chatLog.appendChild(bottom.firstChild);
++
++        // Sort chatLog by DOM order? No, appendChild moves to end.
++        // We need to re-sort? No, they were originally at end. 
++        // NOTE: If we move old pinned items back, they append to END. 
++        // This might reorder history if we aren't careful.
++        // TRICKY: We need to know where they CAME from to un-pin correctly.
++        // SIMPLE FIX: Just sort all children of chatLog by timestamp?
++        // OR: Since we only pin the VERY LAST items, when we unpin, we append to end. 
++        // BUT: If a new message arrived, we want THAT to be pinned.
++        
++        // Sorting approach (safest for history):
++        const allRows = Array.from(chatLog.children).filter(el => el.classList.contains('msg-row'));
++        // If we strictly pin the last ones, unpinning means they go back to end.
++        // New messages are appended to end. So order is preserved naturally.
++        
++        if (allRows.length === 0) return;
++
++        // 2. Scan for candidates
+         let lastUserRow = null;
+         let lastBotRow = null;
+-        
++
+         // Scan backwards
+-        for (let i = rows.length - 1; i >= 0; i--) {
+-            const r = rows[i];
++        for (let i = allRows.length - 1; i >= 0; i--) {
++            const r = allRows[i];
+             if (!lastUserRow && r.classList.contains('user')) lastUserRow = r;
+-            if (!lastBotRow && !r.classList.contains('user')) lastBotRow = r; // Assume non-user is bot
++            if (!lastBotRow && !r.classList.contains('user')) lastBotRow = r;
+             if (lastUserRow && lastBotRow) break;
+         }
+ 
+-        // Move to pins
++        // 3. Move to pins
+         if (lastBotRow) {
+-            top.appendChild(lastBotRow); // Moves it out of chatLog
+-            // Ensure display is correct
++            top.appendChild(lastBotRow);
+             top.style.display = 'block';
+         } else {
+-            top.innerHTML = "";
+             top.style.display = 'none';
+         }
+-        
++
+         if (lastUserRow) {
+-            bottom.appendChild(lastUserRow); // Moves it out of chatLog
++            bottom.appendChild(lastUserRow);
+             bottom.style.display = 'block';
+         } else {
+-            bottom.innerHTML = "";
+             bottom.style.display = 'none';
+         }
          
--        scroll.style.paddingTop = padTop + "px";
--        scroll.style.paddingBottom = padBottom + "px";
-+        // Pad scroll container so content doesn't hide behind sticky headers
-+        // Add +10px breathing room
-+        scroll.style.paddingTop = (topH > 0 ? topH + 10 : 0) + "px";
-+        scroll.style.paddingBottom = (botH > 0 ? botH + 10 : 0) + "px";
+-        // If we moved stuff, scroll might need adjustment? 
+-        // Sticky logic handles the pins. History fills the middle.
++        // 4. Update Padding for Scroll (Phase 3c - optional if CSS sticky works well)
++        // With position:sticky, we don't need manual padding IF the scroll container is correct.
++        // But we might want to ensure last history item isn't hidden behind bottom pin.
++        // CSS 'scroll-padding-bottom' on container helps.
++        const scroll = document.getElementById("chat-view");
++        if (scroll) {
++             const botH = bottom.offsetHeight || 0;
++             const topH = top.offsetHeight || 0;
++             // Add extra padding to LOG so it can scroll fully into view
++             chatLog.style.paddingBottom = (botH + 20) + "px";
++             chatLog.style.paddingTop = (topH + 10) + "px"; // Optional
++        }
      }
+     
+-    // No-op for old sync padding (CSS sticky handles it now)
+     function syncDuetPadding() {}
  
      function updateDuetView(row, role) {
-@@ -4321,26 +4325,42 @@
-       const duetBottom = document.getElementById("duet-bottom");
-       
-       const clone = row.cloneNode(true);
--      // Remove ID to avoid duplicates if present
--      clone.removeAttribute("id");
-+      clone.removeAttribute("id"); // No duplicate IDs
-+      clone.classList.add("is-pinned-copy"); // CSS hooks if needed
-+      
-+      // Duet Logic:
-+      // USER -> Bottom pinned
-+      // ASSISTANT (bot) -> Top pinned
-       
-       if (role === "user") {
--        duetBottom.innerHTML = "";
-+        duetBottom.innerHTML = ""; // Replace old pinned
-         duetBottom.appendChild(clone);
--        duetBottom.style.display = "block";
--      } else {
-+      } else if (role === "bot" || role === "assistant") {
-         duetTop.innerHTML = "";
-         duetTop.appendChild(clone);
--        duetTop.style.display = "block";
-       }
-       
--      syncDuetPadding();
--      console.log(`[DUET_PIN] updated ${role}`, { topH: duetTop.offsetHeight, bottomH: duetBottom.offsetHeight });
-+      // Force layout recalc
-+      requestAnimationFrame(() => {
-+          syncDuetPadding();
-+          // Log verification
-+          console.debug(`[DUET] Pinned ${role}`, { 
-+              topH: duetTop.offsetHeight, 
-+              bottomH: duetBottom.offsetHeight 
-+          });
-+      });
+-      // Defer to applyDuetPins in next frame to let DOM settle
++      // Defer to applyDuetPins in next frame so DOM is ready
+       requestAnimationFrame(applyDuetPins);
      }
  
-     function bindDuetListeners() {
--       // Legacy listener removal or no-op
--       console.log("Duet listeners no longer required for sticky mode");
-+       const chatLog = document.getElementById("chat-log");
-+       if (chatLog) {
-+           // On scroll: if user scrolls UP significantly away from bottom, 
-+           // we could choose to HIDE the pins to show full history.
-+           // For V1, we leave them sticky as requested.
-+           chatLog.addEventListener("scroll", () => {
-+             // Optional: visual effects on shadow
-+           }, { passive: true });
-+       }
-     }
- 
-     // Call bindDuetListeners on init
