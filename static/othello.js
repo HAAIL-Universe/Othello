@@ -3581,20 +3581,33 @@
     
     // Connectivity State Management
     function updateConnectivity(status, message = "") {
+        console.debug(`[Connectivity] update: ${status} (msg: ${message})`);
         othelloState.connectivity = status;
-        const pill = document.querySelector('.status-pill');
-        const text = pill ? pill.querySelector('#status') : null;
-        const dot = pill ? pill.querySelector('.dot') : null;
+        const pill = document.getElementById('chat-status-pill');
+        const text = document.getElementById('chat-status-text');
+        
+        // Provide route context if available, defaulting to "Chat"
+        const route = othelloState.lastRoute || "Chat";
         
         if (text) {
-            if (status === 'online') text.textContent = "Online";
-            else if (status === 'offline') text.textContent = "Offline";
-            else if (status === 'degraded') text.textContent = message || "Degraded";
+             if (status === 'online') {
+                 text.textContent = `Online • ${route}`;
+             } else if (status === 'thinking') {
+                 text.textContent = `Thinking • ${route}`;
+             } else if (status === 'offline') {
+                 text.textContent = "Offline";
+             } else if (status === 'degraded') {
+                 text.textContent = message || "Degraded";
+             } else {
+                 text.textContent = status;
+             }
         }
         
         if (pill) {
-            pill.classList.remove('offline', 'degraded');
-            if (status !== 'online') pill.classList.add(status);
+            pill.classList.remove('offline', 'degraded', 'thinking');
+            if (status === 'offline') pill.classList.add('offline');
+            if (status === 'degraded') pill.classList.add('degraded');
+            if (status === 'thinking') pill.classList.add('thinking'); // Optional styling
         }
     }
 
@@ -5791,11 +5804,15 @@
         if (typeof pendingChatRequests !== 'number') pendingChatRequests = 0;
         pendingChatRequests++;
         setChatThinking(true);
+        updateConnectivity('thinking');
     }
     function endThinking() {
         if (typeof pendingChatRequests !== 'number') pendingChatRequests = 0;
         pendingChatRequests = Math.max(0, pendingChatRequests - 1);
-        if (pendingChatRequests === 0) setChatThinking(false);
+        if (pendingChatRequests === 0) {
+            setChatThinking(false);
+            updateConnectivity('online');
+        }
     }
 
     async function sendMessage(overrideText = null, extraData = {}) {
@@ -6088,6 +6105,14 @@
                 const clone = res.clone();
                 try {
                     data = await res.json();
+                    
+                    // Route Pill Update (Phase A)
+                    // If backend returns a route, update our state so the pill reflects it.
+                    if (data && data.selected_route) {
+                        othelloState.lastRoute = data.selected_route;
+                        // Refresh immediately to show new route
+                        updateConnectivity('online');
+                    }
                 } catch (parseErr) {
                     let textBody = "";
                     try { textBody = await clone.text(); } catch(e) {}

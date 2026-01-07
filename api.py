@@ -5698,6 +5698,11 @@ def handle_message():
                          "roles_represented": list(set(m.get("role", "unknown") for m in companion_context))
                      }
 
+                # Phase A/B: Expose Route
+                if "selected_route" not in payload:
+                    route_label = "Planner" if effective_channel == "planner" else "Chat"
+                    payload["selected_route"] = route_label
+
             return jsonify(payload)
 
         logger.info(

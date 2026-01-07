@@ -90,11 +90,6 @@
         </div>
         <div class="brand-subtitle" id="mode-subtitle">Personal Goal Architect</div>
       </div>
-
-      <div class="status-pill">
-        <div class="dot"></div>
-        <span id="status">Online</span>
-      </div>
     </header>
 
     <!-- TAB NAVIGATION -->
@@ -331,11 +326,10 @@
     <div class="chat-sheet">
       <div class="chat-sheet__header">
         <div class="kitt-scanner" aria-hidden="true"></div>
-        <select id="chat-context-selector" class="chat-context-selector">
-          <option value="companion">Companion Chat</option>
-          <option value="planner">Daily Plan Engine</option>
-          <option value="routine">Routine Coach</option>
-        </select>
+        <div id="chat-status-pill" class="status-pill" style="margin-right: auto;">
+          <div class="dot"></div>
+          <span id="chat-status-text">Online • Chat</span>
+        </div>
         <button id="chat-back-btn" class="chat-back-btn">×</button>
       </div>
 
