@@ -399,6 +399,29 @@ class Architect:
                 final_system_prompt = messages[0].get('content', '')
                 self.logger.debug(f"ARCHITECT FINAL SYSTEM MESSAGE:\n{final_system_prompt}")
 
+            # --- DEBUG STEP B: Pre-LLM Log ---
+            _debug_msg_count = len(messages)
+            _debug_roles_seq = ",".join(m.get('role', '?') for m in messages)
+            
+            # Find oldest and newest user messages for preview
+            _user_msgs = [m for m in messages if m.get('role') == 'user']
+            _oldest_preview = "N/A"
+            _newest_preview = "N/A"
+            if _user_msgs:
+                _oldest_c = str(_user_msgs[0].get('content', ''))
+                _newest_c = str(_user_msgs[-1].get('content', ''))
+                _oldest_preview = (_oldest_c[:77] + "...") if len(_oldest_c) > 80 else _oldest_c
+                _newest_preview = (_newest_c[:77] + "...") if len(_newest_c) > 80 else _newest_c
+
+            self.logger.info(
+                "DEBUG_LLM_PREFLIGHT: request_id=? msg_count=%d roles=%s oldest_user='%s' newest_user='%s'",
+                _debug_msg_count,
+                _debug_roles_seq,
+                _oldest_preview,
+                _newest_preview
+            )
+            # ---------------------------------
+
             # ---- Call LLM -------------------------------------------------------
             raw_response = await async_retry(self.model.chat, messages, max_tokens=1000)
 
@@ -444,6 +467,15 @@ class Architect:
             short_term_memory.append(
                 {"role": "assistant", "content": user_facing_response}
             )
+
+            # Debug Sink (Issue 1 Requirement A)
+            agent_status["_debug"] = {
+                "llm_msg_count": len(messages),
+                "llm_roles_sequence": ",".join(m.get('role','?') for m in messages),
+                "system_prompt_flags": {
+                    "has_cant_recall": "can't recall" in system_prompt.lower() or "no access to chat history" in system_prompt.lower()
+                }
+            }
 
             # ---- Optional self-reflection hook ---------------------------------
             try:

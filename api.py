@@ -1514,18 +1514,26 @@ def _load_companion_context(
     uid = str(user_id or "").strip()
     if not uid:
         return []
-    channel_name = str(channel or "companion").strip().lower()
-    if channel_name not in {"companion", "planner"}:
-        channel_name = "companion"
+
+    # Logic change: If we have a conversation_id, we want the FULL session history
+    # regardless of channel, to ensure "full thread context".
+    # This fixes context fragmentation when "auto" routing switches channels.
+    if conversation_id:
+        target_channel = None
+    else:
+        target_channel = str(channel or "companion").strip().lower()
+        if target_channel not in {"companion", "planner"}:
+            target_channel = "companion"
+
     limit = max(0, int(max_turns) * 2)
     if limit <= 0:
         return []
     try:
         from db.messages_repository import list_recent_messages, list_messages_for_session
         if conversation_id:
-            rows = list_messages_for_session(uid, conversation_id, limit=limit, channel=channel_name)
+            rows = list_messages_for_session(uid, conversation_id, limit=limit, channel=target_channel)
         else:
-            rows = list_recent_messages(uid, limit=limit, channel=channel_name)
+            rows = list_recent_messages(uid, limit=limit, channel=target_channel)
     except Exception as exc:
         logger.warning(
             "API: failed to load companion history user_id=%s error=%s",
@@ -1586,7 +1594,7 @@ def _load_companion_context(
             "API: loaded history messages=%s chars=%s channel=%s sources=%s",
             len(messages),
             total_chars,
-            channel_name,
+            target_channel,
             list(seen_sources)[:5]
         )
     return messages
@@ -4376,6 +4384,8 @@ def handle_message():
                 conversation_id = int(raw_conversation_id)
             except (ValueError, TypeError):
                 pass
+        
+
 
         logger.info(
             "API: message meta request_id=%s current_view=%s current_mode=%s keys=%s goal_id=%s active_goal_id=%s conversation_id=%s",
@@ -5722,15 +5732,78 @@ def handle_message():
                 if conversation_id:
                     payload["conversation_id"] = conversation_id
                 
-                # Context Debug Injection
-                if companion_context is not None:
+                # Context Debug Injection (Issue 1 Requirement A)
+                # Check for env var DEBUG_CONTEXT=1
+                if os.environ.get("DEBUG_CONTEXT") == "1":
                      if "meta" not in payload:
                          payload["meta"] = {}
-                     payload["meta"]["context_debug"] = {
-                         "turns_loaded": len(companion_context),
-                         "total_chars": sum(len(str(m.get("content", ""))) for m in companion_context),
-                         "roles_represented": list(set(m.get("role", "unknown") for m in companion_context))
-                     }
+                     
+                     # Get debug data passed back from plan_and_execute via agent_status
+                     _debug_agent_stats = {}
+                     if "agent_status" in payload and isinstance(payload["agent_status"], dict):
+                         _debug_agent_stats = payload["agent_status"].get("_debug", {})
+                     
+                     try:
+                        # Use companion_context if available (True Injection), else fallback to DB Peek
+                        _dbg_source_label = "DB Peek (companion_context missing)"
+                        _target_history = []
+                        if companion_context and isinstance(companion_context, list):
+                             _dbg_source_label = "Active Injection (companion_context variable)"
+                             _target_history = companion_context  # This is usually ASC (Oldest->Newest) or DESC?
+                             # _load_companion_context returns Oldest->Newest (reverse called at end)
+                             # So Index 0 = Oldest, Index -1 = Newest
+                        
+                        _dbg_peek_ids = []
+                        _dbg_peek_roles = []
+                        _dbg_user_previews = []
+                        _dbg_hist_count = len(_target_history)
+                        _dbg_contains_keyword = False
+
+                        if _target_history:
+                            # Search for keyword
+                            _dbg_contains_keyword = any("KEYWORD_7319" in str(msg.get("content", "")) for msg in _target_history)
+                            
+                            # ID/Role Peeks
+                            _dbg_peek_ids = ["(mem)" for _ in _target_history[:2]] 
+                            _dbg_peek_roles = [str(m.get('role')) for m in _target_history[:2]]
+                            if len(_target_history) > 2:
+                                _dbg_peek_ids.extend(["...", "(mem)"])
+                                _dbg_peek_roles.extend(["...", str(_target_history[-1].get('role'))])
+                            
+                            # User previews (Find first and last USER message)
+                            # Assuming _target_history is Oldest -> Newest
+                            user_msgs = [m for m in _target_history if m.get('role') == 'user']
+                            if user_msgs:
+                                first_u = user_msgs[0].get('content', '')[:60].replace('\n', ' ')
+                                last_u = user_msgs[-1].get('content', '')[:60].replace('\n', ' ')
+                                _dbg_user_previews = [f"First(Oldest): {first_u}", f"Last(Newest): {last_u}"]
+
+                        # Fallback to DB if context was empty but we want to verify DB state
+                        if not _target_history and conversation_id and user_id:
+                            from db.messages_repository import list_messages_for_session
+                            _dbg_msgs = list_messages_for_session(str(user_id), conversation_id, limit=30, channel=None)
+                            _dbg_source_label = "DB Peek (Fallback)"
+                            # _dbg_msgs is DESC (Newest First) typically
+                            if _dbg_msgs:
+                                _dbg_contains_keyword = any("KEYWORD_7319" in str(msg.get("content", "")) for msg in _dbg_msgs)
+                        
+                        payload["meta"]["context_debug"] = {
+                             "request_id": request_id,
+                             "conversation_id_received": data.get("conversation_id"),
+                             "conversation_id_used_for_query": conversation_id,
+                             "history_count": _dbg_hist_count, 
+                             "history_ids_peek": _dbg_peek_ids,
+                             "history_roles_peek": _dbg_peek_roles,
+                             "history_user_first_preview": _dbg_user_previews[0] if _dbg_user_previews else None,
+                             "history_user_last_preview": _dbg_user_previews[-1] if _dbg_user_previews else None,
+                             "history_contains_keyword_7319": _dbg_contains_keyword,
+                             "history_window_note": _dbg_source_label,
+                             "llm_msg_count": _debug_agent_stats.get("llm_msg_count"),
+                             "llm_roles_sequence": _debug_agent_stats.get("llm_roles_sequence"),
+                             "system_prompt_flags": _debug_agent_stats.get("system_prompt_flags")
+                        }
+                     except Exception:
+                        pass
 
                 # Phase A/B: Expose Route
                 if "selected_route" not in payload:
