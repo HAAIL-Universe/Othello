@@ -131,18 +131,36 @@ class LLMWrapper:
             raise ValueError("OpenAI chat completion failed") from e
 
 class AsyncLLMWrapper(LLMWrapper):
-    async def chat(self, messages, *, max_tokens: Optional[int] = None):
-        # messages is a list of dicts: [{role: ..., content: ...}]
-        # Pull out system and user prompt for .generate()
-        system_prompt = None
-        user_prompt = ""
-        for msg in messages:
-            if msg.get("role") == "system":
-                system_prompt = msg.get("content")
-            elif msg.get("role") == "user":
-                user_prompt = msg.get("content")
-        # Run synchronous generate() in a thread so async works
+    async def chat(self, messages, *, max_tokens: Optional[int] = 1000):
+        # Run synchronous chat completion in a thread so async works
         import asyncio
-        if max_tokens is None:
-            return await asyncio.to_thread(self.generate, user_prompt, system_prompt)
-        return await asyncio.to_thread(self.generate, user_prompt, system_prompt, max_tokens=max_tokens)
+        
+        def _do_sync_chat():
+            try:
+                logging.debug("Making Async API call to OpenAI (threaded)...")
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    temperature=0.7,
+                    max_tokens=max_tokens
+                )
+                logging.debug("Async API call completed.")
+                
+                finish_reason = None
+                if getattr(response, "choices", None):
+                    finish_reason = response.choices[0].finish_reason
+                usage = getattr(response, "usage", None)
+                logging.info(
+                    "Async OpenAI response finish_reason=%s usage=%s",
+                    finish_reason, usage
+                )
+                
+                content = response.choices[0].message.content
+                return content.strip() if content else ""
+            except Exception as e:
+                logging.error(f"AsyncLLMWrapper.chat error: {e}", exc_info=True)
+                # Mimic generate's error handling style if possible, or just raise
+                raise ValueError("OpenAI chat completion failed") from e
+
+        return await asyncio.to_thread(_do_sync_chat)
+

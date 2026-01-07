@@ -1594,7 +1594,7 @@ def _load_companion_context(
             "API: loaded history messages=%s chars=%s channel=%s sources=%s",
             len(messages),
             total_chars,
-            channel_name,
+            target_channel,
             list(seen_sources)[:5]
         )
     return messages
@@ -4385,47 +4385,7 @@ def handle_message():
             except (ValueError, TypeError):
                 pass
         
-        # --- DEBUG STEP A: Request Entrypoint Log ---
-        _debug_client_msg_id = client_message_id or "N/A"
-        _debug_sess_id = conversation_id or "None"
-        try:
-             # Just peek at repo to see how many messages we *would* load for this session
-             from db.messages_repository import list_messages_for_session
-             _debug_history_count = 0
-             _debug_history_ids = []
-             _debug_channel_dist = {}
-             if conversation_id and user_id:
-                 # Fetch with channel=None to show full unified thread
-                 _msgs = list_messages_for_session(str(user_id), conversation_id, limit=30, channel=None)
-                 _debug_history_count = len(_msgs)
-                 
-                 # Message ID peek (first 2 and last 2 of the query result, effectively newest/oldest chunk in result)
-                 if _msgs:
-                     _debug_history_ids = [str(m.get('id')) for m in _msgs[:2]]
-                     if len(_msgs) > 2:
-                         _debug_history_ids.extend(["...", str(_msgs[-1].get('id'))])
-                         
-                 # Channel distribution
-                 for m in _msgs:
-                     ch = str(m.get("channel") or "unknown").lower()
-                     _debug_channel_dist[ch] = _debug_channel_dist.get(ch, 0) + 1
-             
-             logger.info(
-                 "DEBUG_CONTEXT_ENTRY: request_id=%s user_id=%s session_id=%s resolved_session_id=%s mode=%s view=%s channel=%s history_count=%s channel_dist=%s msg_peek=%s",
-                 request_id,
-                 user_id,
-                 data.get("conversation_id"),
-                 _debug_sess_id,
-                 current_mode,
-                 current_view,
-                 effective_channel,
-                 _debug_history_count,
-                 _debug_channel_dist,
-                 _debug_history_ids
-             )
-        except Exception as e:
-            logger.error("DEBUG_CONTEXT_ENTRY: failed to log context: %s", e)
-        # --------------------------------------------
+
 
         logger.info(
             "API: message meta request_id=%s current_view=%s current_mode=%s keys=%s goal_id=%s active_goal_id=%s conversation_id=%s",
@@ -5784,28 +5744,60 @@ def handle_message():
                          _debug_agent_stats = payload["agent_status"].get("_debug", {})
                      
                      try:
-                        # Re-peek if not captured in scope
+                        # Use companion_context if available (True Injection), else fallback to DB Peek
+                        _dbg_source_label = "DB Peek (companion_context missing)"
+                        _target_history = []
+                        if companion_context and isinstance(companion_context, list):
+                             _dbg_source_label = "Active Injection (companion_context variable)"
+                             _target_history = companion_context  # This is usually ASC (Oldest->Newest) or DESC?
+                             # _load_companion_context returns Oldest->Newest (reverse called at end)
+                             # So Index 0 = Oldest, Index -1 = Newest
+                        
                         _dbg_peek_ids = []
                         _dbg_peek_roles = []
-                        _dbg_hist_count = 0
-                        if conversation_id and user_id:
+                        _dbg_user_previews = []
+                        _dbg_hist_count = len(_target_history)
+                        _dbg_contains_keyword = False
+
+                        if _target_history:
+                            # Search for keyword
+                            _dbg_contains_keyword = any("KEYWORD_7319" in str(msg.get("content", "")) for msg in _target_history)
+                            
+                            # ID/Role Peeks
+                            _dbg_peek_ids = ["(mem)" for _ in _target_history[:2]] 
+                            _dbg_peek_roles = [str(m.get('role')) for m in _target_history[:2]]
+                            if len(_target_history) > 2:
+                                _dbg_peek_ids.extend(["...", "(mem)"])
+                                _dbg_peek_roles.extend(["...", str(_target_history[-1].get('role'))])
+                            
+                            # User previews (Find first and last USER message)
+                            # Assuming _target_history is Oldest -> Newest
+                            user_msgs = [m for m in _target_history if m.get('role') == 'user']
+                            if user_msgs:
+                                first_u = user_msgs[0].get('content', '')[:60].replace('\n', ' ')
+                                last_u = user_msgs[-1].get('content', '')[:60].replace('\n', ' ')
+                                _dbg_user_previews = [f"First(Oldest): {first_u}", f"Last(Newest): {last_u}"]
+
+                        # Fallback to DB if context was empty but we want to verify DB state
+                        if not _target_history and conversation_id and user_id:
                             from db.messages_repository import list_messages_for_session
-                            _dbg_msgs = list_messages_for_session(str(user_id), conversation_id, limit=6, channel=None)
-                            _dbg_hist_count = len(_dbg_msgs)
+                            _dbg_msgs = list_messages_for_session(str(user_id), conversation_id, limit=30, channel=None)
+                            _dbg_source_label = "DB Peek (Fallback)"
+                            # _dbg_msgs is DESC (Newest First) typically
                             if _dbg_msgs:
-                                _dbg_peek_ids = [str(m.get('id')) for m in _dbg_msgs[:2]]
-                                _dbg_peek_roles = [str(m.get('source')) for m in _dbg_msgs[:2]]
-                                if len(_dbg_msgs) > 2:
-                                    _dbg_peek_ids.extend(["...", str(_dbg_msgs[-1].get('id'))])
-                                    _dbg_peek_roles.extend(["...", str(_dbg_msgs[-1].get('source'))])
+                                _dbg_contains_keyword = any("KEYWORD_7319" in str(msg.get("content", "")) for msg in _dbg_msgs)
                         
                         payload["meta"]["context_debug"] = {
                              "request_id": request_id,
                              "conversation_id_received": data.get("conversation_id"),
-                             "conversation_id_used": conversation_id,
-                             "history_count_peek": _dbg_hist_count, 
+                             "conversation_id_used_for_query": conversation_id,
+                             "history_count": _dbg_hist_count, 
                              "history_ids_peek": _dbg_peek_ids,
                              "history_roles_peek": _dbg_peek_roles,
+                             "history_user_first_preview": _dbg_user_previews[0] if _dbg_user_previews else None,
+                             "history_user_last_preview": _dbg_user_previews[-1] if _dbg_user_previews else None,
+                             "history_contains_keyword_7319": _dbg_contains_keyword,
+                             "history_window_note": _dbg_source_label,
                              "llm_msg_count": _debug_agent_stats.get("llm_msg_count"),
                              "llm_roles_sequence": _debug_agent_stats.get("llm_roles_sequence"),
                              "system_prompt_flags": _debug_agent_stats.get("system_prompt_flags")
