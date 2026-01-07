@@ -836,6 +836,7 @@
 
     // App state
     const othelloState = {
+      chatViewMode: "duet", // "duet" | "history"
       connectivity: 'online', // online | offline | degraded
       currentView: "today-planner",
       currentMode: "today", // companion | today | routine
@@ -4289,6 +4290,93 @@
     }
 
     // ===== CHAT FUNCTIONS =====
+
+    function setChatViewMode(mode, reason) {
+      if (othelloState.chatViewMode === mode) return;
+      othelloState.chatViewMode = mode;
+      
+      const sheet = document.querySelector('.chat-sheet');
+      if (sheet) {
+        sheet.setAttribute('data-view-mode', mode);
+      }
+      
+      const chatLog = document.getElementById("chat-log");
+      if (mode === "history") {
+        if (chatLog) {
+            // Scroll to near bottom but allow seeing history
+            chatLog.scrollTop = chatLog.scrollHeight - chatLog.clientHeight - 50; 
+        }
+      } else if (mode === "duet") {
+         // Ensure latest content is visible in duet parts
+         // (Handled by addMessage or updateDuetView)
+      }
+      console.log(`[Duet] Switched to ${mode} (${reason})`);
+    }
+
+    function updateDuetView(row, role) {
+      // Only applicable if duet wrappers exist
+      const duetTop = document.getElementById("duet-top");
+      const duetBottom = document.getElementById("duet-bottom");
+      if (!duetTop || !duetBottom) return;
+
+      const clone = row.cloneNode(true);
+      
+      if (role === "user") {
+        duetBottom.innerHTML = "";
+        duetBottom.appendChild(clone);
+        duetBottom.scrollTop = duetBottom.scrollHeight; // Pin bottom
+      } else {
+        duetTop.innerHTML = "";
+        duetTop.appendChild(clone);
+        duetTop.scrollTop = 0; // Read from top
+      }
+      
+      // Auto-switch to duet on new turn
+      setChatViewMode("duet", "new_message");
+    }
+
+    function bindDuetListeners() {
+       const duetContainer = document.getElementById("duet-container");
+       const chatLog = document.getElementById("chat-log");
+       
+       if (duetContainer) {
+           duetContainer.addEventListener("wheel", (e) => {
+               if (e.deltaY < -10) { // Scrolling UP significantly
+                   setChatViewMode("history", "scroll_up");
+               }
+           }, { passive: true });
+           
+           // Touch gesture
+           let touchSY = 0;
+           duetContainer.addEventListener("touchstart", e => { touchSY = e.changedTouches[0].clientY; }, {passive: true});
+           duetContainer.addEventListener("touchmove", e => {
+               const dy = e.changedTouches[0].clientY - touchSY;
+               if (dy > 50) { // Dragging DOWN (content moves down) -> wait, scrolling up means content moves down. 
+                   // Dragging DOWN = scrolling UP the viewport? 
+                   // Standard: Swipe DOWN moves content DOWN, revealing TOP. That's scrolling UP.
+                   setChatViewMode("history", "swipe_down"); 
+               }
+           }, {passive: true});
+       }
+       
+       if (chatLog) {
+           chatLog.addEventListener("scroll", () => {
+               if (othelloState.chatViewMode === "history") {
+                   const distFromBottom = chatLog.scrollHeight - (chatLog.scrollTop + chatLog.clientHeight);
+                   if (distFromBottom < 20) {
+                       setChatViewMode("duet", "scrolled_bottom");
+                   }
+               }
+           });
+       }
+       
+       // Init default
+       setChatViewMode("duet", "init");
+    }
+
+    // Call bindDuetListeners on init
+    document.addEventListener("DOMContentLoaded", bindDuetListeners);
+
     function getChatContainer() {
       // B1: Canonical resolution. We strictly use #chat-log.
       // We do NOT fallback to #chat-view (parent) to avoid split-brain messages.
@@ -4569,6 +4657,8 @@
       if (container) {
          container.appendChild(row);
       }
+      
+      updateDuetView(row, role);
 
       if (role === "user" && clientMessageId) {
         othelloState.messagesByClientId[clientMessageId] = {
