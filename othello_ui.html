@@ -326,7 +326,7 @@
   <div id="global-chat-overlay" class="global-chat-overlay">
     <div class="chat-sheet">
       <div class="chat-sheet__header">
-        <div id="duet-build-marker" style="color:red;font-size:10px;margin-right:8px;font-weight:bold;">DUET_V1_MARKER</div>
+        <!-- <div id="duet-build-marker" style="color:red;font-size:10px;margin-right:8px;font-weight:bold;">DUET_V1_MARKER</div> -->
         <div class="kitt-scanner" aria-hidden="true"></div>
         <div id="chat-status-pill" class="status-pill" style="margin-right: auto;">
           <div class="dot"></div>
@@ -335,24 +335,31 @@
         <button id="chat-back-btn" class="chat-back-btn">×</button>
       </div>
 
-      <!-- Moved Chat View Content -->
-      <div id="chat-view" class="view" style="display:flex; flex-direction: column; overflow-y: auto;">
-        
-        <!-- Live Duet Viewport (Fixed Two Slots) -->
-        <div id="duet-live" class="duet-live">
-          <div id="duet-live-bot" class="duet-slot duet-slot-bot"></div>
-          <div id="duet-live-user" class="duet-slot duet-slot-user"></div>
-        </div>
-
-        <!-- History Panel (Toggled via bar) -->
-        <div id="duet-history-panel" class="duet-history-panel">
-          <div id="duet-history" class="duet-history"></div>
-        </div>
-        
+      <!-- History Drawer (New) -->
+      <div id="history-panel" class="history-panel" style="display:none;">
+          <div class="history-header">
+             <span class="history-title">Full History</span>
+             <button id="history-close-btn" class="icon-button">×</button>
+          </div>
+          <div id="history-log" class="chat-log full-history-log"></div>
       </div>
 
-      <!-- History Bar (Pinned Sibling above Composer) -->
-      <div id="duet-history-bar" class="duet-history-bar">SHOW CHAT</div>
+      <!-- Moved Chat View Content -->
+      <div id="chat-view" class="view" style="display:flex;">
+        <div id="duet-top" class="duet-pane duet-pane--top" style="display:none;"></div>
+        
+        <!-- Only this is scrollable history -->
+        <div id="draft-preview" class="draft-preview" style="display:none;"></div>
+        <div id="chat-placeholder" class="chat-placeholder">Start a conversation</div>
+        <div id="chat-log" class="chat-log"></div>
+        
+        <div id="duet-bottom" class="duet-pane duet-pane--bottom" style="display:none;"></div>
+      </div>
+
+      <!-- History Toggle Bar -->
+      <div id="history-bar" class="history-bar">
+          <button id="history-toggle-btn" class="history-toggle-btn">Full Chat ?</button>
+      </div>
 
       <!-- Moved Input Bar -->
       <div class="input-bar" id="input-bar">
@@ -372,5 +379,5 @@
   </button>
 
   <!-- JS -->
-  <script src="/static/othello.js?v=20260107_duet_fix_v3"></script>
+  <script src="/static/othello.js?v=20260107_debug_duet"></script>
 </html>

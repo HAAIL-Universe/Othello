@@ -35,28 +35,6 @@
     const archiveConfirmBtn = document.getElementById('archive-confirm');
     const archiveStatus = document.getElementById('archive-status');
     const archiveGoalLabel = document.getElementById('archive-goal-label');
-    const DUET_BUBBLE_DEBUG = location.search.includes('duetdebug=1');
-
-    // --- History Toggle Logic [2026-01-07] ---
-    const historyBar = document.getElementById('duet-history-bar');
-    if (historyBar) {
-      historyBar.addEventListener('click', (e) => {
-        e.preventDefault();
-        e.stopPropagation();
-        const sheet = document.querySelector('.chat-sheet');
-        if (sheet) {
-           const wasOpen = sheet.classList.contains('history-open');
-           if (wasOpen) {
-             sheet.classList.remove('history-open');
-             historyBar.textContent = 'HISTORY ↓';
-           } else {
-             sheet.classList.add('history-open');
-             historyBar.textContent = 'CLOSE HISTORY ↑';
-           }
-        }
-      });
-    }
-
     let settingsWarningLogged = false;
     let pendingChatRequests = 0; // Moved to top-level to avoid TDZ errors
     const BOOT_STATE = {
@@ -3724,6 +3702,22 @@
         const overlayClose = document.getElementById('chat-back-btn');
         const overlaySelector = document.getElementById('chat-context-selector');
         const fab = document.getElementById('global-chat-fab');
+        const historyBtn = document.getElementById('history-toggle-btn');
+        const historyClose = document.getElementById('history-close-btn');
+
+        if (historyBtn) {
+            historyBtn.onclick = (e) => {
+                e.stopPropagation();
+                toggleHistoryPanel(!othelloState.historyPanelOpen);
+            };
+        }
+        
+        if (historyClose) {
+            historyClose.onclick = (e) => {
+                 e.stopPropagation();
+                 toggleHistoryPanel(false);
+            };
+        }
 
         if (overlaySelector) {
             overlaySelector.onchange = (e) => {
@@ -4313,161 +4307,235 @@
 
     // ===== CHAT FUNCTIONS =====
 
-    function setChatViewMode(mode, reason) {
-        // No-op in sticky design
+    // History Panel Logic (collapsed/expanded)
+    function toggleHistoryPanel(show) {
+        othelloState.historyPanelOpen = show;
+        
+        const panel = document.getElementById("history-panel");
+        const chatLog = document.getElementById("chat-log");
+        const historyLog = document.getElementById("history-log");
+        const top = document.getElementById("duet-top");
+        const bottom = document.getElementById("duet-bottom");
+        const toggleBtn = document.getElementById("history-toggle-btn");
+        
+        if (!panel || !chatLog || !historyLog) return;
+        
+        if (show) {
+            // OPEN PANEL
+            // 1. Gather ALL message rows from pins + chatLog
+            const allRows = [
+                ...Array.from(top ? top.querySelectorAll('.msg-row') : []),
+                ...Array.from(bottom ? bottom.querySelectorAll('.msg-row') : []),
+                ...Array.from(chatLog.querySelectorAll('.msg-row')),
+                // Safety: include existing historyLog rows just in case
+                ...Array.from(historyLog.querySelectorAll('.msg-row'))
+            ];
+            
+            // 2. Sort
+             allRows.sort((a, b) => {
+                const seqA = parseInt(a.dataset.sequence || "0");
+                const seqB = parseInt(b.dataset.sequence || "0");
+                if (seqA !== seqB) return seqA - seqB;
+                const tsA = parseInt(a.dataset.timestamp || "0");
+                const tsB = parseInt(b.dataset.timestamp || "0");
+                return tsA - tsB;
+            });
+
+            // 3. Move to History Log
+            const frag = document.createDocumentFragment();
+            allRows.forEach(row => frag.appendChild(row));
+            historyLog.appendChild(frag);
+            
+            // 4. Update Visibility
+            panel.style.display = "flex";
+            if (toggleBtn) {
+                toggleBtn.innerHTML = "Focus View ?";
+                // Optionally remove icon or change it
+                // toggleBtn.classList.add("expanded"); 
+            }
+            
+            // Scroll to bottom
+            if (historyLog.lastElementChild) {
+                historyLog.lastElementChild.scrollIntoView();
+            }
+
+        } else {
+            // CLOSE PANEL (Collapse)
+            // 1. Move everything back to chatLog (the "middle" storage, though hidden)
+            const allRows = Array.from(historyLog.querySelectorAll('.msg-row'));
+             // Sort just to be safe, though historyLog should be sorted
+             allRows.sort((a, b) => {
+                const seqA = parseInt(a.dataset.sequence || "0");
+                const seqB = parseInt(b.dataset.sequence || "0");
+                return seqA - seqB;
+            });
+            
+            const frag = document.createDocumentFragment();
+            allRows.forEach(row => frag.appendChild(row));
+            chatLog.appendChild(frag);
+            
+            // 2. Update Visibility
+            panel.style.display = "none";
+            if (toggleBtn) toggleBtn.innerHTML = "Full Chat ?";
+            
+            // 3. Run Pins
+            applyDuetPins(); 
+        }
+    }
+    
+    // Polyfill isDuetLayout - always true now (sticky mode)
+    function isDuetLayout() {
+        return !othelloState.historyPanelOpen;
     }
 
     // Unified Duet Logic (Sticky Pins - Move Mode)
     function isDuetEnabled() {
+      // Legacy check
       return !!document.getElementById("duet-top") && !!document.getElementById("duet-bottom");
     }
 
-    // --- Message Data Source ---
-    const chatMemory = []; // Canonical list {role, text, id, options}
+    // Phase 3: Canonical Move - Refactored for 3-Zone Flex Layout
+    function applyDuetPins() {
+        // Guard: Do not run pin logic if history panel is open
+        if (othelloState.historyPanelOpen) return;
 
-    // Phase 3: Canonical Duet Logic - SLOT BASED
-    function promoteLiveToHistory() {
-        // NO-OP: We no longer promote live DOM nodes to history.
-        // Full Chat view renders from chatMemory.
-        // Duet view renders fresh from addMessage calls.
-    }
+        const top = document.getElementById("duet-top");
+        const bottom = document.getElementById("duet-bottom");
+        const chatLog = document.getElementById("chat-log");
 
-    // Deprecated: No continuous pin logic needed. 
-    // CSS justify-content: space-between handles the Top/Bottom placement 
-    // because we aggressively clear Live on every turn.
-    function applyDuetPins() {}
-    
-    // Alias for backward compatibility
-    function maybePromoteDuetToHistory() {
-        promoteLiveToHistory();
+        // Fallback for safety
+        if (!top || !bottom || !chatLog) return;
+        
+        // 1. Gather ALL message rows from all containers
+        // We use Set to avoid duplicates if any weirdness, though querySelectorAll shouldn't overlap if disjoint trees
+        const allRows = [
+            ...Array.from(top.querySelectorAll('.msg-row')),
+            ...Array.from(bottom.querySelectorAll('.msg-row')),
+            ...Array.from(chatLog.querySelectorAll('.msg-row'))
+        ];
+
+        if (allRows.length === 0) return;
+
+        // 2. Sort by sequence (primary) or timestamp (secondary)
+        allRows.sort((a, b) => {
+            const seqA = parseInt(a.dataset.sequence || "0");
+            const seqB = parseInt(b.dataset.sequence || "0");
+            if (seqA !== seqB) return seqA - seqB;
+            
+            const tsA = parseInt(a.dataset.timestamp || "0");
+            const tsB = parseInt(b.dataset.timestamp || "0");
+            return tsA - tsB;
+        });
+
+        // 3. Identify Candidates
+        // Duet Mode: Last Bot -> Top, Last User -> Bottom.
+        const duetActive = (typeof isDuetLayout === 'function') ? isDuetLayout() : true;
+        
+        let targetTop = null;
+        let targetBottom = null;
+
+        if (duetActive) {
+             // Find last bot message
+             for (let i = allRows.length - 1; i >= 0; i--) {
+                 if (!allRows[i].classList.contains('user')) { // Assuming non-user is bot/system
+                     targetTop = allRows[i];
+                     break;
+                 }
+             }
+             // Find last user message
+             for (let i = allRows.length - 1; i >= 0; i--) {
+                 if (allRows[i].classList.contains('user')) {
+                     targetBottom = allRows[i];
+                     break;
+                 }
+             }
+        }
+
+        // 4. Distribute Elements
+        // Since we are sorting, we can just append in order.
+        // However, we want 'chatLog' to have the history.
+        // The pins get pulled out.
+        
+        // We must append to history in order FIRST, then move pins out?
+        // Or just iterate and place.
+        
+        allRows.forEach(row => {
+            if (row === targetTop) {
+                if (top.lastChild !== row) top.appendChild(row);
+                top.style.display = 'block';
+            } else if (row === targetBottom) {
+                if (bottom.lastChild !== row) bottom.appendChild(row);
+                bottom.style.display = 'block';
+            } else {
+                // Everything else goes to history
+                if (chatLog.lastElementChild !== row) chatLog.appendChild(row);
+            }
+        });
+        
+        if (!targetTop) top.style.display = 'none';
+        if (!targetBottom) bottom.style.display = 'none';
+
+        // 5. Scroll Management
+        // Since history is now independent, we might want to stick to bottom if we were there?
+        // But logic is usually handled by scrollChatToBottom separately.
     }
     
     function syncDuetPadding() {}
 
     function updateDuetView(row, role) {
-      // No-op
+      // Defer to applyDuetPins in next frame so DOM is ready
+      requestAnimationFrame(applyDuetPins);
     }
 
-    const DUET_DEBUG = true;
-
-    function debugDuetElements() {
-        if (!DUET_DEBUG) return;
-        const ids = ["duet-history-bar", "duet-history-panel", "duet-history", "duet-live", "duet-live-bot", "duet-live-user"];
-        const report = {};
-        ids.forEach(id => {
-            const el = document.getElementById(id);
-            report[id] = !!el;
-        });
-        const sheet = document.querySelector(".chat-sheet");
-        report["chat-sheet"] = !!sheet;
-        
-        console.log("[DUET DEBUG] Element Check:", report);
-        
-        if (report["duet-history-panel"]) {
-            const panel = document.getElementById("duet-history-panel");
-            const style = window.getComputedStyle(panel);
-            console.log("[DUET DEBUG] History Panel Style:", { display: style.display, visibility: style.visibility, height: style.height });
-        }
-        if (report["duet-history-bar"]) {
-             const bar = document.getElementById("duet-history-bar");
-             const style = window.getComputedStyle(bar);
-             console.log("[DUET DEBUG] History Bar Style:", { pointerEvents: style.pointerEvents, zIndex: style.zIndex });
-        }
+    function bindDuetListeners() {
+       // Scroll logic is now native overflow
     }
 
-    // --- DUET HELPERS ---
-    function resolveDuetContainers() {
-      return {
-        duetBot: document.getElementById("duet-live-bot"),
-        duetUser: document.getElementById("duet-live-user"),
-        historyList: document.getElementById("duet-history"),
-        legacyLog: document.getElementById("chat-log"),
-        historyPanel: document.getElementById("duet-history-panel")
-      };
-    }
-
-    // Toggle logic (Delegated Event Handler)
-    function bindDuetHistoryToggle() {
-       // We bind to document to capture clicks even if the bar is replaced
-       document.addEventListener("click", (e) => {
-           const bar = e.target.closest("#duet-history-bar");
-           if (!bar) return; // Not a click on the bar
-           
-           e.preventDefault();
-           e.stopPropagation();
-           
-           const sheet = document.querySelector(".chat-sheet");
-           if (!sheet) {
-               console.warn("[Duet] chat-sheet missing during toggle.");
-               return;
-           }
-
-           const isOpen = sheet.classList.toggle("history-open");
-           bar.textContent = isOpen ? "HIDE CHAT" : "SHOW CHAT";
-           console.log("[Duet] Toggled history:", isOpen);
-           
-           if (isOpen) {
-               setTimeout(() => {
-                 const { historyPanel } = resolveDuetContainers();
-                 if (historyPanel) historyPanel.scrollTop = historyPanel.scrollHeight;
-               }, 10);
-           }
-       });
-       
-       console.log("[Duet] Delegated toggle listener attached to document.");
-       setTimeout(debugDuetElements, 500); // Check elements after brief delay
-    }
-
-    // Call bindDuetHistoryToggle on init
-    if (document.readyState === "complete" || document.readyState === "interactive") {
-        bindDuetHistoryToggle();
-    } else {
-        document.addEventListener("DOMContentLoaded", bindDuetHistoryToggle);
-    }
+    // Call bindDuetListeners on init
+    document.addEventListener("DOMContentLoaded", bindDuetListeners);
 
     function getChatContainer() {
-      // Always target the Live Duet container (#chat-log)
-      // This is where addMessage appends.
+      // Return history log if panel is open, otherwise chat log (which duet splits from)
+      if (othelloState.historyPanelOpen) {
+          const h = document.getElementById("history-log");
+          if (h) return h;
+      }
+      
       const chatLog = document.getElementById("chat-log");
       
       if (!chatLog) {
-        console.error("[Othello UI] CRITICAL: #chat-log container missing.");
+         // ... error ...
+        console.error("[Othello UI] CRITICAL: #chat-log container missing. Chat interaction impossible.");
+        // Visible UI Error (Phase A/B Requirement)
+        const toastContainer = document.getElementById("toast-container");
+        if (toastContainer) {
+            const errDiv = document.createElement("div");
+            errDiv.className = "toast error";
+            errDiv.textContent = "Error: Chat container missing.";
+            toastContainer.appendChild(errDiv);
+        }
         return null;
       }
       return chatLog;
     }
 
     function scrollChatToBottom(force=false) {
-       // No-op for Live View (it's fixed height/flex).
-       // History is manually scrolled by user.
-       // We DO NOT auto-scroll history to show new items because 
-       // "New messages must NOT push the history bar upward" / "Manual only".
-       // Actually, maybe we scroll the SCROLL VIEW to 0 (Top) to ensure Live is visible?
-       // "The LIVE DUET VIEWPORT remains stable".
-       // If user was looking at history (scrolled down), and sends a message...
-       // Should we snap back to Live?
-       // Usually yes, if they are typing in composer.
-       const scrollView = document.getElementById("chat-scroll-view"); // New ID
-       // Fallback to legacy
-       const legacyView = document.getElementById("chat-view"); 
-       
-       const target = scrollView || legacyView;
-       if (target) {
-           target.scrollTop = 0; // Snap to Top (Live Area)
-       }
+      // Phase 4: Scroll the VIEW, not the log
+      const view = document.getElementById("chat-view");
+      if (!view) return;
+      
+      const nearBottom = (view.scrollHeight - (view.scrollTop + view.clientHeight)) < 60;
+      if (force || nearBottom) {
+         requestAnimationFrame(() => { 
+             view.scrollTop = view.scrollHeight; 
+         });
+      }
     }
 
     function clearChatState() {
-      const liveBot = document.getElementById("duet-live-bot");
-      if (liveBot) liveBot.innerHTML = "";
-      const liveUser = document.getElementById("duet-live-user");
-      if (liveUser) liveUser.innerHTML = "";
-      
-      const historyList = document.getElementById("duet-history");
-      if (historyList) historyList.innerHTML = "";
-      
-      // Clear Canonical Memory
-      chatMemory.length = 0;
+      // Use strict resolved container
+      const container = getChatContainer();
+      if (container) container.innerHTML = "";
       
       const chatPlaceholder = document.getElementById("chat-placeholder");
       if (chatPlaceholder) chatPlaceholder.classList.remove("hidden");
@@ -4589,6 +4657,7 @@
             addMessage(role, text);
           });
           
+          // applyChatViewMode();
           // Force scroll to bottom after initial load
           scrollChatToBottom(true);
         };
@@ -4645,122 +4714,100 @@
       return safe.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>");
     }
 
-    function renderDuetSlot(role, rowNode) {
-        const { duetBot, duetUser } = resolveDuetContainers();
-        if (role === "user" && duetUser) {
-            duetUser.innerHTML = "";
-            duetUser.appendChild(rowNode);
-        } else if (role === "bot" && duetBot) {
-            duetBot.innerHTML = "";
-            duetBot.appendChild(rowNode);
-        } else {
-            console.warn("[Duet] Slot missing for render:", role);
-        }
-    }
-
-    function appendHistoryMessage(rowNode) {
-        const { historyList } = resolveDuetContainers();
-        if (historyList) {
-            historyList.appendChild(rowNode);
-        } else {
-            console.warn("[Duet] History list missing for append");
-        }
-    }
+    let globalMessageSequence = 0;
 
     function addMessage(role, text, options = {}) {
-      // 0. Update Canonical Memory
-      chatMemory.push({ role, text, options, ts: Date.now() });
+      console.log("DEBUG: addMessage called", role, text.substring(0, 20) + "...");
+      // Hide chat placeholder when first message appears
+      const chatPlaceholder = document.getElementById("chat-placeholder");
+      if (chatPlaceholder && !chatPlaceholder.classList.contains("hidden")) {
+        chatPlaceholder.classList.add("hidden");
+      }
 
-      // Create the primary row (this will live in History)
-      let createdRow = createMessageRow(role, text, options);
-      let createdBubble = createdRow.querySelector('.bubble');
+      // Resolve container explicitly (Phase B2)
+      const container = getChatContainer();
+      if (!container) {
+          return { row: null, bubble: null };
+      }
+
+      const row = document.createElement("div");
+      row.className = `msg-row ${role}`;
+      // Timestamp and Sequence for robust sorting
+      row.dataset.timestamp = (options && options.timestamp) ? options.timestamp : Date.now();
+      row.dataset.sequence = ++globalMessageSequence;
+
+      // Apply focus highlighting if a goal is focused
+      if (othelloState.activeGoalId) {
+        row.classList.add("msg--focus-attached");
+      }
+
+      const bubble = document.createElement("div");
+      bubble.className = "bubble";
+      bubble.innerHTML = formatMessageText(text);
+      const clientMessageId = options && typeof options.clientMessageId === "string"
+        ? options.clientMessageId.trim()
+        : "";
+      if (clientMessageId) {
+        row.dataset.clientMessageId = clientMessageId;
+        bubble.dataset.clientMessageId = clientMessageId;
+      }
+
+      const meta = document.createElement("div");
+      meta.className = "meta";
+      const metaNote = options && typeof options.metaNote === "string" ? options.metaNote.trim() : "";
+      const metaSuffix = metaNote ? ` | ${metaNote}` : "";
+      meta.textContent = role === "user"
+        ? "You · " + new Date().toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"}) + metaSuffix
+        : "Othello · " + new Date().toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"});
+
+      if (role === "bot" && options && Array.isArray(options.intentMarkers)) {
+        renderIntentMarkers(meta, options.intentMarkers);
+      }
+
+      bubble.appendChild(meta);
+
+      if (role === "bot" && othelloState.currentMode === "companion") {
+        const sourceClientMessageId = options && typeof options.sourceClientMessageId === "string"
+          ? options.sourceClientMessageId.trim()
+          : "";
+        const listItems = extractListItems(text);
+        if (hasStructuredList(text) && listItems.length) {
+          const convKey = othelloState.activeConversationId ? String(othelloState.activeConversationId) : "default";
+          othelloState.lastGoalDraftByConversationId[convKey] = { items: listItems, rawText: text, sourceClientMessageId };
+          const bar = createCommitmentBar(listItems, text, sourceClientMessageId);
+          bubble.appendChild(bar);
+        }
+      }
+
+      if (role === "bot" && othelloState.activeGoalId !== null && isPlanLikeText(text)) {
+        const planBar = createPlanActionBar(text);
+        bubble.appendChild(planBar);
+      }
+
+      row.appendChild(bubble);
       
-      const { duetBot, duetUser, historyList, legacyLog } = resolveDuetContainers();
-      const duetEnabled = !!(duetBot && duetUser && historyList);
-
-      if (window.location.search.includes("duetdebug=1") || (typeof DUET_DEBUG !== 'undefined' && DUET_DEBUG)) {
-          console.log("[render] addMessage called:", { role, duetEnabled, textLen: text.length });
-      }
-
-      if (duetEnabled) {
-          // 1. Render to Duet Slots (Live pair)
-          // Use cloneNode(true) so we don't move the canonical history row
-          const liveNode = createdRow.cloneNode(true);
-          renderDuetSlot(role, liveNode);
-
-          // 2. Render to History List (Chronological append)
-          appendHistoryMessage(createdRow);
-          
-      } else if (legacyLog) {
-          // Fallback legacy
-          legacyLog.appendChild(createdRow);
-          legacyLog.scrollTop = legacyLog.scrollHeight;
-      } else {
-          console.error("[Othello UI] RENDER ERROR: No chat containers found!", { duetEnabled, legacy: !!legacyLog });
-          // Last ditch effort: try to find ANYTHING to append to
-          const bodyHelper = document.getElementById("chat-view");
-          if (bodyHelper) bodyHelper.appendChild(createdRow);
-      }
-
-      // 3. Register State & Suggestions
-      if (options && options.clientMessageId && createdRow) {
-         othelloState.messagesByClientId[options.clientMessageId] = {
-            clientMessageId: options.clientMessageId,
-            bubbleEl: createdBubble, // Refers to the main instance (in history or logs)
-            rowEl: createdRow, 
-            text,
-            ts: Date.now(),
-            panelEl: null
-         };
-         if (role === "user") {
-             refreshSecondarySuggestionUI(othelloState.messagesByClientId[options.clientMessageId]);
-         }
+      // Append to the resolved container
+      if (container) {
+         container.appendChild(row);
       }
       
-      return { row: createdRow, bubble: createdBubble };
-    }
+      updateDuetView(row, role);
 
-    function createMessageRow(role, text, options) {
-          const row = document.createElement("div");
-          row.className = `msg-row ${role}`;
-          
-          if (othelloState.activeGoalId) row.classList.add("msg--focus-attached");
+      if (role === "user" && clientMessageId) {
+        othelloState.messagesByClientId[clientMessageId] = {
+          clientMessageId,
+          bubbleEl: bubble,
+          rowEl: row,
+          text,
+          ts: Date.now(),
+          panelEl: null,
+        };
+        refreshSecondarySuggestionUI(othelloState.messagesByClientId[clientMessageId]);
+      }
 
-          const bubble = document.createElement("div");
-          bubble.className = "bubble";
-          bubble.innerHTML = formatMessageText(text);
-          if (options && options.clientMessageId) {
-             row.dataset.clientMessageId = options.clientMessageId;
-             bubble.dataset.clientMessageId = options.clientMessageId;
-          }
-
-          const meta = document.createElement("div");
-          meta.className = "meta";
-          meta.textContent = role === "user" ? "You" : "Othello";
-          bubble.appendChild(meta);
-          
-          if (role === "bot" && options && Array.isArray(options.intentMarkers)) {
-             renderIntentMarkers(meta, options.intentMarkers);
-          }
-          
-           // Companion / Commitments Logic
-          if (role === "bot" && othelloState.currentMode === "companion") {
-             if (typeof extractListItems === "function" && typeof hasStructuredList === "function" && typeof createCommitmentBar === "function") {
-                const listItems = extractListItems(text);
-                if (hasStructuredList(text) && listItems.length) {
-                  const convKey = othelloState.activeConversationId ? String(othelloState.activeConversationId) : "default";
-                  othelloState.lastGoalDraftByConversationId[convKey] = { items: listItems, rawText: text, sourceClientMessageId: options?.sourceClientMessageId || "" };
-                  const bar = createCommitmentBar(listItems, text, options?.sourceClientMessageId || "");
-                  bubble.appendChild(bar);
-                }
-             }
-          }
-
-          if (role === "bot" && othelloState.activeGoalId !== null && isPlanLikeText(text)) {
-            const planBar = createPlanActionBar(text);
-            bubble.appendChild(planBar);
-          }
-          return row;
+      // Scroll to latest message (Smart Scroll - Phase B3)
+      scrollChatToBottom(false);
+      return { row, bubble };
     }
 
     function suggestionKey(type, clientMessageId) {
@@ -5992,9 +6039,6 @@
         }
     }
 
-    // (Moved to top/aliased)
-    // function maybePromoteDuetToHistory() {}
-
     async function sendMessage(overrideText = null, extraData = {}) {
       // 1) Robust String Safety & Diagnostic
       let override = overrideText;
@@ -6019,9 +6063,6 @@
       const text = rawText.trim();
 
       if (!text && !extraData.ui_action) return;
-
-      // Phase 2: History Promotion (Move & Clear)
-      maybePromoteDuetToHistory();
 
       // Voice-first save command (Strict Command Mode)
       const lowerText = text.toLowerCase().trim().replace(/[.!?]+$/, "");
