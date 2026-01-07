@@ -6854,7 +6854,7 @@ body.chat-open #global-chat-fab {
   align-items: center;
   padding: 8px 0;
   background: var(--bg-1);
-  border-top: 1px solid var(--border);
+  border-top: none;
   min-height: 32px;
   cursor: pointer;
   z-index: 150;
@@ -6876,8 +6876,8 @@ body.chat-open #global-chat-fab {
   gap: 6px;
 }
 .history-toggle-btn::before {
-  content: '?';
-  font-size: 1rem;
+  content: '';
+  display: none;
 }
 .history-toggle-btn:hover {
   color: var(--text-main);
@@ -6935,11 +6935,11 @@ body.chat-open #global-chat-fab {
   max-height: 40vh;
   overflow-y: auto;
   padding: 1rem;
-  border-bottom: 1px solid var(--border);
+  border-bottom: none;
   background: var(--bg-1);
 }
 .duet-pane--bottom {
-  border-top: 1px solid var(--border);
+  border-top: none;
   border-bottom: none;
   margin-top: auto; /* Push to bottom of flex view */
 }

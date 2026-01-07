@@ -4349,7 +4349,7 @@
             // 4. Update Visibility
             panel.style.display = "flex";
             if (toggleBtn) {
-                toggleBtn.innerHTML = "Duet";
+                toggleBtn.innerHTML = "Focus View ?";
                 // Optionally remove icon or change it
                 // toggleBtn.classList.add("expanded"); 
             }
