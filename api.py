@@ -4193,6 +4193,33 @@ def list_conversation_messages(conversation_id: int):
     return _v1_envelope(data={"messages": rows, "provenance": provenance, "conversation_id": conversation_id}, status=200)
 
 
+def _is_thread_recall_request(user_text: str) -> bool:
+    """
+    Detects if the user is explicitly asking to recall earlier parts of this conversation.
+    Level 1 Implementation: strict keyword matching.
+    """
+    if not user_text:
+        return False
+    t = user_text.strip().lower()
+    
+    triggers = [
+        "what did i say",
+        "earlier in this conversation",
+        "scroll back",
+        "remind me what we said",
+        "what did you say earlier",
+        "previous message",
+        "at the start of this conversation",
+        "recall our chat",
+        "what were we talking about"
+    ]
+    
+    for trigger in triggers:
+        if trigger in t:
+            return True
+            
+    return False
+
 @app.route("/api/message", methods=["POST"])
 @require_auth
 def handle_message():
@@ -5569,6 +5596,18 @@ def handle_message():
 
         if persist_enabled:
             companion_context = _load_companion_context(user_id, logger, channel=effective_channel, conversation_id=conversation_id)
+
+            # Level 1: Thread Recall Injection
+            if _is_thread_recall_request(user_input):
+                 logger.info(f"API: Thread recall triggered request_id={request_id} conversation_id={conversation_id}")
+                 # Reload with deeper history (30 turns = ~60 messages)
+                 companion_context = _load_companion_context(
+                     user_id, 
+                     logger, 
+                     channel=effective_channel, 
+                     conversation_id=conversation_id, 
+                     max_turns=30
+                 )
 
         def _persist_chat_exchange(reply_text: Optional[str]) -> None:
             if not reply_text or not _should_persist_chat():
