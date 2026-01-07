@@ -37,6 +37,35 @@
     const archiveGoalLabel = document.getElementById('archive-goal-label');
     let settingsWarningLogged = false;
     let pendingChatRequests = 0; // Moved to top-level to avoid TDZ errors
+
+    // --- Viewport Management (Mobile Keyboard Fix) ---
+    function setupViewportHandling() {
+        // Default fallback to window innerHeight
+        document.documentElement.style.setProperty('--app-height', `${window.innerHeight}px`);
+        
+        if (window.visualViewport) {
+            const handleResize = () => {
+                const height = window.visualViewport.height;
+                const offsetTop = window.visualViewport.offsetTop;
+                document.documentElement.style.setProperty('--app-height', `${height}px`);
+                // document.documentElement.style.setProperty('--vv-offset-top', `${offsetTop}px`);
+                
+                // Correction: If browser panned body, reset it.
+                // We want the app to resize, not scroll.
+                if (window.scrollY > 0 || document.body.scrollTop > 0) {
+                     window.scrollTo(0, 0);
+                     document.body.scrollTop = 0;
+                }
+            };
+
+            window.visualViewport.addEventListener('resize', handleResize);
+            window.visualViewport.addEventListener('scroll', handleResize);
+            handleResize(); 
+        }
+    }
+    // Initialize immediately
+    setupViewportHandling();
+
     const BOOT_STATE = {
       CHECKING_AUTH: "checking_auth",
       NEEDS_LOGIN: "needs_login",
@@ -6054,6 +6083,11 @@
       // Canonical text variable (Refetch input safely)
       const currentInput = document.getElementById('user-input');
       let rawText = (override !== null ? override : (currentInput?.value ?? ""));
+
+      // Mobile UX: Blur to recover layout stability on send
+      if (window.innerWidth < 768 && currentInput && !override) {
+          currentInput.blur();
+      }
       
       console.debug(`[Othello UI] sendMessage triggered. Text length: ${rawText.length}`);
       
