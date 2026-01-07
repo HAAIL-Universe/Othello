@@ -1,7 +1,8 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <link rel="stylesheet" href="/static/othello.css">
+    <!-- Build Stamp: 2026-01-07 Debug Duet -->
+    <link rel="stylesheet" href="/static/othello.css?v=20260107_debug_duet">
   <meta charset="UTF-8" />
   <title>Othello — Personal Goal Architect</title>
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
@@ -9,6 +10,7 @@
 </head>
 
 <body>
+    <div style="background:#ff000033;color:white;text-align:center;font-size:10px;position:fixed;top:0;left:0;right:0;z-index:9999;pointer-events:none;">DEBUG BUILD: Duet V1 - Checked</div>
     <div id="connect-overlay" class="waking-overlay" style="display:none;">
       <div class="waking-overlay__spinner" id="connect-spinner"></div>
       <div id="connect-status" class="waking-overlay__status" style="margin-top:1.2rem;">Connecting to server…</div>
@@ -366,5 +368,5 @@
   </button>
 
   <!-- JS -->
-  <script src="/static/othello.js"></script>
+  <script src="/static/othello.js?v=20260107_debug_duet"></script>
 </html>

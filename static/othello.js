@@ -4317,6 +4317,7 @@
       // Only applicable if duet wrappers exist
       const duetTop = document.getElementById("duet-top");
       const duetBottom = document.getElementById("duet-bottom");
+      console.log("DEBUG: updateDuetView called", role, { duetTop: !!duetTop, duetBottom: !!duetBottom });
       if (!duetTop || !duetBottom) return;
 
       const clone = row.cloneNode(true);
@@ -4588,6 +4589,7 @@
     }
 
     function addMessage(role, text, options = {}) {
+      console.log("DEBUG: addMessage called", role, text.substring(0, 20) + "...");
       // Hide chat placeholder when first message appears
       const chatPlaceholder = document.getElementById("chat-placeholder");
       if (chatPlaceholder && !chatPlaceholder.classList.contains("hidden")) {
