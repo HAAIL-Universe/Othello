@@ -1,59 +1,77 @@
 ﻿Cycle Status: COMPLETE (AUDIT)
 Todo Ledger:
-Planned: [Identify off-screen expansion cause]
-Completed: [Audit DOM structure in othello_ui.html, Audit CSS positioning in othello.css, Check runtime toggles in othello.js]
+Planned: [Fix Focus user-bubble obstruction, Reflow bot padding]
+Completed: [Impl "Peek" logic in othello.js, Add debugDuetDOM helper, CSS transforms for .duet-user-peek, Fix #duet-top padding]
 Remaining: []
-Next Action: Provide fix directive based on identified anchors
+Next Action: Manual Verify of "Transform Peek" behavior.
 
-# UI Forensic Audit: Mobile PWA Keyboard Shift
+# UI Forensic Audit: Focus View "Peek" & Padding
 
-## 1. Viewport Sizing Usage
-**File:** [static/othello.css](static/othello.css#L64)
-The root containers rely on `height: 100%`, which falls back to the **layout viewport** (covering the area under the keyboard on some devices) rather than the **visual viewport**.
+## 1. Problem Statement
+The "Focus View" (Duet Mode) had two issues:
+1. Long bot messages touched the top edge (clipping/no padding).
+2. Long user messages obscured the bot text.
+**Requirement:** 
+- Slide user bubble out of the way ("Peek") when bot text is long.
+- Use `transform` only, no new UI widgets.
+- Fix top padding for bot messages.
+
+## 2. DOM Proof Strategy
+**Anchor Points:**
+- Bot Container: `#duet-top`
+- User Container: `#duet-bottom`
+- Peek State Class: `.duet-user-peek`
+
+**Verification Tool:**
+`window.DEBUG_DUET = true` enables console logging of computed styles and DOM paths for the active bubbles to verify selectors before applying fixes.
+
+## 3. Implementation Details
+
+### A. Bot Padding Fix
+**File:** [static/othello.css](static/othello.css)
+Moved padding from individual bubbles to the scroll container to ensure consistent scroll-top behavior.
 ```css
-html {
-  height: 100%;
-  overflow: hidden; /* Root scroll lock */
+#duet-top {
+  padding-top: 1rem;
+  padding-bottom: 2rem;
+  overflow-y: auto;
 }
-body {
-  height: 100%;
-  overflow: hidden;
-  position: fixed; /* Fixes body to viewport */
-  top: 0; left: 0;
-}
-.shell {
-  height: 100%; /* Inherits fixed height */
+#duet-top .bubble:first-child {
+  margin-top: 0; /* Reset bubble margins to respect container padding */
 }
 ```
 
-## 2. Scroll Ownership
-**File:** [static/othello.css](static/othello.css#L960)
-Scrolling is correctly delegated to internal views, not the body.
+### B. User "Peek" Transform
+**File:** [static/othello.css](static/othello.css)
+Configured the `#duet-bottom` container to slide right, leaving a 22px "handle" visible.
+Key fix involved `width: fit-content` and `max-width` to ensure `translateX(100%)` calculated based on the bubble size, not the full screen width.
 ```css
-.view {
-  overflow-y: auto; /* Internal scroll */
-  -webkit-overflow-scrolling: touch;
+#duet-bottom.duet-user-peek {
+  max-width: 80% !important;
+  width: fit-content;
+  transform: translateX(calc(100% - 22px));
+  position: absolute;
+  bottom: 80px;
+  right: 0;
+  cursor: pointer;
 }
 ```
-However, because `body` is `position: fixed` without `visualViewport` management, the browser pan-scrolls the entire fixed layer to keep the focused input visible when the keyboard creates an inset.
 
-## 3. Fixed/Sticky Elements
-**File:** [static/othello.js](static/othello.js) (Logic Check)
-The `nav.tab-bar` and `header` are flex children of `.shell`. They are **not** sticky. They only stay at the top because `.shell` fills the screen. When the browser shifts the viewport, they shift with it.
-The input bar (in the chat sheet) is relative to the sheet.
-
-## 4. Keyboard Handling Check
+### C. Trigger Logic
 **File:** [static/othello.js](static/othello.js)
-- **visualViewport:** `0` matches found. The app is unaware of the keyboard geometry.
-- **Input Blur:** `0` matches for explicit `blur()` calls on the chat input. The keyboard likely stays open after send, compounding layout issues.
+Updated `updateFocusPeekBehavior` to detect if bot content exceeds 45% of the viewport.
+```javascript
+const threshold = sheetHeight * 0.45;
+if (botHeight > threshold) {
+  duetBottom.classList.add("duet-user-peek");
+}
+```
 
-## 5. Root Cause Analysis
-**PRIMARY CAUSE:** The app relies on CSS `height: 100%` and `position: fixed` on the body without listening to the `visualViewport` API; thus, when the keyboard opens, the browser scrolls the entire fixed `body` upwards to ensure the input is visible, pushing the top bar off-screen.
-
-## 6. Fix Direction
-To stabilize the layout:
-1.  **Dynamic Sizing:** Bind `window.visualViewport` events to set a CSS variable `--app-height`.
-2.  **Constraint:** Set `body` (or `.shell`) height to `var(--app-height)` so it resizes *instead* of shifting.
-3.  **Keyboard Inset:** Calculate `--keyboard-inset` to translate bottom bars up if needed (though resizing the shell usually suffices for flex layouts).
-4.  **UX Polish:** Blur the input on send (optional, but requested behavior is usually to keep keyboard for rapid fire, but stable layout is the priority).
-
+## 4. Verification Check
+**Status:** Ready to Verify
+**Procedure:**
+1. Open Focus View.
+2. Send a long message to generate a long bot response.
+3. Observe User bubble sliding right (leaving sliver).
+4. Verify Bot text has top padding.
+5. Click User sliver -> Check it slides back.
