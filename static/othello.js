@@ -6279,6 +6279,17 @@
             draft_type: draftType,
             ...extraData
         };
+        
+        // --- DEBUG STEP C: Frontend Payload Log ---
+        console.debug("[DEBUG_FRONTEND_PAYLOAD]", {
+            keys: Object.keys(payload),
+            session_id: payload.conversation_id,
+            goal_id: payload.goal_id,
+            channel: payload.channel,
+            view: payload.current_view
+        });
+        // ------------------------------------------
+
         console.debug("[Othello UI] Sending /api/message payload:", payload);
         
         beginThinking();

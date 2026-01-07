@@ -1514,18 +1514,26 @@ def _load_companion_context(
     uid = str(user_id or "").strip()
     if not uid:
         return []
-    channel_name = str(channel or "companion").strip().lower()
-    if channel_name not in {"companion", "planner"}:
-        channel_name = "companion"
+
+    # Logic change: If we have a conversation_id, we want the FULL session history
+    # regardless of channel, to ensure "full thread context".
+    # This fixes context fragmentation when "auto" routing switches channels.
+    if conversation_id:
+        target_channel = None
+    else:
+        target_channel = str(channel or "companion").strip().lower()
+        if target_channel not in {"companion", "planner"}:
+            target_channel = "companion"
+
     limit = max(0, int(max_turns) * 2)
     if limit <= 0:
         return []
     try:
         from db.messages_repository import list_recent_messages, list_messages_for_session
         if conversation_id:
-            rows = list_messages_for_session(uid, conversation_id, limit=limit, channel=channel_name)
+            rows = list_messages_for_session(uid, conversation_id, limit=limit, channel=target_channel)
         else:
-            rows = list_recent_messages(uid, limit=limit, channel=channel_name)
+            rows = list_recent_messages(uid, limit=limit, channel=target_channel)
     except Exception as exc:
         logger.warning(
             "API: failed to load companion history user_id=%s error=%s",
@@ -4376,6 +4384,48 @@ def handle_message():
                 conversation_id = int(raw_conversation_id)
             except (ValueError, TypeError):
                 pass
+        
+        # --- DEBUG STEP A: Request Entrypoint Log ---
+        _debug_client_msg_id = client_message_id or "N/A"
+        _debug_sess_id = conversation_id or "None"
+        try:
+             # Just peek at repo to see how many messages we *would* load for this session
+             from db.messages_repository import list_messages_for_session
+             _debug_history_count = 0
+             _debug_history_ids = []
+             _debug_channel_dist = {}
+             if conversation_id and user_id:
+                 # Fetch with channel=None to show full unified thread
+                 _msgs = list_messages_for_session(str(user_id), conversation_id, limit=30, channel=None)
+                 _debug_history_count = len(_msgs)
+                 
+                 # Message ID peek (first 2 and last 2 of the query result, effectively newest/oldest chunk in result)
+                 if _msgs:
+                     _debug_history_ids = [str(m.get('id')) for m in _msgs[:2]]
+                     if len(_msgs) > 2:
+                         _debug_history_ids.extend(["...", str(_msgs[-1].get('id'))])
+                         
+                 # Channel distribution
+                 for m in _msgs:
+                     ch = str(m.get("channel") or "unknown").lower()
+                     _debug_channel_dist[ch] = _debug_channel_dist.get(ch, 0) + 1
+             
+             logger.info(
+                 "DEBUG_CONTEXT_ENTRY: request_id=%s user_id=%s session_id=%s resolved_session_id=%s mode=%s view=%s channel=%s history_count=%s channel_dist=%s msg_peek=%s",
+                 request_id,
+                 user_id,
+                 data.get("conversation_id"),
+                 _debug_sess_id,
+                 current_mode,
+                 current_view,
+                 effective_channel,
+                 _debug_history_count,
+                 _debug_channel_dist,
+                 _debug_history_ids
+             )
+        except Exception as e:
+            logger.error("DEBUG_CONTEXT_ENTRY: failed to log context: %s", e)
+        # --------------------------------------------
 
         logger.info(
             "API: message meta request_id=%s current_view=%s current_mode=%s keys=%s goal_id=%s active_goal_id=%s conversation_id=%s",
