@@ -337,14 +337,18 @@
 
       <!-- Moved Chat View Content -->
       <div id="chat-view" class="view" style="display:flex;">
-        <div id="duet-top" class="duet-pane duet-pane--top" style="display:none;"></div>
+        <div id="duet-history" style="display:flex; flex-direction:column; padding:0;"></div>
         
-        <!-- Only this is scrollable history -->
-        <div id="draft-preview" class="draft-preview" style="display:none;"></div>
-        <div id="chat-placeholder" class="chat-placeholder">Start a conversation</div>
-        <div id="chat-log" class="chat-log"></div>
+        <div id="duet-history-bar" class="duet-history-bar" style="display:none;">
+          HISTORY <span class="history-arrow">↑</span>
+        </div>
         
-        <div id="duet-bottom" class="duet-pane duet-pane--bottom" style="display:none;"></div>
+        <div id="duet-live-region" class="duet-live-region" style="display: flex; flex-direction: column;">
+            <!-- Only this is scrollable history -->
+            <div id="draft-preview" class="draft-preview" style="display:none;"></div>
+            <div id="chat-placeholder" class="chat-placeholder">Start a conversation</div>
+            <div id="chat-log" class="chat-log"></div>
+        </div>
       </div>
 
       <!-- Moved Input Bar -->

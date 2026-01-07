@@ -4359,6 +4359,15 @@
 
     function bindDuetListeners() {
        // Scroll logic is now native overflow
+       
+       // Phase 3 Safety: Init Checks
+       const live = document.getElementById("chat-log");
+       const hist = document.getElementById("duet-history");
+       if (!live) console.error("[duet] missing #chat-log on init");
+       if (!hist) console.error("[duet] missing #duet-history on init");
+       
+       // Ensure bar is hidden initially if empty? 
+       // HTML has style="display:none" on bar, so we are good.
     }
 
     // Call bindDuetListeners on init
@@ -5920,6 +5929,49 @@
         }
     }
 
+    function maybePromoteDuetToHistory() {
+      // Guard: Critical Elements
+      const hist = document.getElementById("duet-history");
+      const live = document.getElementById("chat-log");
+      
+      if (!hist) {
+         console.error("[duet] missing #duet-history - Aborting promotion");
+         // Show visible banner as requested
+         const view = document.getElementById("chat-view");
+         if (view && !document.getElementById("duet-error-banner")) {
+             const banner = document.createElement("div");
+             banner.id = "duet-error-banner";
+             banner.style.background = "red";
+             banner.style.color = "white";
+             banner.style.padding = "4px";
+             banner.textContent = "DUET UI MISWIRED (#duet-history missing)";
+             view.prepend(banner);
+         }
+         return;
+      }
+      if (!live) {
+         console.error("[duet] missing #chat-log - Aborting promotion");
+         return;
+      }
+
+      // Promotion Logic
+      if (live.children.length > 0) {
+         const block = document.createElement("div");
+         block.className = "history-duet";
+         while (live.firstChild) block.appendChild(live.firstChild);
+         hist.appendChild(block);
+         
+         const bar = document.getElementById("duet-history-bar");
+         if (bar) bar.style.display = "block";
+
+         // Keep view pinned to bottom
+         const view = document.getElementById("chat-view");
+         if (view) view.scrollTop = view.scrollHeight;
+         
+         console.debug("[duet] promoted nodes to history.");
+      }
+    }
+
     async function sendMessage(overrideText = null, extraData = {}) {
       // 1) Robust String Safety & Diagnostic
       let override = overrideText;
@@ -5945,12 +5997,8 @@
 
       if (!text && !extraData.ui_action) return;
 
-      // Phase B (Cleanup): Auto-archive pins on new user message
-      // This ensures the stage is cleared before the new user bubble appears.
-      // We only do this if it's a genuine user message (text present or ui_action).
-      if (typeof archivePinnedToHistory === "function") {
-          archivePinnedToHistory();
-      }
+      // Phase 2: History Promotion (Move & Clear)
+      maybePromoteDuetToHistory();
 
       // Voice-first save command (Strict Command Mode)
       const lowerText = text.toLowerCase().trim().replace(/[.!?]+$/, "");

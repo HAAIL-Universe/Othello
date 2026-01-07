@@ -2008,46 +2008,49 @@
 }
 
 /* Re-style existing elements when inside the sheet */
-/* Reset the #chat-view styles since it's now wrapped */
-.chat-sheet #chat-view {
+/* Fixed: #chat-view is the main container inside the wrapper */
+#chat-view {
   display: flex !important; /* Force show */
   flex-direction: column;
-  flex: 1 1 0px; /* Fix: Grow from 0 to fill space (was auto with height 0) */
+  flex: 1 1 0px; 
   min-height: 0;
   padding: 0;
-  overflow-y: hidden; /* Scroll handled by log */
+  overflow-y: auto !important; /* The ONLY scrollbar */
+  overflow-x: hidden;
 }
 
-.chat-sheet #chat-log {
-  flex: 1 1 0;
-  overflow-y: auto; /* The log scrolls */
+/* The Live Region (Bottom) containing the log */
+.duet-live-region {
+  display: flex;
+  flex-direction: column;
+  flex: 0 0 auto; /* Just take natural size */
+}
+
+.duet-live-region #chat-log {
+  overflow: visible; /* Let it grow, view handles scroll */
   padding: 1rem;
-  padding-bottom: calc(1rem + var(--chat-input-h));
-  scroll-padding-bottom: calc(1rem + var(--chat-input-h));
+  padding-bottom: 1rem;
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
-  min-height: 0; /* Critical for flex scrolling */
 }
 
 /* Spacer technique to keep content at bottom when sparse */
-.chat-sheet #chat-log::before {
+.duet-live-region #chat-log::before {
   content: "";
   flex: 1 1 auto;
 }
 
 /* Adjust Input Bar for the sheet */
 .chat-sheet .input-bar {
-  position: relative; /* Not fixed anymore */
+  position: relative; 
   width: 100%;
-  left: 0;
-  bottom: 0;
   border-top: 1px solid var(--border);
-  background: var(--bg-2);
-  padding: 1rem;
-  box-shadow: none; /* Remove glow */
-  margin: 0;
-  margin-top: auto; /* Push to bottom just in case */
+  margin-top: auto;
+  flex-shrink: 0;
+  z-index: 102;
+  display: flex; 
+
   transform: none;
   flex-shrink: 0; /* Don't squash input */
   z-index: 102;
@@ -2270,4 +2273,55 @@ body.chat-open #global-chat-fab {
 
 /* Cleanup old classes */
 .duet-pin-top, .duet-pin-bottom, .duet-container { display: none; }
+
+/* --- Duet Restoration --- */
+#duet-history {
+  display: flex !important;
+  flex-direction: column !important;
+  padding: 0 !important;
+  width: 100%;
+}
+
+.duet-history-bar {
+  position: sticky;
+  bottom: 0;
+  z-index: 5;
+  background: var(--bg-2);
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+  border-top: 1px solid var(--border);
+  color: var(--text-soft);
+  font-size: 0.8rem;
+  font-weight: bold;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  text-align: center;
+  width: 100%;
+  margin-bottom: 0;
+}
+
+.history-arrow {
+  display: inline-block;
+  margin-left: 4px;
+  font-size: 0.9em;
+  opacity: 0.7;
+}
+
+.history-duet {
+  display: flex !important;
+  flex-direction: column !important;
+  margin-bottom: 24px;
+  border-bottom: 1px solid var(--border);
+  padding: 12px 1rem 24px 1rem;
+}
+.history-duet:last-child {
+  border-bottom: none;
+  margin-bottom: 0;
+}
+
+#chat-sheet {
+  margin-top: 12px;
+  padding-top: 12px;
+  overflow: visible !important;
+}
 
