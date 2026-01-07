@@ -1,209 +1,222 @@
-# Cycle Status: COMPLETE
+# Cycle Status: IN_PROGRESS
 
 ## Todo Ledger
-Completed:
-- [x] Phase A: UI Refactor (Remove dropdown, add pill)
-- [x] Phase B: Wiring (Backend route exposure + Client routing pill)
 
 ## Next Action
-Commit
+Fill next action.
 
-diff --git a/api.py b/api.py
-index 10d9e32d..0bbfbf5b 100644
---- a/api.py
-+++ b/api.py
-@@ -5698,6 +5698,11 @@ def handle_message():
-                          "roles_represented": list(set(m.get("role", "unknown") for m in companion_context))
-                      }
- 
-+                # Phase A/B: Expose Route
-+                if "selected_route" not in payload:
-+                    route_label = "Planner" if effective_channel == "planner" else "Chat"
-+                    payload["selected_route"] = route_label
-+
-             return jsonify(payload)
- 
-         logger.info(
-diff --git a/core/architect_brain.py b/core/architect_brain.py
-index ed5703a3..a56669e3 100644
---- a/core/architect_brain.py
-+++ b/core/architect_brain.py
-@@ -462,7 +462,7 @@ class Architect:
-             return user_facing_response, agent_status
- 
-         except Exception as e:
--            self.logger.error(f"ÔØî Architect failed: {e}", exc_info=True)
-+            self.logger.error(f"ÔØî Architect failed: {e}")
-             # Return error message with default agent_status
-             return "Sorry, something went wrong planning that.", {
-                 "planner_active": False,
 diff --git a/evidence/updatedifflog.md b/evidence/updatedifflog.md
-index e80434ec..78b50369 100644
+deleted file mode 100644
+index 4aa7f53e..00000000
 --- a/evidence/updatedifflog.md
-+++ b/evidence/updatedifflog.md
-@@ -1,44 +1,27 @@
--# Cycle Status: IN_PROGRESS
-+# Cycle Status: COMPLETE
- 
- ## Todo Ledger
--Planned:
--- [ ] Reproduce issue
--- [ ] Add debug logging
--- [ ] Analyze root cause
--- [ ] Fix issue
- Completed:
--- [x] Reproduce issue
--- [x] Add debug logging
--Remaining:
--- [ ] Analyze root cause
--- [ ] Fix issue
-+- [x] Phase 0: Evidence + Location
-+- [x] Phase 1: Server: Pending Draft Storage
-+- [x] Phase 2: Client: Draft Focus UI + Payload Wiring
-+- [x] Phase 3: Quality Gates
-+- [x] Phase 5: Runtime Fix (Fixed sendMessage event arg bug)
-+- [x] Phase 6: Env Fix (OpenAI Key 401)
- 
- ## Next Action
--Analyze root cause of AuthenticationError
-+Stop and commit.
- 
- diff --git a/core/architect_brain.py b/core/architect_brain.py
--index a56669e3..ed5703a3 100644
-+index ed5703a3..a56669e3 100644
- --- a/core/architect_brain.py
- +++ b/core/architect_brain.py
- @@ -462,7 +462,7 @@ class Architect:
-              return user_facing_response, agent_status
-  
-          except Exception as e:
---            self.logger.error(f"├ö├ÿ├« Architect failed: {e}")
--+            self.logger.error(f"├ö├ÿ├« Architect failed: {e}", exc_info=True)
--             # Return error message with default agent_status
--             return "Sorry, something went wrong planning that.", {
--                 "planner_active": False,
++++ /dev/null
+@@ -1,209 +0,0 @@
+-# Cycle Status: COMPLETE
+-
+-## Todo Ledger
+-Completed:
+-- [x] Phase A: UI Refactor (Remove dropdown, add pill)
+-- [x] Phase B: Wiring (Backend route exposure + Client routing pill)
+-
+-## Next Action
+-Commit
+-
+-diff --git a/api.py b/api.py
+-index 10d9e32d..0bbfbf5b 100644
+---- a/api.py
+-+++ b/api.py
+-@@ -5698,6 +5698,11 @@ def handle_message():
+-                          "roles_represented": list(set(m.get("role", "unknown") for m in companion_context))
+-                      }
+- 
+-+                # Phase A/B: Expose Route
+-+                if "selected_route" not in payload:
+-+                    route_label = "Planner" if effective_channel == "planner" else "Chat"
+-+                    payload["selected_route"] = route_label
+-+
+-             return jsonify(payload)
+- 
+-         logger.info(
 -diff --git a/core/architect_brain.py b/core/architect_brain.py
--index a56669e3..ed5703a3 100644
+-index ed5703a3..a56669e3 100644
 ---- a/core/architect_brain.py
 -+++ b/core/architect_brain.py
 -@@ -462,7 +462,7 @@ class Architect:
 -             return user_facing_response, agent_status
 - 
 -         except Exception as e:
---            self.logger.error(f"├ö├ÿ├« Architect failed: {e}")
--+            self.logger.error(f"├ö├ÿ├« Architect failed: {e}", exc_info=True)
-+-            self.logger.error(f"├ö├ÿ├« Architect failed: {e}", exc_info=True)
-++            self.logger.error(f"├ö├ÿ├« Architect failed: {e}")
-              # Return error message with default agent_status
-              return "Sorry, something went wrong planning that.", {
-                  "planner_active": False,
-diff --git a/othello_ui.html b/othello_ui.html
-index d7bac5a0..bce50387 100644
---- a/othello_ui.html
-+++ b/othello_ui.html
-@@ -90,11 +90,6 @@
-         </div>
-         <div class="brand-subtitle" id="mode-subtitle">Personal Goal Architect</div>
-       </div>
--
--      <div class="status-pill">
--        <div class="dot"></div>
--        <span id="status">Online</span>
--      </div>
-     </header>
- 
-     <!-- TAB NAVIGATION -->
-@@ -331,11 +326,10 @@
-     <div class="chat-sheet">
-       <div class="chat-sheet__header">
-         <div class="kitt-scanner" aria-hidden="true"></div>
--        <select id="chat-context-selector" class="chat-context-selector">
--          <option value="companion">Companion Chat</option>
--          <option value="planner">Daily Plan Engine</option>
--          <option value="routine">Routine Coach</option>
--        </select>
-+        <div id="chat-status-pill" class="status-pill" style="margin-right: auto;">
-+          <div class="dot"></div>
-+          <span id="chat-status-text">Online ÔÇó Chat</span>
-+        </div>
-         <button id="chat-back-btn" class="chat-back-btn">├ù</button>
-       </div>
- 
-diff --git a/static/othello.js b/static/othello.js
-index 7d95718c..4978ae92 100644
---- a/static/othello.js
-+++ b/static/othello.js
-@@ -3581,20 +3581,33 @@
-     
-     // Connectivity State Management
-     function updateConnectivity(status, message = "") {
-+        console.debug(`[Connectivity] update: ${status} (msg: ${message})`);
-         othelloState.connectivity = status;
--        const pill = document.querySelector('.status-pill');
--        const text = pill ? pill.querySelector('#status') : null;
--        const dot = pill ? pill.querySelector('.dot') : null;
-+        const pill = document.getElementById('chat-status-pill');
-+        const text = document.getElementById('chat-status-text');
-+        
-+        // Provide route context if available, defaulting to "Chat"
-+        const route = othelloState.lastRoute || "Chat";
-         
-         if (text) {
--            if (status === 'online') text.textContent = "Online";
--            else if (status === 'offline') text.textContent = "Offline";
--            else if (status === 'degraded') text.textContent = message || "Degraded";
-+             if (status === 'online') {
-+                 text.textContent = `Online ÔÇó ${route}`;
-+             } else if (status === 'thinking') {
-+                 text.textContent = `Thinking ÔÇó ${route}`;
-+             } else if (status === 'offline') {
-+                 text.textContent = "Offline";
-+             } else if (status === 'degraded') {
-+                 text.textContent = message || "Degraded";
-+             } else {
-+                 text.textContent = status;
-+             }
-         }
-         
-         if (pill) {
--            pill.classList.remove('offline', 'degraded');
--            if (status !== 'online') pill.classList.add(status);
-+            pill.classList.remove('offline', 'degraded', 'thinking');
-+            if (status === 'offline') pill.classList.add('offline');
-+            if (status === 'degraded') pill.classList.add('degraded');
-+            if (status === 'thinking') pill.classList.add('thinking'); // Optional styling
-         }
-     }
- 
-@@ -5791,11 +5804,15 @@
-         if (typeof pendingChatRequests !== 'number') pendingChatRequests = 0;
-         pendingChatRequests++;
-         setChatThinking(true);
-+        updateConnectivity('thinking');
-     }
-     function endThinking() {
-         if (typeof pendingChatRequests !== 'number') pendingChatRequests = 0;
-         pendingChatRequests = Math.max(0, pendingChatRequests - 1);
--        if (pendingChatRequests === 0) setChatThinking(false);
-+        if (pendingChatRequests === 0) {
-+            setChatThinking(false);
-+            updateConnectivity('online');
-+        }
-     }
- 
-     async function sendMessage(overrideText = null, extraData = {}) {
-@@ -6088,6 +6105,14 @@
-                 const clone = res.clone();
-                 try {
-                     data = await res.json();
-+                    
-+                    // Route Pill Update (Phase A)
-+                    // If backend returns a route, update our state so the pill reflects it.
-+                    if (data && data.selected_route) {
-+                        othelloState.lastRoute = data.selected_route;
-+                        // Refresh immediately to show new route
-+                        updateConnectivity('online');
-+                    }
-                 } catch (parseErr) {
-                     let textBody = "";
-                     try { textBody = await clone.text(); } catch(e) {}
+--            self.logger.error(f"├ö├ÿ├« Architect failed: {e}", exc_info=True)
+-+            self.logger.error(f"├ö├ÿ├« Architect failed: {e}")
+-             # Return error message with default agent_status
+-             return "Sorry, something went wrong planning that.", {
+-                 "planner_active": False,
+-diff --git a/evidence/updatedifflog.md b/evidence/updatedifflog.md
+-index e80434ec..78b50369 100644
+---- a/evidence/updatedifflog.md
+-+++ b/evidence/updatedifflog.md
+-@@ -1,44 +1,27 @@
+--# Cycle Status: IN_PROGRESS
+-+# Cycle Status: COMPLETE
+- 
+- ## Todo Ledger
+--Planned:
+--- [ ] Reproduce issue
+--- [ ] Add debug logging
+--- [ ] Analyze root cause
+--- [ ] Fix issue
+- Completed:
+--- [x] Reproduce issue
+--- [x] Add debug logging
+--Remaining:
+--- [ ] Analyze root cause
+--- [ ] Fix issue
+-+- [x] Phase 0: Evidence + Location
+-+- [x] Phase 1: Server: Pending Draft Storage
+-+- [x] Phase 2: Client: Draft Focus UI + Payload Wiring
+-+- [x] Phase 3: Quality Gates
+-+- [x] Phase 5: Runtime Fix (Fixed sendMessage event arg bug)
+-+- [x] Phase 6: Env Fix (OpenAI Key 401)
+- 
+- ## Next Action
+--Analyze root cause of AuthenticationError
+-+Stop and commit.
+- 
+- diff --git a/core/architect_brain.py b/core/architect_brain.py
+--index a56669e3..ed5703a3 100644
+-+index ed5703a3..a56669e3 100644
+- --- a/core/architect_brain.py
+- +++ b/core/architect_brain.py
+- @@ -462,7 +462,7 @@ class Architect:
+-              return user_facing_response, agent_status
+-  
+-          except Exception as e:
+---            self.logger.error(f"Ôö£├ÂÔö£├┐Ôö£┬½ Architect failed: {e}")
+--+            self.logger.error(f"Ôö£├ÂÔö£├┐Ôö£┬½ Architect failed: {e}", exc_info=True)
+--             # Return error message with default agent_status
+--             return "Sorry, something went wrong planning that.", {
+--                 "planner_active": False,
+--diff --git a/core/architect_brain.py b/core/architect_brain.py
+--index a56669e3..ed5703a3 100644
+----- a/core/architect_brain.py
+--+++ b/core/architect_brain.py
+--@@ -462,7 +462,7 @@ class Architect:
+--             return user_facing_response, agent_status
+-- 
+--         except Exception as e:
+---            self.logger.error(f"Ôö£├ÂÔö£├┐Ôö£┬½ Architect failed: {e}")
+--+            self.logger.error(f"Ôö£├ÂÔö£├┐Ôö£┬½ Architect failed: {e}", exc_info=True)
+-+-            self.logger.error(f"Ôö£├ÂÔö£├┐Ôö£┬½ Architect failed: {e}", exc_info=True)
+-++            self.logger.error(f"Ôö£├ÂÔö£├┐Ôö£┬½ Architect failed: {e}")
+-              # Return error message with default agent_status
+-              return "Sorry, something went wrong planning that.", {
+-                  "planner_active": False,
+-diff --git a/othello_ui.html b/othello_ui.html
+-index d7bac5a0..bce50387 100644
+---- a/othello_ui.html
+-+++ b/othello_ui.html
+-@@ -90,11 +90,6 @@
+-         </div>
+-         <div class="brand-subtitle" id="mode-subtitle">Personal Goal Architect</div>
+-       </div>
+--
+--      <div class="status-pill">
+--        <div class="dot"></div>
+--        <span id="status">Online</span>
+--      </div>
+-     </header>
+- 
+-     <!-- TAB NAVIGATION -->
+-@@ -331,11 +326,10 @@
+-     <div class="chat-sheet">
+-       <div class="chat-sheet__header">
+-         <div class="kitt-scanner" aria-hidden="true"></div>
+--        <select id="chat-context-selector" class="chat-context-selector">
+--          <option value="companion">Companion Chat</option>
+--          <option value="planner">Daily Plan Engine</option>
+--          <option value="routine">Routine Coach</option>
+--        </select>
+-+        <div id="chat-status-pill" class="status-pill" style="margin-right: auto;">
+-+          <div class="dot"></div>
+-+          <span id="chat-status-text">Online ├ö├ç├│ Chat</span>
+-+        </div>
+-         <button id="chat-back-btn" class="chat-back-btn">Ôö£├╣</button>
+-       </div>
+- 
+-diff --git a/static/othello.js b/static/othello.js
+-index 7d95718c..4978ae92 100644
+---- a/static/othello.js
+-+++ b/static/othello.js
+-@@ -3581,20 +3581,33 @@
+-     
+-     // Connectivity State Management
+-     function updateConnectivity(status, message = "") {
+-+        console.debug(`[Connectivity] update: ${status} (msg: ${message})`);
+-         othelloState.connectivity = status;
+--        const pill = document.querySelector('.status-pill');
+--        const text = pill ? pill.querySelector('#status') : null;
+--        const dot = pill ? pill.querySelector('.dot') : null;
+-+        const pill = document.getElementById('chat-status-pill');
+-+        const text = document.getElementById('chat-status-text');
+-+        
+-+        // Provide route context if available, defaulting to "Chat"
+-+        const route = othelloState.lastRoute || "Chat";
+-         
+-         if (text) {
+--            if (status === 'online') text.textContent = "Online";
+--            else if (status === 'offline') text.textContent = "Offline";
+--            else if (status === 'degraded') text.textContent = message || "Degraded";
+-+             if (status === 'online') {
+-+                 text.textContent = `Online ├ö├ç├│ ${route}`;
+-+             } else if (status === 'thinking') {
+-+                 text.textContent = `Thinking ├ö├ç├│ ${route}`;
+-+             } else if (status === 'offline') {
+-+                 text.textContent = "Offline";
+-+             } else if (status === 'degraded') {
+-+                 text.textContent = message || "Degraded";
+-+             } else {
+-+                 text.textContent = status;
+-+             }
+-         }
+-         
+-         if (pill) {
+--            pill.classList.remove('offline', 'degraded');
+--            if (status !== 'online') pill.classList.add(status);
+-+            pill.classList.remove('offline', 'degraded', 'thinking');
+-+            if (status === 'offline') pill.classList.add('offline');
+-+            if (status === 'degraded') pill.classList.add('degraded');
+-+            if (status === 'thinking') pill.classList.add('thinking'); // Optional styling
+-         }
+-     }
+- 
+-@@ -5791,11 +5804,15 @@
+-         if (typeof pendingChatRequests !== 'number') pendingChatRequests = 0;
+-         pendingChatRequests++;
+-         setChatThinking(true);
+-+        updateConnectivity('thinking');
+-     }
+-     function endThinking() {
+-         if (typeof pendingChatRequests !== 'number') pendingChatRequests = 0;
+-         pendingChatRequests = Math.max(0, pendingChatRequests - 1);
+--        if (pendingChatRequests === 0) setChatThinking(false);
+-+        if (pendingChatRequests === 0) {
+-+            setChatThinking(false);
+-+            updateConnectivity('online');
+-+        }
+-     }
+- 
+-     async function sendMessage(overrideText = null, extraData = {}) {
+-@@ -6088,6 +6105,14 @@
+-                 const clone = res.clone();
+-                 try {
+-                     data = await res.json();
+-+                    
+-+                    // Route Pill Update (Phase A)
+-+                    // If backend returns a route, update our state so the pill reflects it.
+-+                    if (data && data.selected_route) {
+-+                        othelloState.lastRoute = data.selected_route;
+-+                        // Refresh immediately to show new route
+-+                        updateConnectivity('online');
+-+                    }
+-                 } catch (parseErr) {
+-                     let textBody = "";
+-                     try { textBody = await clone.text(); } catch(e) {}
