@@ -80,7 +80,8 @@ The investigation revealed that the issue was **not** in the database layer or t
 Refactored AsyncLLMWrapper.chat to pass the messages list directly to client.chat.completions.create(), preserving the full conversation history.
 
 ## Verification
-Executed un_test_suite.ps1:
+Executed 
+un_test_suite.ps1:
 1.  **Context**: User stated 'My favorite fruit is Papaya_cc33'.
 2.  **Query**: User asked 'What is my favorite fruit?'
 3.  **Result**: Model correctly replied identifying 'papaya'.

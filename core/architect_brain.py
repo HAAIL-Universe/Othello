@@ -319,11 +319,12 @@ class Architect:
                 messages.append({
                     "role": "system",
                     "content": (
-                        "Respond normally to the user. If (and only if) the user asks what their goal is, "
-                        "references a focused/saved goal, or asks whether something is already in the goal, "
-                        "explain that there is no active goal context available right now and offer a next action: "
-                        "create a goal, focus an existing goal, or open the Goals tab. "
-                        "Do NOT default to 'it isn't saved yet' for unrelated messages."
+                        "MEMORY & CONTEXT: You have full access to the conversation history provided in this thread. "
+                        "You MUST use this history to answer questions about previous messages (e.g. 'What did I ask?', 'What is my favorite fruit?'). "
+                        "Active Goal Status: NONE (Casual Chat). "
+                        "If (and only if) the user explicitly asks to view/modify a Goal, explain that there is no active Goal context "
+                        "and suggest creating or focusing one. "
+                        "For all other topics, chat normally and context-aware using the provided history."
                     )
                 })
 
