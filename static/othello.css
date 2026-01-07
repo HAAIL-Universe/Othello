@@ -7021,12 +7021,34 @@ body.mode-duet-user-overlay .duet-peek-tab { display: none; }
 #duet-top {
   max-height: 80vh;
   overflow-y: auto !important;
+  /* Fix Issue B: Padding must be on the scroll container itself and consistent */
+  padding-top: 1rem;
   padding-bottom: 2rem; /* space for interactions */
+  scrollbar-gutter: stable; /* Helps prevent shift when scrollbar appears */
+}
+
+/* Fix for collapsing margins at top of bot bubble */
+#duet-top .bubble:first-child,
+#duet-top .bubble > *:first-child {
+  margin-top: 0;
 }
 
 /* The peeking container state */
 #duet-bottom.duet-user-peek {
-  /* Pull to right edge */
+  /* Fix Issue A: Use max-width or intrinsic width logic so 100% doesn't push it fully off */
+  /* We want to pull it almost all the way right, leaving just a sliver visible */
+  transform: translateX(100%); 
+  /* But we need to offset it back by the peek width.
+     Since transform is relative to the element's width, 100% moves it fully out.
+     We use margin-left or just calculate translateX differently.
+     If we use right:0 and translateX(100%), it's gone.
+     We want translateX(calc(100% - 22px)).
+     However, if the element is 100% width of parent, this works?
+     The issue describes overshoot. This happens if #duet-bottom is WIDER than we think.
+     Let's clamp it.
+  */
+  max-width: 80% !important; /* Ensure it's not full screen width */
+  width: fit-content;
   transform: translateX(calc(100% - 22px));
   transition: transform 0.3s cubic-bezier(0.18, 0.89, 0.32, 1.28);
   cursor: pointer;
@@ -7036,12 +7058,18 @@ body.mode-duet-user-overlay .duet-peek-tab { display: none; }
   position: absolute; /* Float it */
   bottom: 80px; /* Above input */
   right: 0;
-  width: auto;
-  max-width: 90%;
   background: transparent; /* Bubbles handle bg */
   border-top: none;
-  padding-right: 4px;
+  padding-right: 0; /* Removing padding-right so the calculate works better on right edge */
+  
+  /* Visual cue on the bubble inside */
 }
+#duet-bottom.duet-user-peek .msg-row {
+  /* Ensure the bubble aligns right */
+  justify-content: flex-end;
+  padding-right: 0;
+}
+
 #duet-bottom.duet-user-peek:hover {
   transform: translateX(calc(100% - 32px)); /* Peek a bit more on hover */
   opacity: 1;
