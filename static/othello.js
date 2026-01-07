@@ -4537,6 +4537,58 @@
         });
     }
 
+    // --- Debug Helper ---
+    window.DEBUG_DUET = false; // Set to true to enable logging
+    function debugDuetDOM() {
+      if (!window.DEBUG_DUET) return;
+      console.group("DUET DOM+CSS PROOF");
+      const duetTop = document.getElementById("duet-top");
+      const duetBottom = document.getElementById("duet-bottom");
+      console.log("duetTop:", duetTop);
+      console.log("duetBottom:", duetBottom);
+
+      if (duetTop) {
+         const botRow = duetTop.querySelector(".msg-row.bot, .msg-row.assistant, .msg-row");
+         const botBubble = botRow ? botRow.querySelector(".bubble") : null;
+         console.log("botRow:", botRow);
+         console.log("botBubble:", botBubble);
+         if (botBubble) {
+             const style = window.getComputedStyle(botBubble);
+             console.log("Bot Bubble Styles:", {
+                 className: botBubble.className,
+                 paddingTop: style.paddingTop,
+                 paddingBottom: style.paddingBottom,
+                 overflowY: style.overflowY,
+                 maxHeight: style.maxHeight,
+                 height: botBubble.getBoundingClientRect().height
+             });
+             const contStyle = window.getComputedStyle(duetTop);
+             console.log("Duet Top Container:", {
+                 paddingTop: contStyle.paddingTop,
+                 overflowY: contStyle.overflowY
+             });
+         }
+      }
+
+      if (duetBottom) {
+          const userRow = duetBottom.querySelector(".msg-row.user");
+          const userBubble = userRow ? userRow.querySelector(".bubble") : null;
+          console.log("userRow:", userRow);
+          console.log("userBubble:", userBubble);
+          if (userBubble) {
+             const style = window.getComputedStyle(userBubble);
+             console.log("User Bubble Styles:", {
+                 transform: style.transform,
+                 width: style.width,
+                 rect: userBubble.getBoundingClientRect()
+             });
+             const rowStyle = userRow ? window.getComputedStyle(userRow) : null;
+             console.log("User Row Width:", rowStyle ? rowStyle.width : "N/A");
+          }
+      }
+      console.groupEnd();
+    }
+
     // --- Focus Peek Behavior (Transform - No Extra UI) ---
     function updateFocusPeekBehavior() {
        const isFocus = (typeof isDuetLayout === 'function') ? isDuetLayout() : true;
@@ -4555,18 +4607,17 @@
        const topHeight = top.scrollHeight; // Or getBoundingClientRect().height
 
        // Threshold: Bot is > 45% of available space
-       // But we must respect if user manually opened the peek
        const threshold = sheetHeight * 0.45; 
        const isBotLong = topHeight > threshold;
        
        if (isBotLong) {
-           // If user specifically opened it, show fully. Otherwise peek.
            updateDuetPeekState(!othelloState.focusPeekOpen);
        } else {
-           // Not long enough to need peeking
            updateDuetPeekState(false);
            othelloState.focusPeekOpen = false; // Reset
        }
+       
+       debugDuetDOM();
     }
 
     function updateDuetPeekState(shouldPeek) {
