@@ -2118,16 +2118,16 @@ def parse_goal_selection_request(text: str) -> Optional[int]:
     """
     t = text.lower().strip()
     
-    # Strict patterns that require explicit goal selection intent
+    # Strict patterns that require explicit goal selection intent (updated to allow trailing punctuation)
     goal_select_patterns = [
-        r'^goal\s+#?(\d+)$',                    # "goal 1" or "goal #1"
-        r'^select\s+goal\s+#?(\d+)$',           # "select goal 1"
-        r'^switch\s+to\s+goal\s+#?(\d+)$',      # "switch to goal 1"
-        r'^focus\s+on\s+goal\s+#?(\d+)$',       # "focus on goal 1"
-        r'^work\s+on\s+goal\s+#?(\d+)$',        # "work on goal 1"
-        r'^talk\s+about\s+goal\s+#?(\d+)$',     # "talk about goal 1"
-        r'^go\s+to\s+goal\s+#?(\d+)$',          # "go to goal 1"
-        r'^use\s+goal\s+#?(\d+)$',              # "use goal 1"
+        r'^goal\s+#?(\d+)\s*[.!?]?$',                    # "goal 1"
+        r'^select\s+goal\s+#?(\d+)\s*[.!?]?$',           # "select goal 1"
+        r'^switch\s+to\s+goal\s+#?(\d+)\s*[.!?]?$',      # "switch to goal 1"
+        r'^focus\s+on\s+goal\s+#?(\d+)\s*[.!?]?$',       # "focus on goal 1"
+        r'^work\s+on\s+goal\s+#?(\d+)\s*[.!?]?$',        # "work on goal 1"
+        r'^talk\s+about\s+goal\s+#?(\d+)\s*[.!?]?$',     # "talk about goal 1"
+        r'^go\s+to\s+goal\s+#?(\d+)\s*[.!?]?$',          # "go to goal 1"
+        r'^use\s+goal\s+#?(\d+)\s*[.!?]?$',              # "use goal 1"
     ]
     
     for pattern in goal_select_patterns:
@@ -6294,11 +6294,14 @@ def handle_message():
                     active_goal = server_active_goal
                     goal_resolution_path = "server_active"
 
+        chosen_context = f"goal:{active_goal['id']}" if isinstance(active_goal, dict) else "companion"
         logger.info(
-            "API: resolved active_goal path=%s request_id=%s goal_id=%s",
-            goal_resolution_path,
-            request_id,
+            "API: context_decision mode=%s view=%s active_goal_id=%s chosen_context=%s request_id=%s",
+            current_mode,
+            current_view,
             active_goal.get("id") if isinstance(active_goal, dict) else None,
+            chosen_context,
+            request_id,
         )
 
         if ui_action == "plan_from_text_append":

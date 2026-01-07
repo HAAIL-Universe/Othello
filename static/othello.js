@@ -5825,6 +5825,27 @@
 
       // Voice-first save command (Strict Command Mode)
       const lowerText = text.toLowerCase().trim().replace(/[.!?]+$/, "");
+      
+      // Intercept "Focus on Goal <id>" for immediate UI switching
+      // Matches: "focus on goal 123", "focus on goal 123."
+      const focusMatch = lowerText.match(/^focus\s+on\s+goal\s+(\d+)$/);
+      if (focusMatch) {
+          const targetId = parseInt(focusMatch[1], 10);
+          console.log(`[Othello UI] Intercepted focus command for goal ${targetId}`);
+          
+          input.value = "";
+          addMessage("user", text); // Echo user input
+          
+          if (typeof setActiveGoal === "function") {
+             // Activate the goal in UI state (which updates active_goal_id for future messages)
+             setActiveGoal(targetId);
+             addMessage("bot", `Focused on Goal ${targetId}.`);
+          } else {
+             console.warn("[Othello UI] setActiveGoal not available");
+          }
+          return; // Stop processing (do not send as chat)
+      }
+
       const commandPhrases = new Set(["save as long-term goal", "save this as a goal", "create that goal", "save that goal", "lock that in as a goal"]);
       const isQuestion = text.toLowerCase().match(/^(how|can|should|do) i\b/);
 
