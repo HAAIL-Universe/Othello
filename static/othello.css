@@ -1877,7 +1877,9 @@
   z-index: 9995;
   display: flex;
   justify-content: flex-end;
-  align-items: flex-end;
+  /* Fixed: Removed align-items:flex-end to prevent upward sheet growth. 
+     We allow the sheet to fill vertical space if needed (stretch) or auto (with margin-top rule). */
+  /* align-items: flex-end; */ 
   pointer-events: none; /* Let clicks pass through backdrop by default if we want partial, but here we want modal behavior mostly? */
   pointer-events: auto; /* Actually, let's block interaction with back */
   opacity: 0;
@@ -1899,7 +1901,11 @@
 .chat-sheet {
   --chat-input-h: 72px;
   width: min(500px, 100%);
-  height: min(800px, 85vh); /* Tall sheet on bottom right */
+  /* Fix: Use max-height + margin-top:auto (bottom anchor) instead of align-items:flex-end + height. */
+  height: auto;
+  max-height: min(800px, calc(var(--app-height, 100vh) * 0.85));
+  margin-top: auto; 
+  
   background: var(--bg-1);
   border: 1px solid var(--border);
   border-bottom: none;
