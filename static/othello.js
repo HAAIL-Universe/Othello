@@ -4423,6 +4423,118 @@
       return !!document.getElementById("duet-top") && !!document.getElementById("duet-bottom");
     }
 
+    // --- User Message Collapsing (Focus View Only) ---
+    function countWords(str) {
+      if (!str) return 0;
+      return str.trim().split(/\s+/).length;
+    }
+
+    function getCollapsedPreview(text, maxWords = 20) {
+      if (!text) return "";
+      const sentenceEnd = text.search(/[.!?]/);
+      if (sentenceEnd !== -1) {
+        const firstSentence = text.substring(0, sentenceEnd + 1);
+        if (countWords(firstSentence) <= maxWords * 2) {
+             return firstSentence + " …";
+        }
+      }
+      const words = text.trim().split(/\s+/);
+      if (words.length <= maxWords) return text;
+      return words.slice(0, maxWords).join(" ") + " …";
+    }
+
+    function updateBubbleContent(rowEl, simpleText) {
+        const bubble = rowEl.querySelector(".bubble");
+        if (!bubble) return;
+        const meta = bubble.querySelector(".meta");
+        // formatMessageText is global/hoisted
+        bubble.innerHTML = formatMessageText(simpleText);
+        // Restore meta if it existed
+        if (meta) bubble.appendChild(meta);
+    }
+
+    function handleUserMessageClick(e) {
+        if (e.target.closest("button") || e.target.closest("a") || e.target.closest(".interactive")) return;
+        const row = e.currentTarget;
+        if (row.dataset.collapsed === "1") {
+            row.dataset.manuallyExpanded = "1";
+            updateBubbleContent(row, row.dataset.fullText);
+            row.dataset.collapsed = "0";
+            row.classList.add("is-expanded");
+        } else if (row.classList.contains("can-collapse")) {
+            row.dataset.manuallyExpanded = "0";
+            updateBubbleContent(row, row.dataset.collapsedText);
+            row.dataset.collapsed = "1";
+            row.classList.remove("is-expanded");
+        }
+    }
+
+    function applyUserCollapseIfNeeded(rowEl, text) {
+      if (!rowEl || !rowEl.classList.contains("user")) return;
+      const isFocus = (typeof isDuetLayout === 'function') ? isDuetLayout() : true;
+      if (!isFocus) return;
+
+      const fullText = text || rowEl.dataset.fullText;
+      if (!fullText) return;
+      
+      if (rowEl.dataset.manuallyExpanded === "1") return;
+      
+      const wordCount = countWords(fullText);
+      if (wordCount <= 20) return;
+
+      rowEl.dataset.fullText = fullText;
+      const preview = getCollapsedPreview(fullText);
+      rowEl.dataset.collapsedText = preview;
+      
+      rowEl.dataset.collapsed = "1";
+      updateBubbleContent(rowEl, preview);
+
+      if (rowEl.dataset.boundToggle !== "1") {
+          rowEl.addEventListener("click", handleUserMessageClick);
+          rowEl.dataset.boundToggle = "1";
+          rowEl.classList.add("can-collapse");
+      }
+    }
+
+    function refreshUserCollapseState() {
+        const isFocus = (typeof isDuetLayout === 'function') ? isDuetLayout() : true;
+        const userRows = document.querySelectorAll(".msg-row.user");
+        userRows.forEach(row => {
+            if (!row.dataset.fullText) return;
+            if (countWords(row.dataset.fullText) <= 20) return;
+
+            if (isFocus) {
+                if (row.dataset.manuallyExpanded === "1") {
+                     if (row.dataset.collapsed === "1") {
+                        updateBubbleContent(row, row.dataset.fullText);
+                        row.dataset.collapsed = "0";
+                        row.classList.add("is-expanded");
+                     }
+                } else {
+                     if (row.dataset.collapsed !== "1") {
+                         if (!row.dataset.collapsedText) {
+                             row.dataset.collapsedText = getCollapsedPreview(row.dataset.fullText);
+                         }
+                         if (row.dataset.boundToggle !== "1") {
+                             row.addEventListener("click", handleUserMessageClick);
+                             row.dataset.boundToggle = "1";
+                             row.classList.add("can-collapse");
+                         }
+                         row.dataset.collapsed = "1";
+                         updateBubbleContent(row, row.dataset.collapsedText);
+                         row.classList.remove("is-expanded");
+                     }
+                }
+            } else {
+                if (row.dataset.collapsed === "1") {
+                    updateBubbleContent(row, row.dataset.fullText);
+                    row.dataset.collapsed = "0";
+                }
+                row.classList.remove("can-collapse");
+            }
+        });
+    }
+
     // Phase 3: Canonical Move - Refactored for 3-Zone Flex Layout
     function applyDuetPins() {
         // Guard: Do not run pin logic if history panel is open
@@ -4507,6 +4619,9 @@
         // 5. Scroll Management
         // Since history is now independent, we might want to stick to bottom if we were there?
         // But logic is usually handled by scrollChatToBottom separately.
+
+        // 6. Refresh Collapse State (Focus Mode)
+        refreshUserCollapseState();
     }
     
     function syncDuetPadding() {}
@@ -4821,6 +4936,9 @@
       }
       
       updateDuetView(row, role);
+
+      // Collapse user message if needed (Duet Mode)
+      applyUserCollapseIfNeeded(row, text);
 
       if (role === "user" && clientMessageId) {
         othelloState.messagesByClientId[clientMessageId] = {
