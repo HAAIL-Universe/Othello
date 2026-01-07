@@ -4537,62 +4537,81 @@
         });
     }
 
-    // --- Focus Peek Tab Behavior ---
+    // --- Focus Peek Behavior (Transform - No Extra UI) ---
     function updateFocusPeekBehavior() {
        const isFocus = (typeof isDuetLayout === 'function') ? isDuetLayout() : true;
-       // Only active in focus view and if we have duet panes
        if (!isFocus) {
-           document.body.classList.remove('mode-duet-user-peek', 'mode-duet-user-overlay');
+           updateDuetPeekState(false);
            return;
        }
        
        const top = document.getElementById("duet-top");
-       const bottom = document.getElementById("duet-bottom");
-       if (!top || !bottom) return;
-
-       // Ensure peek tab exists
-       let tab = document.getElementById("duet-peek-tab");
-       if (!tab) {
-           const container = document.getElementById("chat-sheet") || document.body;
-           tab = document.createElement("div");
-           tab.id = "duet-peek-tab";
-           tab.className = "duet-peek-tab";
-           // Insert as sibling of duet panes or in body
-           bottom.parentElement.appendChild(tab);
-           
-           tab.addEventListener("click", () => {
-               othelloState.focusUserPeekOpen = !othelloState.focusUserPeekOpen;
-               updateFocusPeekVisuals();
-           });
-       }
+       if (!top) return;
 
        // Measure
-       // Use clientHeight of scrollable container or view
        const view = document.getElementById("chat-sheet") || document.getElementById("chat-view");
        if (!view) return;
        const sheetHeight = view.clientHeight;
-       const topHeight = top.scrollHeight;
+       const topHeight = top.scrollHeight; // Or getBoundingClientRect().height
 
-       const threshold = sheetHeight * 0.45;
+       // Threshold: Bot is > 45% of available space
+       // But we must respect if user manually opened the peek
+       const threshold = sheetHeight * 0.45; 
        const isBotLong = topHeight > threshold;
        
-       // Handle state
        if (isBotLong) {
-           // Should be collapsed into tab unless open
-           document.body.classList.add("mode-duet-user-peek");
-           updateFocusPeekVisuals();
+           // If user specifically opened it, show fully. Otherwise peek.
+           updateDuetPeekState(!othelloState.focusPeekOpen);
        } else {
-           // Normal mode
-           document.body.classList.remove("mode-duet-user-peek", "mode-duet-user-overlay");
-           othelloState.focusUserPeekOpen = false;
+           // Not long enough to need peeking
+           updateDuetPeekState(false);
+           othelloState.focusPeekOpen = false; // Reset
        }
     }
 
-    function updateFocusPeekVisuals() {
-        if (othelloState.focusUserPeekOpen) {
-            document.body.classList.add("mode-duet-user-overlay");
+    function updateDuetPeekState(shouldPeek) {
+        const bottom = document.getElementById("duet-bottom");
+        if (!bottom) return;
+
+        // Apply class to the container or row?
+        // Let's apply to the container for simplicity in CSS targeting
+        if (shouldPeek) {
+            bottom.classList.add("duet-user-peek");
+            
+            // Ensure click handler is attached to toggle
+            if (bottom.dataset.peekBound !== "1") {
+                bottom.addEventListener("click", toggleDuetPeek);
+                bottom.dataset.peekBound = "1";
+            }
         } else {
-            document.body.classList.remove("mode-duet-user-overlay");
+            bottom.classList.remove("duet-user-peek");
+        }
+    }
+
+    function toggleDuetPeek(e) {
+        // Only if currently peeking or if logic allows peeking
+        // If we click while peeking -> Expand (set open=true)
+        // If we click while expanded (but long bot) -> Peek (set open=false)
+        
+        // Check if we are in a state that permits peeking (isBotLong)
+        // We can re-check via updateFocusPeekBehavior or just toggle state if class present
+        const bottom = document.getElementById("duet-bottom");
+        if (!bottom) return;
+        
+        // Guard: Don't toggle if clicking interactive elements buttons/links
+        if (e.target.closest("button") || e.target.closest("a")) return;
+        
+        // If currently peeking (class exists), expand
+        if (bottom.classList.contains("duet-user-peek")) {
+            othelloState.focusPeekOpen = true;
+            updateFocusPeekBehavior(); // Will re-evaluate and remove class
+        } else {
+            // If currently expanded, can we peek?
+            // Only if bot is long.
+            if (othelloState.focusPeekOpen) {
+                othelloState.focusPeekOpen = false;
+                updateFocusPeekBehavior(); // Will re-evaluate and add class
+            }
         }
     }
 
