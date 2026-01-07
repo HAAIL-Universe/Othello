@@ -1592,6 +1592,25 @@ def _load_companion_context(
     return messages
 
 
+def _create_goal_bootstrap(user_id: str, logger: logging.Logger) -> List[Dict[str, str]]:
+    """
+    Capture recent context to serve as the 'Goal Bootstrap' (provenance).
+    This bounds the context around the moment of creation/confirmation.
+    """
+    try:
+        # Load slightly more context (e.g. 5-8 turns) to capture the lead-up
+        context = _load_companion_context(
+            user_id, 
+            logger, 
+            max_turns=6, 
+            channel="companion"
+        )
+        return context
+    except Exception as e:
+        logger.warning(f"Failed to create goal bootstrap: {e}")
+        return []
+
+
 def should_offer_goal_intent(text: str) -> bool:
     if not text:
         return False
@@ -2705,6 +2724,11 @@ def _apply_suggestion_decisions(
             if not goal:
                 results.append({"ok": False, "error": "goal_create_failed", "suggestion_id": suggestion_id})
                 continue
+            
+            # Phase 23: Goal Bootstrap Injection
+            # Capture context at the moment of Apply
+            bootstrap_context = _create_goal_bootstrap(user_id, logger)
+            
             safe_append_goal_event(
                 user_id,
                 goal.get("id"),
@@ -2712,6 +2736,16 @@ def _apply_suggestion_decisions(
                 "goal_created",
                 {"source": event_source, "suggestion_id": suggestion_id, "title": title},
             )
+            
+            if bootstrap_context:
+                safe_append_goal_event(
+                    user_id,
+                    goal.get("id"),
+                    None,
+                    "context_seed",
+                    {"source": event_source, "context": bootstrap_context},
+                )
+
             updated = update_suggestion_status(user_id, suggestion_id, "accepted", decided_reason=reason)
             results.append({"ok": True, "action": "accepted", "goal": goal, "suggestion": updated})
             continue
@@ -4375,19 +4409,24 @@ def handle_message():
                      for step in final_steps:
                          goals_repository.add_goal_step(user_id, goal_id, str(step))
 
-                 # Phase 22: Seed context if provided
-                 if goal_id and goal_context:
-                      goal_events_repository.append_goal_event(
-                          user_id=user_id,
-                          goal_id=goal_id,
-                          step_id=None,
-                          event_type="context_seed",
-                          payload={
-                              "source_client_message_id": source_message_id,
-                              "context": goal_context
-                          },
-                          request_id=request_id
-                      )
+                 # Phase 22: Seed context if provided or bootstrap from recent history
+                 if goal_id:
+                      seed_context = goal_context
+                      if not seed_context:
+                          seed_context = _create_goal_bootstrap(user_id, logger)
+
+                      if seed_context:
+                          goal_events_repository.append_goal_event(
+                              user_id=user_id,
+                              goal_id=goal_id,
+                              step_id=None,
+                              event_type="context_seed",
+                              payload={
+                                  "source_client_message_id": source_message_id,
+                                  "context": seed_context
+                              },
+                              request_id=request_id
+                          )
                          
                  return jsonify({
                      "reply": f"Goal '{final_title}' created.",

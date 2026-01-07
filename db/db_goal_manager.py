@@ -143,6 +143,26 @@ class DbGoalManager:
                 lines.append(f"- [ ] {step_text}")
 
         lines.append("")
+
+        # Phase 23: Goal Bootstrap (Context Seed)
+        # Check for context_seed in events
+        from db.goal_events_repository import safe_list_goal_events
+        events = safe_list_goal_events(uid, goal_id, limit=50) # Fetch more to find seed
+        bootstrap_event = next((e for e in events if e.get("event_type") == "context_seed"), None)
+        
+        if bootstrap_event:
+            payload = bootstrap_event.get("payload") or {}
+            bootstrap_context = payload.get("context")
+            if bootstrap_context:
+                lines.append("Goal Bootstrap (Original Context):")
+                if isinstance(bootstrap_context, list):
+                     for msg in bootstrap_context:
+                         role = msg.get("role", "user")
+                         content = msg.get("content", "")
+                         lines.append(f"> {role}: {content}")
+                else:
+                    lines.append(f"> {str(bootstrap_context)}")
+                lines.append("")
         
         notes = self.get_recent_notes(uid, goal_id, max_notes=max_notes)
         if notes:
