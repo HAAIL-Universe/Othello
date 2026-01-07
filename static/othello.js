@@ -3702,6 +3702,22 @@
         const overlayClose = document.getElementById('chat-back-btn');
         const overlaySelector = document.getElementById('chat-context-selector');
         const fab = document.getElementById('global-chat-fab');
+        const historyBtn = document.getElementById('history-toggle-btn');
+        const historyClose = document.getElementById('history-close-btn');
+
+        if (historyBtn) {
+            historyBtn.onclick = (e) => {
+                e.stopPropagation();
+                toggleHistoryPanel(!othelloState.historyPanelOpen);
+            };
+        }
+        
+        if (historyClose) {
+            historyClose.onclick = (e) => {
+                 e.stopPropagation();
+                 toggleHistoryPanel(false);
+            };
+        }
 
         if (overlaySelector) {
             overlaySelector.onchange = (e) => {
@@ -4291,17 +4307,98 @@
 
     // ===== CHAT FUNCTIONS =====
 
-    function setChatViewMode(mode, reason) {
-        // No-op in sticky design
+    // History Panel Logic (collapsed/expanded)
+    function toggleHistoryPanel(show) {
+        othelloState.historyPanelOpen = show;
+        
+        const panel = document.getElementById("history-panel");
+        const chatLog = document.getElementById("chat-log");
+        const historyLog = document.getElementById("history-log");
+        const top = document.getElementById("duet-top");
+        const bottom = document.getElementById("duet-bottom");
+        const toggleBtn = document.getElementById("history-toggle-btn");
+        
+        if (!panel || !chatLog || !historyLog) return;
+        
+        if (show) {
+            // OPEN PANEL
+            // 1. Gather ALL message rows from pins + chatLog
+            const allRows = [
+                ...Array.from(top ? top.querySelectorAll('.msg-row') : []),
+                ...Array.from(bottom ? bottom.querySelectorAll('.msg-row') : []),
+                ...Array.from(chatLog.querySelectorAll('.msg-row')),
+                // Safety: include existing historyLog rows just in case
+                ...Array.from(historyLog.querySelectorAll('.msg-row'))
+            ];
+            
+            // 2. Sort
+             allRows.sort((a, b) => {
+                const seqA = parseInt(a.dataset.sequence || "0");
+                const seqB = parseInt(b.dataset.sequence || "0");
+                if (seqA !== seqB) return seqA - seqB;
+                const tsA = parseInt(a.dataset.timestamp || "0");
+                const tsB = parseInt(b.dataset.timestamp || "0");
+                return tsA - tsB;
+            });
+
+            // 3. Move to History Log
+            const frag = document.createDocumentFragment();
+            allRows.forEach(row => frag.appendChild(row));
+            historyLog.appendChild(frag);
+            
+            // 4. Update Visibility
+            panel.style.display = "flex";
+            if (toggleBtn) {
+                toggleBtn.innerHTML = "Duet";
+                // Optionally remove icon or change it
+                // toggleBtn.classList.add("expanded"); 
+            }
+            
+            // Scroll to bottom
+            if (historyLog.lastElementChild) {
+                historyLog.lastElementChild.scrollIntoView();
+            }
+
+        } else {
+            // CLOSE PANEL (Collapse)
+            // 1. Move everything back to chatLog (the "middle" storage, though hidden)
+            const allRows = Array.from(historyLog.querySelectorAll('.msg-row'));
+             // Sort just to be safe, though historyLog should be sorted
+             allRows.sort((a, b) => {
+                const seqA = parseInt(a.dataset.sequence || "0");
+                const seqB = parseInt(b.dataset.sequence || "0");
+                return seqA - seqB;
+            });
+            
+            const frag = document.createDocumentFragment();
+            allRows.forEach(row => frag.appendChild(row));
+            chatLog.appendChild(frag);
+            
+            // 2. Update Visibility
+            panel.style.display = "none";
+            if (toggleBtn) toggleBtn.innerHTML = "Full Chat ?";
+            
+            // 3. Run Pins
+            applyDuetPins(); 
+        }
+    }
+    
+    // Polyfill isDuetLayout - always true now (sticky mode)
+    function isDuetLayout() {
+        return !othelloState.historyPanelOpen;
     }
 
     // Unified Duet Logic (Sticky Pins - Move Mode)
     function isDuetEnabled() {
+      // Legacy check
       return !!document.getElementById("duet-top") && !!document.getElementById("duet-bottom");
     }
 
     // Phase 3: Canonical Move - Refactored for 3-Zone Flex Layout
     function applyDuetPins() {
+        // Guard: Do not run pin logic if history panel is open
+        if (othelloState.historyPanelOpen) return;
+
         const top = document.getElementById("duet-top");
         const bottom = document.getElementById("duet-bottom");
         const chatLog = document.getElementById("chat-log");
@@ -4398,9 +4495,12 @@
     document.addEventListener("DOMContentLoaded", bindDuetListeners);
 
     function getChatContainer() {
-      // Phase 4: Target the real scroll container for appending?
-      // No, we append to chat-log. The VIEW is the scroller.
-      // But getChatContainer is usually strictly for finding where to APPEND.
+      // Return history log if panel is open, otherwise chat log (which duet splits from)
+      if (othelloState.historyPanelOpen) {
+          const h = document.getElementById("history-log");
+          if (h) return h;
+      }
+      
       const chatLog = document.getElementById("chat-log");
       
       if (!chatLog) {
@@ -4557,6 +4657,7 @@
             addMessage(role, text);
           });
           
+          // applyChatViewMode();
           // Force scroll to bottom after initial load
           scrollChatToBottom(true);
         };

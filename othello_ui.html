@@ -335,6 +335,15 @@
         <button id="chat-back-btn" class="chat-back-btn">×</button>
       </div>
 
+      <!-- History Drawer (New) -->
+      <div id="history-panel" class="history-panel" style="display:none;">
+          <div class="history-header">
+             <span class="history-title">Full History</span>
+             <button id="history-close-btn" class="icon-button">×</button>
+          </div>
+          <div id="history-log" class="chat-log full-history-log"></div>
+      </div>
+
       <!-- Moved Chat View Content -->
       <div id="chat-view" class="view" style="display:flex;">
         <div id="duet-top" class="duet-pane duet-pane--top" style="display:none;"></div>
@@ -345,6 +354,11 @@
         <div id="chat-log" class="chat-log"></div>
         
         <div id="duet-bottom" class="duet-pane duet-pane--bottom" style="display:none;"></div>
+      </div>
+
+      <!-- History Toggle Bar -->
+      <div id="history-bar" class="history-bar">
+          <button id="history-toggle-btn" class="history-toggle-btn">Full Chat ?</button>
       </div>
 
       <!-- Moved Input Bar -->
