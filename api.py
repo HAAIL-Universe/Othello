@@ -4323,7 +4323,8 @@ def handle_message():
         current_view = data.get("current_view")
         raw_channel = data.get("channel")
         view_label = str(current_view or "chat")
-        
+        is_chat_view = (view_label == "chat")
+
         # Phase 6: True Auto Routing (Content-based)
         effective_channel = "companion" # Default safe fallback
         incoming_channel = "unknown"
