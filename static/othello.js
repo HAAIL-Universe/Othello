@@ -4538,53 +4538,68 @@
     }
 
     // --- Debug Helper ---
-    window.DEBUG_DUET = false; // Set to true to enable logging
+    window.DEBUG_DUET = false; 
     function debugDuetDOM() {
       if (!window.DEBUG_DUET) return;
-      console.group("DUET DOM+CSS PROOF");
+      console.group("DUET DOM+CSS PROOF (LONG BOT + USER PEEK)");
+      
       const duetTop = document.getElementById("duet-top");
       const duetBottom = document.getElementById("duet-bottom");
-      console.log("duetTop:", duetTop);
-      console.log("duetBottom:", duetBottom);
 
-      if (duetTop) {
-         const botRow = duetTop.querySelector(".msg-row.bot, .msg-row.assistant, .msg-row");
-         const botBubble = botRow ? botRow.querySelector(".bubble") : null;
-         console.log("botRow:", botRow);
-         console.log("botBubble:", botBubble);
-         if (botBubble) {
-             const style = window.getComputedStyle(botBubble);
-             console.log("Bot Bubble Styles:", {
-                 className: botBubble.className,
-                 paddingTop: style.paddingTop,
-                 paddingBottom: style.paddingBottom,
-                 overflowY: style.overflowY,
-                 maxHeight: style.maxHeight,
-                 height: botBubble.getBoundingClientRect().height
-             });
-             const contStyle = window.getComputedStyle(duetTop);
-             console.log("Duet Top Container:", {
-                 paddingTop: contStyle.paddingTop,
-                 overflowY: contStyle.overflowY
-             });
-         }
+      // Bot Analysis
+      const botRowSel = "#duet-top .msg-row.bot, #duet-top .msg-row.assistant"; 
+      const botRow = duetTop ? duetTop.querySelector(botRowSel) : null;
+      console.log(`botRow selector used: "${botRowSel}", found:`, !!botRow);
+      
+      const botBubbleSel = ".bubble";
+      const botBubble = botRow ? botRow.querySelector(botBubbleSel) : null;
+      console.log(`botBubble selector used: "${botBubbleSel}", found:`, !!botBubble);
+      
+      if (botBubble) {
+          const style = window.getComputedStyle(botBubble);
+          const topStyle = duetTop ? window.getComputedStyle(duetTop) : {};
+          console.log({
+              className: botBubble.className,
+              computedPaddingTop: style.paddingTop,
+              containerPaddingTop: topStyle.paddingTop,
+              rect: botBubble.getBoundingClientRect()
+          });
+          // Path
+          let path = "";
+          let el = botBubble;
+          while(el && el.id !== "chat-view") {
+              path = (el.tagName + (el.id ? "#"+el.id : "") + (el.className ? "."+el.className.replace(/\s+/g, ".") : "")) + " > " + path;
+              el = el.parentElement;
+          }
+          console.log("DOM PATH:", path);
       }
 
-      if (duetBottom) {
-          const userRow = duetBottom.querySelector(".msg-row.user");
-          const userBubble = userRow ? userRow.querySelector(".bubble") : null;
-          console.log("userRow:", userRow);
-          console.log("userBubble:", userBubble);
-          if (userBubble) {
-             const style = window.getComputedStyle(userBubble);
-             console.log("User Bubble Styles:", {
-                 transform: style.transform,
-                 width: style.width,
-                 rect: userBubble.getBoundingClientRect()
-             });
-             const rowStyle = userRow ? window.getComputedStyle(userRow) : null;
-             console.log("User Row Width:", rowStyle ? rowStyle.width : "N/A");
+      // User Analysis
+      const userRowSel = "#duet-bottom .msg-row.user";
+      const userRow = duetBottom ? duetBottom.querySelector(userRowSel) : null;
+      console.log(`userRow selector used: "${userRowSel}", found:`, !!userRow);
+
+      const userBubbleSel = ".bubble";
+      const userBubble = userRow ? userRow.querySelector(userBubbleSel) : null;
+      console.log(`userBubble selector used: "${userBubbleSel}", found:`, !!userBubble);
+
+      if (userBubble) {
+          const style = window.getComputedStyle(userBubble);
+          console.log({
+              className: userBubble.className,
+              transform: style.transform,
+              width: style.width,
+              maxWidth: style.maxWidth,
+              rect: userBubble.getBoundingClientRect()
+          });
+           // Path
+          let path = "";
+          let el = userBubble;
+          while(el && el.id !== "chat-view") {
+              path = (el.tagName + (el.id ? "#"+el.id : "") + (el.className ? "."+el.className.replace(/\s+/g, ".") : "")) + " > " + path;
+              el = el.parentElement;
           }
+          console.log("DOM PATH:", path);
       }
       console.groupEnd();
     }
