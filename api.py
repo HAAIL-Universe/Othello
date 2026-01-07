@@ -8911,15 +8911,28 @@ def goals():
             bool(session.get("authed")),
         )
         try:
-            goals = architect_agent.goal_mgr.list_goals(user_id)
-            return jsonify({"goals": goals})
+            # FIX: Direct DB access to bypass GoalManager signature issues + invalid serialization
+            from db import goals_repository
+            raw_goals = goals_repository.list_goals(user_id, include_archived=False) or []
+            clean_goals = []
+            for g in raw_goals:
+                item = dict(g)
+                # Ensure JSON safe datetimes
+                for k in ["created_at", "updated_at"]:
+                    if k in item and hasattr(item[k], "isoformat"):
+                        item[k] = item[k].isoformat()
+                    elif k in item:
+                        item[k] = str(item[k]) if item[k] else None
+                clean_goals.append(item)
+
+            return jsonify({"goals": clean_goals})
         except Exception as e:
-            logging.getLogger("ARCHITECT").error(f"Failed to fetch goals: {e}")
+            logger.error(f"API: /api/goals GET failed: {e}", exc_info=True)
             return api_error(
                 "GOALS_FETCH_FAILED",
                 "Failed to fetch goals",
                 500,
-                details=type(e).__name__,
+                details=str(e),
             )
 
     if _PHASE1_ENABLED:
