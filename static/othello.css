@@ -2180,26 +2180,69 @@ body.chat-open #global-chat-fab {
 }
 
 /* --- Duet Chat Mode (Unified) --- */
+/* Phase 2: Fix the scroll container */
+.chat-sheet {
+  display: flex !important;
+  flex-direction: column !important;
+  /* height set by inline styles or other rules */
+  overflow: hidden !important; /* No scroll at sheet level */
+}
+
+/* Header is rigid */
+.chat-sheet__header {
+  flex: 0 0 auto;
+}
+
+/* Input is rigid (footer) */
+.input-bar {
+  flex: 0 0 auto;
+}
+
+/* Chat View IS the scroll container now */
+#chat-view {
+  display: flex !important;
+  flex-direction: column;
+  flex: 1 1 0; /* Grow, shrink, basis 0 */
+  min-height: 0;
+  overflow-y: auto !important; /* The ONLY scrollbar */
+  overflow-x: hidden;
+  position: relative;
+  padding: 0; /* Strict */
+}
+
+/* Duet Panes (Sticky) */
 .duet-pane {
   position: sticky;
-  z-index: 50; /* Above chat bubbles but below header if needed */
+  z-index: 100; /* Must beat messages */
   background: rgba(15, 23, 42, 0.98);
-  padding: 0.5rem;
+  padding: 0.75rem;
   margin: 0;
   display: block !important;
   backdrop-filter: blur(8px);
+  /* Ensure they don't shrink away */
+  flex-shrink: 0; 
 }
 
 .duet-pane--top {
   top: 0;
   border-bottom: 1px solid rgba(255,255,255,0.1);
-  box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.4);
 }
 
 .duet-pane--bottom {
   bottom: 0;
   border-top: 1px solid rgba(255,255,255,0.1);
-  box-shadow: 0 -4px 12px rgba(0,0,0,0.3);
+  box-shadow: 0 -4px 12px rgba(0,0,0,0.4);
+}
+
+/* Chat Log (History Flow) */
+#chat-log {
+  display: flex !important;
+  flex-direction: column;
+  flex: 1; /* occupy space between pins */
+  overflow: visible !important; /* Let parent scroll it */
+  height: auto !important;
+  padding: 1rem;
 }
 
 /* Hide empty panes */
@@ -2207,11 +2250,6 @@ body.chat-open #global-chat-fab {
   display: none !important;
 }
 
-/* Ensure chat-log doesn't hide */
-.chat-sheet[data-view-mode="duet"] #chat-log {
-  display: flex !important;
-}
-
-/* Cleanup old classes if any exist */
+/* Cleanup old classes */
 .duet-pin-top, .duet-pin-bottom, .duet-container { display: none; }
 
