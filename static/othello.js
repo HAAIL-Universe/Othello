@@ -793,8 +793,7 @@
     const micBtn = { disabled: false, classList: { add:()=>{}, remove:()=>{} }, title:'', addEventListener:()=>{} }; 
     const cancelTranscriptBtn = { classList: { add:()=>{}, remove:()=>{} }, addEventListener:()=>{} };
 
-    // Updated to support new Duet History container
-    const chatLog = document.getElementById("duet-history") || document.getElementById('chat-log');
+    const chatLog = document.getElementById('chat-log');
     // Relocated status to chat header (Phase 6 Fix)
     const statusEl = document.getElementById('chat-status-text') || { textContent: "" };
     const modeLabel = document.getElementById('current-mode-label');
@@ -4301,114 +4300,111 @@
       return !!document.getElementById("duet-top") && !!document.getElementById("duet-bottom");
     }
 
-    // Phase 4: Duet Scroll Logic (Single Scroll Container)
-    function syncDuetHistorySpacer() {
-       // Deprecated in Single Scroll model
-    }
-
-    function scrollDuetHistoryToBottom() {
-       // Deprecated - use scrollChatToBottom
-    }
-
-    // Call on resize - harmless
-    window.addEventListener("resize", () => {});
-
-    // Updated applyDuetPins to act as "archivePinnedToHistory"
-    function archivePinnedToHistory() {
-        // Source: Live Chat (#chat-log)
-        // Dest: History (#duet-history)
-        const liveContainer = document.getElementById("chat-log");
-        const historyContainer = document.getElementById("duet-history");
-        const viewport = document.getElementById("chat-view");
-
-        if (!liveContainer || !historyContainer || !viewport) return;
-
-        // 1. Capture Scroll State
-        const prevScrollHeight = viewport.scrollHeight;
-        const prevScrollTop = viewport.scrollTop;
-
-        // 2. Archive only valid message rows
-        // We verify direct children to avoid deep grabbing
-        const rows = Array.from(liveContainer.children).filter(el => el.classList.contains("msg-row"));
+    // Phase 3: Canonical Duet Logic - SLOT BASED
+    function promoteLiveToHistory() {
+        const botSlot = document.getElementById("duet-live-bot");
+        const userSlot = document.getElementById("duet-live-user");
+        const hist = document.getElementById("duet-history");
         
-        if (rows.length === 0) return;
-
-        const fragment = document.createDocumentFragment();
-        // Since we iterate in DOM order, we preserve chronological order
-        rows.forEach(r => fragment.appendChild(r));
+        if (!botSlot || !userSlot || !hist) return;
         
-        historyContainer.appendChild(fragment);
+        // Only promote if there is content to promote
+        if (!botSlot.hasChildNodes() && !userSlot.hasChildNodes()) return;
 
-        // 3. Maintain Scroll Position
-        const newScrollHeight = viewport.scrollHeight;
-        const delta = newScrollHeight - prevScrollHeight;
+        // Create a history block (The "Single Block" contract)
+        const block = document.createElement("div");
+        block.className = "history-duet";
         
-        if (delta > 0) {
-            viewport.scrollTop = prevScrollTop + delta;
+        // 1. Snapshot Bot Content (if any)
+        if (botSlot.hasChildNodes()) {
+             // We clone to preserve the visual appearance in history
+             // Or move? User says "Promote" usually implies Move.
+             // We will move the children.
+             while (botSlot.firstChild) {
+                 block.appendChild(botSlot.firstChild);
+             }
+        }
+
+        // 2. Snapshot User Content (if any)
+        if (userSlot.hasChildNodes()) {
+            while (userSlot.firstChild) {
+                block.appendChild(userSlot.firstChild);
+            }
+        }
+
+        // 3. Insert at TOP of History List (Newest closest to bar... wait)
+        // If the view is [Live] -> [History], "Newest closest to bar" means top of History container.
+        // Yes.
+        if (hist.firstChild) {
+            hist.insertBefore(block, hist.firstChild);
+        } else {
+            hist.appendChild(block);
         }
         
-        console.debug(`[Duet] Archived ${rows.length} rows. History children: ${historyContainer.childElementCount}. Live children: ${liveContainer.childElementCount}`);
+        // Slots are now empty (due to move)
     }
 
-    // Deprecated / Aliased
+    // Deprecated: No continuous pin logic needed. 
+    // CSS justify-content: space-between handles the Top/Bottom placement 
+    // because we aggressively clear Live on every turn.
     function applyDuetPins() {}
+    
+    // Alias for backward compatibility
+    function maybePromoteDuetToHistory() {
+        promoteLiveToHistory();
+    }
     
     function syncDuetPadding() {}
 
-    function updateDuetView(row, role) {}
+    function updateDuetView(row, role) {
+      // No-op
+    }
 
     function bindDuetListeners() {
        // Scroll logic is now native overflow
-       
-       // Phase 3 Safety: Init Checks
-       const live = document.getElementById("chat-log");
-       const hist = document.getElementById("duet-history");
-       if (!live) console.error("[duet] missing #chat-log on init");
-       if (!hist) console.error("[duet] missing #duet-history on init");
-       
-       // Ensure bar is hidden initially if empty? 
-       // HTML has style="display:none" on bar, so we are good.
     }
 
     // Call bindDuetListeners on init
     document.addEventListener("DOMContentLoaded", bindDuetListeners);
 
     function getChatContainer() {
-      // Phase 4: Target the LIVE container (chat-log)
+      // Always target the Live Duet container (#chat-log)
+      // This is where addMessage appends.
       const chatLog = document.getElementById("chat-log");
       
       if (!chatLog) {
-         // Fallback or error
-        console.error("[Othello UI] CRITICAL: chat container missing (#chat-log).");
-        const toastContainer = document.getElementById("toast-container");
-        if (toastContainer) {
-            const errDiv = document.createElement("div");
-            errDiv.className = "toast error";
-            errDiv.textContent = "Error: Chat container missing.";
-            toastContainer.appendChild(errDiv);
-        }
-        return document.getElementById("duet-history"); // Last resort
+        console.error("[Othello UI] CRITICAL: #chat-log container missing.");
+        return null;
       }
       return chatLog;
     }
 
     function scrollChatToBottom(force=false) {
-      // Phase 4: Scroll the VIEW, not the log
-      const view = document.getElementById("chat-view");
-      if (!view) return;
-      
-      const nearBottom = (view.scrollHeight - (view.scrollTop + view.clientHeight)) < 60;
-      if (force || nearBottom) {
-         requestAnimationFrame(() => { 
-             view.scrollTop = view.scrollHeight; 
-         });
-      }
+       // No-op for Live View (it's fixed height/flex).
+       // History is manually scrolled by user.
+       // We DO NOT auto-scroll history to show new items because 
+       // "New messages must NOT push the history bar upward" / "Manual only".
+       // Actually, maybe we scroll the SCROLL VIEW to 0 (Top) to ensure Live is visible?
+       // "The LIVE DUET VIEWPORT remains stable".
+       // If user was looking at history (scrolled down), and sends a message...
+       // Should we snap back to Live?
+       // Usually yes, if they are typing in composer.
+       const scrollView = document.getElementById("chat-scroll-view"); // New ID
+       // Fallback to legacy
+       const legacyView = document.getElementById("chat-view"); 
+       
+       const target = scrollView || legacyView;
+       if (target) {
+           target.scrollTop = 0; // Snap to Top (Live Area)
+       }
     }
 
     function clearChatState() {
-      // Use strict resolved container
-      const container = getChatContainer();
-      if (container) container.innerHTML = "";
+      const live = document.getElementById("chat-log");
+      if (live) live.innerHTML = "";
+      
+      const hist = document.getElementById("duet-history");
+      if (hist) hist.innerHTML = "";
       
       const chatPlaceholder = document.getElementById("chat-placeholder");
       if (chatPlaceholder) chatPlaceholder.classList.remove("hidden");
@@ -4527,14 +4523,11 @@
             const text = msg && msg.transcript ? String(msg.transcript) : "";
             if (!text.trim()) return;
             const role = msg && msg.source === "assistant" ? "bot" : "user";
-            // Pass special flag to force into history backlog
-            addMessage(role, text, { isHistoryLoad: true, timestamp: msg.timestamp });
+            addMessage(role, text);
           });
           
-          // Force scroll logic for "hidden backlog"
-          syncDuetHistorySpacer();
-          scrollDuetHistoryToBottom();
-          // scrollChatToBottom(true); // Legacy call
+          // Force scroll to bottom after initial load
+          scrollChatToBottom(true);
         };
         if (renderedCount > 0) {
           renderMessages(messages);
@@ -4589,10 +4582,78 @@
       return safe.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>");
     }
 
-    let globalMessageSequence = 0;
-
     function addMessage(role, text, options = {}) {
       console.log("DEBUG: addMessage called", role, text.substring(0, 20) + "...");
+      
+      // --- STRICT DUET SLOT LOGIC ---
+      // If the slots exist, we use them EXCLUSIVELY and override standard list behavior.
+      const botSlot = document.getElementById("duet-live-bot");
+      const userSlot = document.getElementById("duet-live-user");
+      
+      if (botSlot && userSlot) {
+          // 0. HIDE PLACEHOLDER (Global)
+          const chatPlaceholder = document.getElementById("chat-placeholder");
+          if (chatPlaceholder) chatPlaceholder.classList.add("hidden");
+
+          // 1. CREATE MESSAGE ELEMENT
+          const row = document.createElement("div");
+          row.className = `msg-row ${role}`;
+          
+          if (othelloState.activeGoalId) row.classList.add("msg--focus-attached");
+
+          const bubble = document.createElement("div");
+          bubble.className = "bubble";
+          bubble.innerHTML = formatMessageText(text);
+          if (options && options.clientMessageId) {
+             row.dataset.clientMessageId = options.clientMessageId;
+             bubble.dataset.clientMessageId = options.clientMessageId;
+          }
+
+          const meta = document.createElement("div");
+          meta.className = "meta";
+          meta.textContent = role === "user" ? "You" : "Othello";
+          bubble.appendChild(meta);
+          
+          // (Legacy handlers for intent/commitment bars...)
+          if (role === "bot" && options && Array.isArray(options.intentMarkers)) {
+             renderIntentMarkers(meta, options.intentMarkers);
+          }
+           if (role === "bot" && othelloState.currentMode === "companion") {
+            const listItems = extractListItems(text);
+            if (hasStructuredList(text) && listItems.length) {
+              const convKey = othelloState.activeConversationId ? String(othelloState.activeConversationId) : "default";
+              othelloState.lastGoalDraftByConversationId[convKey] = { items: listItems, rawText: text, sourceClientMessageId: options?.sourceClientMessageId || "" };
+              const bar = createCommitmentBar(listItems, text, options?.sourceClientMessageId || "");
+              bubble.appendChild(bar);
+            }
+          }
+          if (role === "bot" && othelloState.activeGoalId !== null && isPlanLikeText(text)) {
+            const planBar = createPlanActionBar(text);
+            bubble.appendChild(planBar);
+          }
+
+          row.appendChild(bubble);
+
+          // 2. RENDER INTO SLOTS
+          if (role === "bot") {
+              // Bot Slot: Replace content
+              botSlot.innerHTML = "";
+              botSlot.appendChild(row);
+          } 
+          else if (role === "user") {
+              // User Slot: Replace content
+              userSlot.innerHTML = "";
+              userSlot.appendChild(row);
+          }
+          
+          // 3. SCROLL HANDLING (Ensure Live View is visible)
+          // We do not scroll history. Just ensure/verify viewport is correct.
+          return { row, bubble };
+      }
+
+      // --- FALLBACK TO LEGACY LIST BEHAVIOR ---
+      // (Used only if Duet slots are missing, e.g. different view mode)
+
       // Hide chat placeholder when first message appears
       const chatPlaceholder = document.getElementById("chat-placeholder");
       if (chatPlaceholder && !chatPlaceholder.classList.contains("hidden")) {
@@ -4607,9 +4668,6 @@
 
       const row = document.createElement("div");
       row.className = `msg-row ${role}`;
-      // Timestamp and Sequence for robust sorting
-      row.dataset.timestamp = (options && options.timestamp) ? options.timestamp : Date.now();
-      row.dataset.sequence = ++globalMessageSequence;
 
       // Apply focus highlighting if a goal is focused
       if (othelloState.activeGoalId) {
@@ -4661,24 +4719,9 @@
 
       row.appendChild(bubble);
       
-      // Phase 5: Routing for Duet vs Standard
-      const duetTop = document.getElementById("duet-top");
-      const duetBottom = document.getElementById("duet-bottom");
-      const historySpacer = document.getElementById("duet-history-spacer");
-
-      const isHistoryLoad = options && options.isHistoryLoad; 
-      
-      // Phase 5: Routing for Duet vs Standard (SIMPLIFIED for Chronological Flow)
-      const duetHistory = document.getElementById("duet-history");
-      const isHistoryLoad = options && options.isHistoryLoad; 
-      
-      if (isHistoryLoad && duetHistory) {
-         // History always appends-to-end of the History Block (which is above Live)
-         duetHistory.appendChild(row);
-      } else {
-         // Live messages append strictly to the Live Container (#chat-log)
-         // This ensures standard Top-Down flow.
-         if (container) container.appendChild(row);
+      // Append to the resolved container
+      if (container) {
+         container.appendChild(row);
       }
       
       updateDuetView(row, role);
@@ -5929,48 +5972,8 @@
         }
     }
 
-    function maybePromoteDuetToHistory() {
-      // Guard: Critical Elements
-      const hist = document.getElementById("duet-history");
-      const live = document.getElementById("chat-log");
-      
-      if (!hist) {
-         console.error("[duet] missing #duet-history - Aborting promotion");
-         // Show visible banner as requested
-         const view = document.getElementById("chat-view");
-         if (view && !document.getElementById("duet-error-banner")) {
-             const banner = document.createElement("div");
-             banner.id = "duet-error-banner";
-             banner.style.background = "red";
-             banner.style.color = "white";
-             banner.style.padding = "4px";
-             banner.textContent = "DUET UI MISWIRED (#duet-history missing)";
-             view.prepend(banner);
-         }
-         return;
-      }
-      if (!live) {
-         console.error("[duet] missing #chat-log - Aborting promotion");
-         return;
-      }
-
-      // Promotion Logic
-      if (live.children.length > 0) {
-         const block = document.createElement("div");
-         block.className = "history-duet";
-         while (live.firstChild) block.appendChild(live.firstChild);
-         hist.appendChild(block);
-         
-         const bar = document.getElementById("duet-history-bar");
-         if (bar) bar.style.display = "block";
-
-         // Keep view pinned to bottom
-         const view = document.getElementById("chat-view");
-         if (view) view.scrollTop = view.scrollHeight;
-         
-         console.debug("[duet] promoted nodes to history.");
-      }
-    }
+    // (Moved to top/aliased)
+    // function maybePromoteDuetToHistory() {}
 
     async function sendMessage(overrideText = null, extraData = {}) {
       // 1) Robust String Safety & Diagnostic
@@ -5985,8 +5988,8 @@
       }
 
       // Canonical text variable (Refetch input safely)
-      const input = document.getElementById('user-input');
-      let rawText = (override !== null ? override : (input?.value ?? ""));
+      const currentInput = document.getElementById('user-input');
+      let rawText = (override !== null ? override : (currentInput?.value ?? ""));
       
       console.debug(`[Othello UI] sendMessage triggered. Text length: ${rawText.length}`);
       

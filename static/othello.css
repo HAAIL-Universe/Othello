@@ -2278,27 +2278,100 @@ body.chat-open #global-chat-fab {
 #duet-history {
   display: flex !important;
   flex-direction: column !important;
-  padding: 0 !important;
+  /* padding: 0 !important; Removed for Duet Chat UI 2026-01-07 */
   width: 100%;
 }
 
-.duet-history-bar {
-  position: sticky;
-  bottom: 0;
-  z-index: 5;
-  background: var(--bg-2);
-  padding: 8px 0;
-  border-bottom: 1px solid var(--border);
-  border-top: 1px solid var(--border);
-  color: var(--text-soft);
-  font-size: 0.8rem;
-  font-weight: bold;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  text-align: center;
-  width: 100%;
-  margin-bottom: 0;
+/* --- DUET CHAT UI [2026-01-07] --- */
+
+/* Scroll Wrapper */
+.chat-scroll-view {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  /* Visual Lock: Ensure Live Duet fills view */
 }
+
+/* Live Duet Viewport */
+/* STRICT SLOT CONTRACT */
+.duet-live {
+  min-height: 100%; /* Force it to at least fill the visible scroll area */
+  display: flex !important;
+  flex-direction: column !important;
+  justify-content: space-between !important; /* pushes bot slot to top, user slot to bottom */
+  flex: 1 0 auto; /* Allow growth, no shrink */
+  padding: 1rem;
+  padding-bottom: 2rem; /* Visual breathing room above bar */
+}
+
+/* Slots */
+.duet-slot {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.duet-slot-bot {
+  align-self: flex-start;
+  align-items: flex-start;
+  width: 100%;
+}
+.duet-slot-user {
+  align-self: flex-end;
+  align-items: flex-end;
+  width: 100%;
+}
+
+/* Slot Content Rules */
+.duet-slot > .msg-row {
+  max-width: 85%;
+}
+.duet-slot-bot > .msg-row { align-self: flex-start; }
+.duet-slot-user > .msg-row { align-self: flex-end; }
+
+
+/* History Bar - Pinned Sibling style */
+.duet-history-bar {
+  height: 24px;
+  background: var(--bg-1);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  color: var(--text-soft);
+  font-size: 0.7rem;
+  font-weight: 600;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  z-index: 105;
+  /* Ensure it sits in the flex stack naturally */
+}
+
+/* History List */
+.duet-history {
+  display: flex;
+  flex-direction: column;
+  padding: 1rem;
+  padding-bottom: 3rem; 
+  background: rgba(0,0,0,0.1); 
+}
+
+/* Duet History Block (The archived pair) */
+.history-duet {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-bottom: 1.5rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--border);
+  opacity: 0.7; /* Visual cue */
+}
+.history-duet:last-child {
+  border-bottom: none;
+}
+
 
 .history-arrow {
   display: inline-block;
