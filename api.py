@@ -4323,10 +4323,43 @@ def handle_message():
         current_view = data.get("current_view")
         raw_channel = data.get("channel")
         view_label = str(current_view or "chat")
-        is_chat_view = view_label.strip().lower() == "chat"
-        incoming_channel = str(raw_channel or "").strip().lower() or None
-        effective_channel = "companion" if is_chat_view else (incoming_channel or "companion")
-        if effective_channel not in {"companion", "planner"}:
+        
+        # Phase 6: True Auto Routing (Content-based)
+        effective_channel = "companion" # Default safe fallback
+        incoming_channel = "unknown"
+        try:
+            incoming_channel = str(raw_channel or "").strip().lower()
+            if incoming_channel == "auto" or not incoming_channel:
+                # Simple heuristic routing
+                # Guardrail: ensure user_input is safe string (already likely is, but strict compliance)
+                safe_u_in = (user_input or "").lower()
+                
+                planner_keywords = {"plan", "schedule", "routine", "calendar", "agenda", "today", "tomorrow", "week"}
+                
+                # Guardrail: raw_goal_id is usually None or string/int
+                has_goal_focus = raw_goal_id is not None
+                
+                if has_goal_focus:
+                    effective_channel = "companion"
+                elif any(k in safe_u_in for k in planner_keywords):
+                    effective_channel = "planner"
+                else:
+                    effective_channel = "companion"
+            elif incoming_channel in {"companion", "planner"}:
+                effective_channel = incoming_channel
+            else:
+                effective_channel = "companion"
+                
+            # Debug Log for Auto Routing
+            logger.info(
+                "API: routing decision request_id=%s incoming='%s' user_input_len=%d effective=%s",
+                request_id,
+                incoming_channel,
+                len(user_input),
+                effective_channel
+            )
+        except Exception as e:
+            logger.error("API: auto-routing logic crashed request_id=%s", request_id, exc_info=True)
             effective_channel = "companion"
         raw_client_message_id = data.get("client_message_id")
         if raw_client_message_id is None:
@@ -7551,7 +7584,15 @@ def handle_message():
             type(exc).__name__,
             extra={"request_id": request_id},
         )
-        return api_error("INTERNAL_ERROR", "Internal server error", 500)
+        return api_error(
+            "INTERNAL_ERROR",
+            f"Internal server error: {str(exc)}",
+            500,
+            details={
+                "error_type": type(exc).__name__,
+                "request_id": request_id
+            }
+        )
     finally:
         _log_request_end()
 

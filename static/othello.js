@@ -794,7 +794,8 @@
     const cancelTranscriptBtn = { classList: { add:()=>{}, remove:()=>{} }, addEventListener:()=>{} };
 
     const chatLog = document.getElementById('chat-log');
-    const statusEl = document.getElementById('status');
+    // Relocated status to chat header (Phase 6 Fix)
+    const statusEl = document.getElementById('chat-status-text') || { textContent: "" };
     const modeLabel = document.getElementById('current-mode-label');
     const modeSubtitle = document.getElementById('mode-subtitle');
     const plannerTabBadge = document.getElementById('planner-tab-badge');
@@ -6019,7 +6020,8 @@
         }
 
         const mode = (othelloState.currentMode || "companion").toLowerCase();
-        const channel = mode === "companion" ? "companion" : "planner";
+        // Phase 6: Auto-routing (backend decides, avoids forced planner)
+        const channel = "auto";
         console.debug(`[Othello UI] sendMessage mode=${mode} channel=${channel} view=${othelloState.currentView}`);
         console.log("[Othello UI] Sending plain-message payload:", text);
         
@@ -9216,7 +9218,7 @@
 
 // Phase 4: Hook scanner to existing status
 (function() {
-  const statusEl = document.getElementById('status');
+  const statusEl = document.getElementById('chat-status-text');
   // Use a more generic selector or id if available, but users instruction identified .chat-sheet in HTML
   // We need to wait for DOM maybe? No, script is at end of body.
   const chatSheet = document.querySelector('.chat-sheet');
