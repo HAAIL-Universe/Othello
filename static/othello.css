@@ -2215,16 +2215,21 @@ body.chat-open #global-chat-fab {
   padding: 0; /* Strict */
 }
 
-/* Duet Panes (Sticky) */
+/* Duet Panes (Sticky) - Transparent Rails */
 .duet-pane {
   position: sticky;
   z-index: 100; /* Must beat messages */
-  background: rgba(15, 23, 42, 0.98);
+  background: transparent; /* Transparent background */
   padding: 0.75rem;
   margin: 0;
   display: block; /* always block, hidden by JS empty check if needed */
-  backdrop-filter: blur(8px);
-  flex-shrink: 0; 
+  flex-shrink: 0;
+  pointer-events: none; /* Let clicks pass through empty space */
+}
+
+/* Re-enable pointer events on children (the bubbles) */
+.duet-pane > * {
+  pointer-events: auto;
 }
 
 /* Default hidden until populated */
@@ -2234,14 +2239,16 @@ body.chat-open #global-chat-fab {
 
 .duet-pane--top {
   top: 0;
-  border-bottom: 1px solid rgba(255,255,255,0.1);
-  box-shadow: 0 4px 12px rgba(0,0,0,0.4);
+  /* Removed border/shadow for clean look */
+  /* border-bottom: 1px solid rgba(255,255,255,0.1); */
+  /* box-shadow: 0 4px 12px rgba(0,0,0,0.4); */
 }
 
 .duet-pane--bottom {
   bottom: 0;
-  border-top: 1px solid rgba(255,255,255,0.1);
-  box-shadow: 0 -4px 12px rgba(0,0,0,0.4);
+  /* Removed border/shadow for clean look */
+  /* border-top: 1px solid rgba(255,255,255,0.1); */
+  /* box-shadow: 0 -4px 12px rgba(0,0,0,0.4); */
 }
 
 /* Chat Log (History Flow) */
