@@ -4300,7 +4300,7 @@
       return !!document.getElementById("duet-top") && !!document.getElementById("duet-bottom");
     }
 
-    // Phase 3: Canonical Move
+    // Phase 3: Canonical Move - Refactored for 3-Zone Flex Layout
     function applyDuetPins() {
         const top = document.getElementById("duet-top");
         const bottom = document.getElementById("duet-bottom");
@@ -4308,67 +4308,79 @@
 
         // Fallback for safety
         if (!top || !bottom || !chatLog) return;
-
-        // 1. Move ALL pinned items BACK to chatLog first to restore order
-        // This ensures scanning always finds true chronological last messages
-        while (top.firstChild) chatLog.appendChild(top.firstChild);
-        while (bottom.firstChild) chatLog.appendChild(bottom.firstChild);
-
-        // Sort chatLog by DOM order? No, appendChild moves to end.
-        // We need to re-sort? No, they were originally at end. 
-        // NOTE: If we move old pinned items back, they append to END. 
-        // This might reorder history if we aren't careful.
-        // TRICKY: We need to know where they CAME from to un-pin correctly.
-        // SIMPLE FIX: Just sort all children of chatLog by timestamp?
-        // OR: Since we only pin the VERY LAST items, when we unpin, we append to end. 
-        // BUT: If a new message arrived, we want THAT to be pinned.
         
-        // Sorting approach (safest for history):
-        const allRows = Array.from(chatLog.children).filter(el => el.classList.contains('msg-row'));
-        // If we strictly pin the last ones, unpinning means they go back to end.
-        // New messages are appended to end. So order is preserved naturally.
-        
+        // 1. Gather ALL message rows from all containers
+        // We use Set to avoid duplicates if any weirdness, though querySelectorAll shouldn't overlap if disjoint trees
+        const allRows = [
+            ...Array.from(top.querySelectorAll('.msg-row')),
+            ...Array.from(bottom.querySelectorAll('.msg-row')),
+            ...Array.from(chatLog.querySelectorAll('.msg-row'))
+        ];
+
         if (allRows.length === 0) return;
 
-        // 2. Scan for candidates
-        let lastUserRow = null;
-        let lastBotRow = null;
+        // 2. Sort by sequence (primary) or timestamp (secondary)
+        allRows.sort((a, b) => {
+            const seqA = parseInt(a.dataset.sequence || "0");
+            const seqB = parseInt(b.dataset.sequence || "0");
+            if (seqA !== seqB) return seqA - seqB;
+            
+            const tsA = parseInt(a.dataset.timestamp || "0");
+            const tsB = parseInt(b.dataset.timestamp || "0");
+            return tsA - tsB;
+        });
 
-        // Scan backwards
-        for (let i = allRows.length - 1; i >= 0; i--) {
-            const r = allRows[i];
-            if (!lastUserRow && r.classList.contains('user')) lastUserRow = r;
-            if (!lastBotRow && !r.classList.contains('user')) lastBotRow = r;
-            if (lastUserRow && lastBotRow) break;
-        }
-
-        // 3. Move to pins
-        if (lastBotRow) {
-            top.appendChild(lastBotRow);
-            top.style.display = 'block';
-        } else {
-            top.style.display = 'none';
-        }
-
-        if (lastUserRow) {
-            bottom.appendChild(lastUserRow);
-            bottom.style.display = 'block';
-        } else {
-            bottom.style.display = 'none';
-        }
+        // 3. Identify Candidates
+        // Duet Mode: Last Bot -> Top, Last User -> Bottom.
+        const duetActive = (typeof isDuetLayout === 'function') ? isDuetLayout() : true;
         
-        // 4. Update Padding for Scroll (Phase 3c - optional if CSS sticky works well)
-        // With position:sticky, we don't need manual padding IF the scroll container is correct.
-        // But we might want to ensure last history item isn't hidden behind bottom pin.
-        // CSS 'scroll-padding-bottom' on container helps.
-        const scroll = document.getElementById("chat-view");
-        if (scroll) {
-             const botH = bottom.offsetHeight || 0;
-             const topH = top.offsetHeight || 0;
-             // Add extra padding to LOG so it can scroll fully into view
-             chatLog.style.paddingBottom = (botH + 20) + "px";
-             chatLog.style.paddingTop = (topH + 10) + "px"; // Optional
+        let targetTop = null;
+        let targetBottom = null;
+
+        if (duetActive) {
+             // Find last bot message
+             for (let i = allRows.length - 1; i >= 0; i--) {
+                 if (!allRows[i].classList.contains('user')) { // Assuming non-user is bot/system
+                     targetTop = allRows[i];
+                     break;
+                 }
+             }
+             // Find last user message
+             for (let i = allRows.length - 1; i >= 0; i--) {
+                 if (allRows[i].classList.contains('user')) {
+                     targetBottom = allRows[i];
+                     break;
+                 }
+             }
         }
+
+        // 4. Distribute Elements
+        // Since we are sorting, we can just append in order.
+        // However, we want 'chatLog' to have the history.
+        // The pins get pulled out.
+        
+        // We must append to history in order FIRST, then move pins out?
+        // Or just iterate and place.
+        
+        allRows.forEach(row => {
+            if (row === targetTop) {
+                if (top.lastChild !== row) top.appendChild(row);
+                top.style.display = 'block';
+            } else if (row === targetBottom) {
+                if (bottom.lastChild !== row) bottom.appendChild(row);
+                bottom.style.display = 'block';
+            } else {
+                // Everything else goes to history
+                if (chatLog.lastElementChild !== row) chatLog.appendChild(row);
+            }
+        });
+        
+        if (!targetTop) top.style.display = 'none';
+        if (!targetBottom) bottom.style.display = 'none';
+
+        // 5. Scroll Management
+        // Since history is now independent, we might want to stick to bottom if we were there?
+        // But logic is usually handled by scrollChatToBottom separately.
     }
     
     function syncDuetPadding() {}
@@ -4601,6 +4613,8 @@
       return safe.replace(/\*\*(.*?)\*\*/g, "<strong>$1</strong>");
     }
 
+    let globalMessageSequence = 0;
+
     function addMessage(role, text, options = {}) {
       console.log("DEBUG: addMessage called", role, text.substring(0, 20) + "...");
       // Hide chat placeholder when first message appears
@@ -4617,6 +4631,9 @@
 
       const row = document.createElement("div");
       row.className = `msg-row ${role}`;
+      // Timestamp and Sequence for robust sorting
+      row.dataset.timestamp = (options && options.timestamp) ? options.timestamp : Date.now();
+      row.dataset.sequence = ++globalMessageSequence;
 
       // Apply focus highlighting if a goal is focused
       if (othelloState.activeGoalId) {

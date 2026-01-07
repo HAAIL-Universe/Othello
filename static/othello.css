@@ -2203,65 +2203,64 @@ body.chat-open #global-chat-fab {
   position: relative;
 }
 
-/* Chat View IS the scroll container now */
+/* Phase 3: 3-Zone Flex Layout (Top - Scrollable - Bottom) */
 #chat-view {
   display: flex !important;
   flex-direction: column;
-  flex: 1 1 0; /* Grow, shrink, basis 0 */
+  flex: 1 1 0;
   min-height: 0;
-  overflow-y: auto !important; /* The ONLY scrollbar */
-  overflow-x: hidden;
+  overflow: hidden !important; /* View itself does NOT scroll */
   position: relative;
-  padding: 0; /* Strict */
+  padding: 0;
 }
 
-/* Duet Panes (Sticky) - Transparent Rails */
+/* Duet Panes (Static Flex Items) */
 .duet-pane {
-  position: sticky;
-  z-index: 100; /* Must beat messages */
-  background: transparent; /* Transparent background */
+  position: static; /* No longer sticky */
+  flex: 0 0 auto; /* Rigid height based on content */
+  z-index: 100;
+  background: transparent;
   padding: 0.75rem;
   margin: 0;
-  display: block; /* always block, hidden by JS empty check if needed */
-  flex-shrink: 0;
-  pointer-events: none; /* Let clicks pass through empty space */
+  display: block;
+  pointer-events: none;
 }
 
-/* Re-enable pointer events on children (the bubbles) */
-.duet-pane > * {
-  pointer-events: auto;
-}
+.duet-pane > * { pointer-events: auto; }
+.duet-pane:empty { display: none !important; }
 
-/* Default hidden until populated */
-.duet-pane:empty {
-    display: none !important;
-}
-
-.duet-pane--top {
-  top: 0;
-  /* Removed border/shadow for clean look */
-  /* border-bottom: 1px solid rgba(255,255,255,0.1); */
-  /* box-shadow: 0 4px 12px rgba(0,0,0,0.4); */
-}
-
-.duet-pane--bottom {
-  bottom: 0;
-  /* Removed border/shadow for clean look */
-  /* border-top: 1px solid rgba(255,255,255,0.1); */
-  /* box-shadow: 0 -4px 12px rgba(0,0,0,0.4); */
-}
-
-/* Chat Log (History Flow) */
+/* Chat Log (Middle Scrollable History) */
 #chat-log {
   display: flex !important;
   flex-direction: column;
-  flex: 1; /* occupy space between pins */
-  overflow: visible !important; /* Let parent scroll it */
+  flex: 1 1 0; /* Takes all remaining space */
+  overflow-y: auto !important; /* HISTORY scrolls here */
+  min-height: 0;
   height: auto !important;
   padding: 1rem;
-  /* Ensure content doesn't get hidden behind sticky headers due to margin collapse */
-  padding-top: 1rem;
-  padding-bottom: 1rem;
+  padding-top: 0.5rem;
+  padding-bottom: 0.5rem;
+}
+
+/* Remove sticky-specific top/bottom since they are just flex order now */
+.duet-pane--top {
+  order: 1;
+  border-bottom: 1px solid rgba(255,255,255,0.05); /* Subtle separator */
+}
+
+#chat-log {
+  order: 2; /* Middle */
+}
+
+.duet-pane--bottom {
+  order: 3;
+  border-top: 1px solid rgba(255,255,255,0.05); /* Subtle separator */
+}
+
+/* Ensure empty slots don't take space/border */
+.duet-pane:empty {
+    display: none !important;
+    border: none !important;
 }
 
 /* Hide empty panes */
