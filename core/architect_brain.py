@@ -462,7 +462,7 @@ class Architect:
             return user_facing_response, agent_status
 
         except Exception as e:
-            self.logger.error(f"❌ Architect failed: {e}")
+            self.logger.error(f"❌ Architect failed: {e}", exc_info=True)
             # Return error message with default agent_status
             return "Sorry, something went wrong planning that.", {
                 "planner_active": False,
