@@ -549,6 +549,7 @@
           if (resp.ok) {
             const data = await resp.json();
             const conversations = data.conversations || [];
+            othelloState.conversations = conversations;
             if (conversations.length > 0) {
                if (!othelloState.activeConversationId) {
                    othelloState.activeConversationId = conversations[0].conversation_id;
@@ -846,6 +847,7 @@
       goals: [],
       activeGoalId: null,
       activeConversationId: null, // New Chat support
+      conversations: [], // Cache for narrator logic
       activeDraft: null, // { draft_id, draft_type, source_message_id }
       activeDraftPayload: null,
       lastGoalDraftByConversationId: {}, // Stores the last assistant goal summary per conversation
@@ -4800,6 +4802,63 @@
       }
     }
 
+    function renderDuetNarratorFromActiveConversation() {
+      // Phase 2 Fix: Duet Ghost Narrator (View-Gated)
+      
+      // 1) Exit early unless in Duet mode
+      if (othelloState.chatViewMode !== "duet") {
+          return; 
+      }
+      
+      if (!othelloState.activeConversationId || !Array.isArray(othelloState.conversations)) return;
+      const conv = othelloState.conversations.find(c => c.conversation_id === othelloState.activeConversationId);
+      
+      const chatPlaceholder = document.getElementById("chat-placeholder");
+      if (!chatPlaceholder) return;
+      
+      // Count visible messages to determine state
+      const chatLog = document.getElementById("chat-log");
+      const duetTop = document.getElementById("duet-top");
+      const duetBottom = document.getElementById("duet-bottom");
+      
+      let total = 0;
+      if (chatLog) total += chatLog.childElementCount;
+      if (duetTop) total += duetTop.childElementCount;
+      if (duetBottom) total += duetBottom.childElementCount;
+      
+      // State 0: Empty -> "Start a conversation"
+      if (total === 0) {
+          chatPlaceholder.textContent = "Start a conversation";
+          chatPlaceholder.classList.remove("hidden", "duet-narrator", "is-visible");
+          chatPlaceholder.style.display = "";
+          return;
+      }
+      
+      // State 1: 1-2 messages -> Blank (Black Gap)
+      if (total < 3) {
+          chatPlaceholder.classList.add("hidden");
+          chatPlaceholder.classList.remove("duet-narrator", "is-visible");
+          return;
+      }
+      
+      // State 2: 3+ messages -> Narrator (if exists)
+      if (conv && conv.duet_narrator_text) {
+          chatPlaceholder.textContent = `"${conv.duet_narrator_text}"`;
+          chatPlaceholder.classList.add("duet-narrator");
+          chatPlaceholder.classList.remove("hidden");
+          chatPlaceholder.style.display = "";
+          
+          // Trigger Fade In
+          requestAnimationFrame(() => {
+             chatPlaceholder.classList.add("is-visible"); 
+          });
+      } else {
+          // If 3+ messages but no narrator yet -> Blank/Hidden (NOT "Start...")
+          chatPlaceholder.classList.add("hidden");
+          chatPlaceholder.classList.remove("duet-narrator", "is-visible");
+      }
+    }
+
     function updateChatPlaceholderVisibility() {
       const chatPlaceholder = document.getElementById("chat-placeholder");
       if (!chatPlaceholder) return;
@@ -5001,6 +5060,10 @@
         console.log(
           `UI: loadChatHistory view=${viewName} mode=${modeName} requested_channel=${requestedChannel} count=${renderedCount}`
         );
+        
+        if (typeof renderDuetNarratorFromActiveConversation === 'function') {
+             renderDuetNarratorFromActiveConversation();
+        }
       } catch (err) {
         if (err && (err.status === 401 || err.status === 403)) {
           await handleUnauthorized("chat-history");
@@ -6898,6 +6961,14 @@
         if (data.meta && data.meta.goal_updated) {
            refreshGoalDetail();
         }
+
+        // Cycle Feature: Schedule Duet Narrator Refresh
+        setTimeout(async () => { 
+           await loadConversations();
+           if (typeof renderDuetNarratorFromActiveConversation === 'function') {
+               renderDuetNarratorFromActiveConversation(); 
+           }
+        }, 600);
       } catch (err) {
         console.error("[sendMessage] outer exception:", err);
         const isNetwork = err instanceof TypeError && (

@@ -1723,6 +1723,21 @@
       display: none;
     }
 
+    /* Duet Ghost Narrator (Cycle Feature) */
+    .chat-placeholder.duet-narrator {
+      font-style: italic;
+      opacity: 0;
+      transition: opacity 250ms ease;
+      max-width: 80%;
+      white-space: pre-wrap; 
+      line-height: 1.4;
+      font-size: 0.95rem;
+    }
+
+    .chat-placeholder.duet-narrator.is-visible {
+      opacity: 0.6;
+    }
+
     @keyframes fadeIn {
       from {
         opacity: 0;

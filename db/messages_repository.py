@@ -4,7 +4,7 @@ Repository helpers for sessions/messages/transcripts (Phase 1 transcript spine).
 """
 from typing import Optional, List, Dict, Any
 
-from db.database import execute_and_fetch_one, fetch_all, fetch_one
+from db.database import execute_and_fetch_one, fetch_all, fetch_one, execute_query
 
 
 def create_session(user_id: str) -> Dict[str, Any]:
@@ -23,11 +23,12 @@ def list_sessions(user_id: str, limit: int = 50) -> List[Dict[str, Any]]:
     """
     query = """
         SELECT s.id as conversation_id, s.created_at,
+               s.duet_narrator_text, s.duet_narrator_updated_at, s.duet_narrator_msg_count,
                COALESCE(MAX(m.created_at), s.created_at) as updated_at
         FROM sessions s
         LEFT JOIN messages m ON s.id = m.session_id
         WHERE s.user_id = %s
-        GROUP BY s.id, s.created_at
+        GROUP BY s.id, s.created_at, s.duet_narrator_text, s.duet_narrator_updated_at, s.duet_narrator_msg_count
         ORDER BY updated_at DESC
         LIMIT %s
     """
@@ -207,3 +208,36 @@ def update_message(
         execute_and_fetch_one(transcript_query, (message_id, transcript))
 
     return record
+
+def count_session_messages(user_id: str, session_id: int) -> int:
+    query = "SELECT COUNT(*) as count FROM messages WHERE user_id=%s AND session_id=%s"
+    result = fetch_one(query, (user_id, session_id))
+    return int(result.get("count", 0)) if result else 0
+
+
+def get_session_narrator_state(user_id: str, session_id: int) -> Dict[str, Any]:
+    query = """
+        SELECT duet_narrator_text, duet_narrator_msg_count, duet_narrator_updated_at 
+        FROM sessions 
+        WHERE user_id=%s AND id=%s
+    """
+    return fetch_one(query, (user_id, session_id)) or {}
+
+
+def update_session_narrator_state(user_id: str, session_id: int, text: str, msg_count: int) -> None:
+    query = """
+        UPDATE sessions 
+        SET duet_narrator_text=%s, duet_narrator_msg_count=%s, duet_narrator_updated_at=NOW() 
+        WHERE user_id=%s AND id=%s
+    """
+    execute_query(query, (text, msg_count, user_id, session_id))
+
+
+def list_all_session_messages_for_summary(user_id: str, session_id: int) -> List[Dict[str, Any]]:
+    query = """
+        SELECT source, transcript, created_at 
+        FROM messages 
+        WHERE user_id=%s AND session_id=%s 
+        ORDER BY created_at ASC, id ASC
+    """
+    return fetch_all(query, (user_id, session_id))

@@ -1,27 +1,83 @@
 ﻿# Cycle Status: COMPLETE
 
 ## Todo Ledger
-- [x] Analyze `api.py` read path (confirm it expects query params)
-- [x] Analyze `othello.js` `fetchChatHistory` (found missing query params in convo route)
-- [x] Apply fix: Append query string to conversation messages URL
+- [x] Phase 1: DB Schema: add narrator fields to `sessions` (via migration script)
+- [x] Phase 2: Backend: generate/update narrator summary in `_persist_chat_exchange`
+- [x] Phase 3: Backend: expose narrator fields via `GET /api/conversations`
+- [x] Phase 4: Frontend: render narrator in `#chat-placeholder` with fade-in
 
 ## Next Action
-Stop and commit.
+Stop and commit. `Feat: Duet Ghost Narrator (mini-RAG summary)`
 
-## Unified Diff
-```diff
-diff --git a/static/othello.js b/static/othello.js
-index 89abcdef..0123456 100644
---- a/static/othello.js
-+++ b/static/othello.js
-@@ -4930,7 +4930,8 @@
-     async function fetchChatHistory(limit = 50, channel = "companion") {
-       let target = `${V1_MESSAGES_API}?limit=${limit}&channel=${encodeURIComponent(channel)}`;
-       if (othelloState.activeConversationId) {
--          target = `/api/conversations/${othelloState.activeConversationId}/messages`;
-+          // Bugfix: ensure query params are passed to conversation route too
-+          target = `/api/conversations/${othelloState.activeConversationId}/messages?limit=${limit}&channel=${encodeURIComponent(channel)}`;
-       }
-       const resp = await fetch(target, { credentials: "include", cache: "no-store" });
-       if (resp.status === 401 || resp.status === 403) {
+## Minimal Unified Diff
+**db/messages_repository.py**
+```python
++ from db.database import execute_and_fetch_one, fetch_all, fetch_one, execute_query
+
+def list_sessions(...):
+    query = """
+        SELECT s.id as conversation_id, s.created_at,
++              s.duet_narrator_text, s.duet_narrator_updated_at, s.duet_narrator_msg_count,
+               COALESCE(MAX(m.created_at), s.created_at) as updated_at
+        FROM sessions s
+        ...
++       GROUP BY s.id, s.created_at, s.duet_narrator_text, s.duet_narrator_updated_at, s.duet_narrator_msg_count
+
++ def get_session_narrator_state(...): ...
++ def update_session_narrator_state(...): ...
++ def count_session_messages(...): ...
++ def list_all_session_messages_for_summary(...): ...
+```
+
+**api.py**
+```python
+# In _persist_chat_exchange:
++                # --- Duet Narrator Logic (Cycle Feature) ---
++                try:
++                    from db.messages_repository import (...)
++                    from core.llm_wrapper import LLMWrapper
++                    if conversation_id:
++                        total_msgs = count_session_messages(...)
++                        if total_msgs >= 3:
++                            ... (LLM call) ...
++                            update_session_narrator_state(...)
++                except Exception as narr_exc: ...
+```
+
+**static/othello.css**
+```css
++    /* Duet Ghost Narrator (Cycle Feature) */
++    .chat-placeholder.duet-narrator {
++      font-style: italic;
++      opacity: 0;
++      transition: opacity 250ms ease;
++      ...
++    }
++    .chat-placeholder.duet-narrator.is-visible {
++      opacity: 0.6;
++    }
+```
+
+**static/othello.js**
+```javascript
+// loadConversations
++            othelloState.conversations = conversations;
+
+// loadChatHistory
++        if (typeof renderDuetNarratorFromActiveConversation === 'function') {
++             renderDuetNarratorFromActiveConversation();
++        }
+
+// sendMessage
++        // Cycle Feature: Schedule Duet Narrator Refresh
++        setTimeout(async () => { 
++           await loadConversations();
++           if (typeof renderDuetNarratorFromActiveConversation === 'function') {
++               renderDuetNarratorFromActiveConversation(); 
++           }
++        }, 600);
+
++    function renderDuetNarratorFromActiveConversation() {
++      ... (renders .duet-narrator class if total >= 3) ...
++    }
 ```

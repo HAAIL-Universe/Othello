@@ -5717,6 +5717,52 @@ def handle_message():
                     status="final",
                     session_id=conversation_id,
                 )
+
+                # --- Duet Narrator Logic (Cycle Feature) ---
+                try:
+                    from db.messages_repository import (
+                        count_session_messages,
+                        get_session_narrator_state,
+                        update_session_narrator_state,
+                        list_all_session_messages_for_summary
+                    )
+                    from core.llm_wrapper import LLMWrapper
+
+                    # Only run narrator logic if we have a valid conversation_id
+                    if conversation_id:
+                        total_msgs = count_session_messages(user_id, conversation_id)
+                        
+                        # Rule: >=3 messages to show, update every 5 messages
+                        if total_msgs >= 3:
+                            narrator_state = get_session_narrator_state(user_id, conversation_id)
+                            last_count = narrator_state.get("duet_narrator_msg_count") or 0
+                            curr_text = narrator_state.get("duet_narrator_text")
+                            
+                            # Update if empty OR stride of 5 reached
+                            if (not curr_text) or ((total_msgs - last_count) >= 5):
+                                msgs = list_all_session_messages_for_summary(user_id, conversation_id)
+                                transcript_lines = []
+                                for m in msgs:
+                                    role = "User" if m.get("source") == "user" else "Othello"
+                                    content = str(m.get("transcript") or "").strip()
+                                    transcript_lines.append(f"{role}: {content}")
+                                
+                                prompt_text = (
+                                    "You are a ghost narrator for this conversation. "
+                                    "Write a 5-6 line summary in third-person, neutral, observational tone. "
+                                    "No bullets, no headings. "
+                                    "Focus on the evolving context of the user's situation and Othello's assistance.\n\n"
+                                    "Conversation:\n" + ("\n".join(transcript_lines))
+                                )
+                                
+                                temp_llm = LLMWrapper() # Init new wrapper for this side-task
+                                summary = temp_llm.generate(prompt=prompt_text, max_tokens=300).strip()
+                                
+                                if summary:
+                                    update_session_narrator_state(user_id, conversation_id, summary, total_msgs)
+                except Exception as narr_exc:
+                    logger.warning("Duet narrator update failed: %s", narr_exc)
+
             except Exception as exc:
                 logger.warning(
                     "API: chat persistence failed request_id=%s error=%s",
