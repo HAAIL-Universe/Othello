@@ -85,11 +85,10 @@
 
     <!-- HEADER -->
     <header>
-      <div class="brand">
-        <div class="brand-row">
-          <div class="brand-title">Othello</div>
-        </div>
-        <div class="brand-subtitle" id="mode-subtitle">Personal Goal Architect</div>
+      <div class="brand-title">Othello</div>
+      <div class="header-actions">
+        <button id="settings-btn" class="icon-button" aria-label="Settings" title="Settings">⚙</button>
+        <button id="logout-btn" class="header-logout-btn">Logout</button>
       </div>
     </header>
 
@@ -328,9 +327,12 @@
       <div class="chat-sheet__header">
         <!-- <div id="duet-build-marker" style="color:red;font-size:10px;margin-right:8px;font-weight:bold;">DUET_V1_MARKER</div> -->
         <div class="kitt-scanner" aria-hidden="true"></div>
-        <div id="chat-status-pill" class="status-pill" style="margin-right: auto;">
-          <div class="dot"></div>
-          <span id="chat-status-text">Online • Chat</span>
+        <div class="chat-header-left">
+          <div id="chat-status-pill" class="status-pill">
+            <div class="dot"></div>
+            <span id="chat-status-text">Online • Chat</span>
+          </div>
+          <button id="new-chat-btn" class="icon-button header-plus-btn" aria-label="New Chat" title="New Thread">+</button>
         </div>
         <button id="chat-back-btn" class="chat-back-btn">×</button>
       </div>

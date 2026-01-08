@@ -639,6 +639,12 @@
               if (!isAuthed) return;
             }
             hideLoginOverlay();
+
+            // Hydration Fix: Load conversations first to establish activeConversationId before fetching history
+            if (typeof loadConversations === 'function') {
+                await loadConversations();
+            }
+
             if (typeof refreshGoals === 'function') {
               await refreshGoals();
             }
@@ -651,7 +657,7 @@
             if (typeof loadTodayPlanner === 'function') {
               await loadTodayPlanner();
             }
-            await loadConversations();
+            // await loadConversations(); // Moved up for hydration
             await fetchAdminCapabilities();
             setBootState(BOOT_STATE.AUTHENTICATED);
           } catch (e) {
@@ -691,46 +697,13 @@
       }
 
       // Add settings + logout buttons to header (minimal UI)
-      const brandRow = document.querySelector('.brand-row');
+      // DOM elements are now static in othello_ui.html
       let newChatBtn = document.getElementById('new-chat-btn');
-      if (!newChatBtn) {
-        newChatBtn = document.createElement('button');
-        newChatBtn.id = 'new-chat-btn';
-        newChatBtn.className = 'icon-button';
-        newChatBtn.setAttribute('aria-label', 'New Chat');
-        newChatBtn.textContent = '+';
-        newChatBtn.style.marginRight = '0.5rem';
-        newChatBtn.title = "New Chat";
-        if (brandRow) {
-             // Insert before settings button or at end
-             const settingsBtnRef = document.getElementById('settings-btn');
-             if (settingsBtnRef) {
-                 brandRow.insertBefore(newChatBtn, settingsBtnRef);
-             } else {
-                 brandRow.appendChild(newChatBtn);
-             }
-        }
-      }
-      newChatBtn.onclick = createNewConversation;
+      if (newChatBtn) newChatBtn.onclick = createNewConversation;
 
       let settingsBtn = document.getElementById('settings-btn');
-      if (!settingsBtn) {
-        settingsBtn = document.createElement('button');
-        settingsBtn.id = 'settings-btn';
-        settingsBtn.className = 'icon-button';
-        settingsBtn.setAttribute('aria-label', 'Settings');
-        settingsBtn.textContent = '⚙';
-        if (brandRow) brandRow.appendChild(settingsBtn);
-      }
       let logoutBtn = document.getElementById('logout-btn');
-      if (!logoutBtn) {
-        logoutBtn = document.createElement('button');
-        logoutBtn.id = 'logout-btn';
-        logoutBtn.textContent = 'Logout';
-        logoutBtn.style = 'margin-left:1.5rem;font-size:1rem;padding:0.3rem 1.1rem;border-radius:8px;border:1px solid var(--accent);background:var(--accent-soft);color:var(--accent);';
-        if (brandRow) brandRow.appendChild(logoutBtn);
-      }
-      logoutBtn.onclick = handleLogout;
+      if (logoutBtn) logoutBtn.onclick = handleLogout;
       const settingsReady = !!(settingsOverlay && settingsCloseBtn);
       if (!settingsReady) {
         warnSettingsUnavailable();
@@ -4827,13 +4800,64 @@
       }
     }
 
-    function clearChatState() {
-      // Use strict resolved container
-      const container = getChatContainer();
-      if (container) container.innerHTML = "";
-      
+    function updateChatPlaceholderVisibility() {
       const chatPlaceholder = document.getElementById("chat-placeholder");
-      if (chatPlaceholder) chatPlaceholder.classList.remove("hidden");
+      if (!chatPlaceholder) return;
+      
+      const chatLog = document.getElementById("chat-log");
+      const duetTop = document.getElementById("duet-top");
+      const duetBottom = document.getElementById("duet-bottom");
+      
+      let total = 0;
+      if (chatLog) total += chatLog.childElementCount;
+      if (duetTop) total += duetTop.childElementCount;
+      if (duetBottom) total += duetBottom.childElementCount;
+
+      if (total === 0) {
+        chatPlaceholder.classList.remove("hidden");
+        chatPlaceholder.style.display = ""; 
+      } else {
+        chatPlaceholder.classList.add("hidden");
+      }
+    }
+
+    function clearChatState() {
+      // 1. Clear message DOM in ALL containers
+      const chatLog = document.getElementById("chat-log");
+      if (chatLog) {
+          chatLog.innerHTML = "";
+          chatLog.style.display = ""; // Ensure chat log is visible (block/flex)
+      }
+      
+      const historyLog = document.getElementById("history-log");
+      if (historyLog) historyLog.innerHTML = "";
+      
+      const duetTop = document.getElementById("duet-top");
+      if (duetTop) {
+         duetTop.innerHTML = "";
+         duetTop.classList.remove("pinned"); 
+         duetTop.style.display = "none";
+      }
+      
+      const duetBottom = document.getElementById("duet-bottom");
+      if (duetBottom) {
+         duetBottom.innerHTML = "";
+         duetBottom.classList.remove("duet-user-peek");
+         // duetBottom.style.display = "none"; // Let CSS or logic handle bottom visibility, but clearing content is key.
+         // Actually, if we want placeholder to be centered, we should probably hide this too if it has height.
+         duetBottom.style.display = "none";
+      }
+
+      // Also clear draft preview if it exists
+      const draftPreview = document.getElementById("draft-preview");
+      if (draftPreview) {
+          draftPreview.innerHTML = "";
+          draftPreview.style.display = "none";
+      }
+      
+      // 2. Reset chat overlay placeholder
+      updateChatPlaceholderVisibility();
+      
       othelloState.messagesByClientId = {};
       othelloState.goalIntentSuggestions = {};
       
@@ -4911,7 +4935,8 @@
     async function fetchChatHistory(limit = 50, channel = "companion") {
       let target = `${V1_MESSAGES_API}?limit=${limit}&channel=${encodeURIComponent(channel)}`;
       if (othelloState.activeConversationId) {
-          target = `/api/conversations/${othelloState.activeConversationId}/messages`;
+          // Bugfix: ensure query params are passed to conversation route too
+          target = `/api/conversations/${othelloState.activeConversationId}/messages?limit=${limit}&channel=${encodeURIComponent(channel)}`;
       }
       const resp = await fetch(target, { credentials: "include", cache: "no-store" });
       if (resp.status === 401 || resp.status === 403) {

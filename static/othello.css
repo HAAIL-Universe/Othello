@@ -355,26 +355,15 @@
 
     /* Header */
     header {
-      padding: max(var(--safe-top), 0.75rem) var(--safe-right) 0.75rem var(--safe-left);
+      /* Polish: Added min horizontal padding (1.25rem) to preventing flush edges */
+      padding: max(var(--safe-top), 0.4rem) max(var(--safe-right), 1.25rem) 0.4rem max(var(--safe-left), 1.25rem);
       border-bottom: 1px solid var(--border);
       background: linear-gradient(to right, var(--bg-1), var(--bg-1), var(--bg-2));
       display: flex;
       justify-content: space-between;
       align-items: center;
       flex-shrink: 0;
-      min-height: var(--header-height);
-    }
-
-    .brand {
-      display: flex;
-      flex-direction: column;
-      gap: 0.15rem;
-    }
-
-    .brand-row {
-      display: flex;
-      align-items: center;
-      gap: 0.5rem;
+      min-height: 48px;
     }
 
     .brand-title {
@@ -384,10 +373,34 @@
       text-transform: uppercase;
     }
 
-    .brand-subtitle {
-      font-size: 0.7rem;
-      color: var(--text-soft);
-      letter-spacing: 0.02em;
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+
+    .header-logout-btn {
+      font-size: 0.85rem;
+      padding: 0.3rem 0.8rem;
+      border-radius: 6px;
+      border: 1px solid var(--accent);
+      background: var(--accent-soft);
+      color: var(--accent);
+      cursor: pointer;
+    }
+
+    .chat-header-left {
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      margin-right: auto;
+    }
+
+    .header-plus-btn {
+      width: 36px; 
+      height: 36px;
+      font-size: 1.2rem;
+      border-radius: 8px; /* Match icon-button normally, or round? User said 36px square implies button area. */
     }
 
     .status-pill {
@@ -1868,11 +1881,13 @@
 
 /* Chat Overlay Shell */
 .global-chat-overlay {
+  --chat-overlay-lift: 12px; /* Polish: slight lift from header */
   position: fixed;
-  top: 0;
+  top: calc(var(--header-height) - var(--chat-overlay-lift)); /* Start just below header with slight lift */
+  bottom: 0;
   right: 0;
   width: 100%;
-  height: 100%;
+  height: auto; /* Take remaining height */
   background: rgba(0, 0, 0, 0.5); /* backdrop */
   z-index: 9995;
   display: flex;
@@ -1901,10 +1916,9 @@
 .chat-sheet {
   --chat-input-h: 72px;
   width: min(500px, 100%);
-  /* Fix: Use max-height + margin-top:auto (bottom anchor) instead of align-items:flex-end + height. */
-  height: auto;
-  max-height: min(800px, calc(var(--app-height, 100vh) * 0.85));
-  margin-top: auto; 
+  /* Fix: Expand to full overlay height */
+  height: 100%;
+  margin-top: 0; 
   
   background: var(--bg-1);
   border: 1px solid var(--border);
@@ -1929,7 +1943,7 @@
 @media (max-width: 600px) {
   .chat-sheet {
     width: 100%;
-    height: 90vh;
+    /* height: 90vh; Removed to allow full expansion */
     margin-right: 0;
     border-radius: 16px 16px 0 0;
   }
@@ -1937,7 +1951,7 @@
 
 /* Header for the chat sheet */
 .chat-sheet__header {
-  padding: 1rem;
+  padding: 0.45rem 1rem; /* Polish: Thinner header (was 0.65rem) */
   border-bottom: 1px solid var(--border);
   display: flex;
   justify-content: space-between;
@@ -1946,6 +1960,20 @@
   position: relative;
   z-index: 100; /* Ensure header controls are top-most */
   flex-shrink: 0; /* Don't shrink header */
+}
+
+/* Polish: Scoped overrides for slimmer chat controls */
+.chat-sheet__header .status-pill {
+    padding: 0.3rem 0.7rem; /* Polish: Slightly larger than last edit (was 0.25 0.6) */
+    font-size: 0.75rem; /* Polish: Slightly larger (was 0.7) */
+    height: auto;
+    gap: 0.4rem;
+}
+.chat-sheet__header .header-plus-btn {
+    width: 30px;
+    height: 30px;
+    font-size: 1rem;
+    margin-left: 4px; /* Slight adjust for spacing */
 }
 
 /* KITT Scanner Effect */
