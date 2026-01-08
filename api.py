@@ -4717,8 +4717,10 @@ def handle_message():
                 is_create_draft = True
             elif "build mode" in norm_input: # Phase 23: Explicit Build Mode Trigger
                 is_create_draft = True
-            elif "turn this into a goal" in norm_input: # Phase 23: Context Switch Trigger
+            elif re.search(r"\bturn\s+(this|that|it)\s+into\s+a\s+goal\b", norm_input): # Phase 23: Context Switch Trigger
                 is_create_draft = True
+            elif re.search(r"\bmake\s+(this|that|it)\s+a\s+goal\b", norm_input):
+                 is_create_draft = True
             elif re.search(r"\b(create|make|start)\b.*\bgoal\b.*\bdraft\b", norm_input):
                 is_create_draft = True
         
