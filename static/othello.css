@@ -6925,7 +6925,7 @@ body.chat-open #global-chat-fab {
   display: flex !important;
   justify-content: flex-start; /* Move to left */
   align-items: center;
-  padding: 0 16px; /* Compact padding */
+  padding: 0 12px; /* Aligned with input bar (0.75rem) */
   background: transparent; /* Remove black bar */
   border-top: none;
   min-height: 0;
