@@ -6932,7 +6932,7 @@ body.chat-open #global-chat-fab {
   
   /* Float above messages */
   position: fixed;
-  bottom: calc(4.5rem + var(--safe-bottom)); /* Sit just above input bar */
+  bottom: calc(5.5rem + var(--safe-bottom)); /* Lifted up for spacing */
   left: 0;
   width: 100%;
   z-index: 150;
