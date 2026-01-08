@@ -1,15 +1,37 @@
-﻿# Cycle Status: COMPLETE
+﻿# Cycle Status: COMPLETE (Fix Applied)
 
 ## Todo Ledger
 - [x] Phase 1: DB Schema: add narrator fields to `sessions` (via migration script)
 - [x] Phase 2: Backend: generate/update narrator summary in `_persist_chat_exchange`
 - [x] Phase 3: Backend: expose narrator fields via `GET /api/conversations`
 - [x] Phase 4: Frontend: render narrator in `#chat-placeholder` with fade-in
+- [x] Fix: Duet Narrator not appearing (View gating + 3-state render logic)
 
 ## Next Action
-Stop and commit. `Feat: Duet Ghost Narrator (mini-RAG summary)`
+Stop and commit. `Fix: duet narrator render/write path`
 
 ## Minimal Unified Diff
+**static/othello.js** (Fix)
+```javascript
+function renderDuetNarratorFromActiveConversation() {
++     // Phase 2 Fix: Duet Ghost Narrator (View-Gated)
++     if (othelloState.chatViewMode !== "duet") return;
++     
++     // 3-State Logic
++     // 0 messages: "Start a conversation"
++     // 1-2 messages: Hidden (black gap)
++     // 3+ messages: Narrator text (if exists) or Hidden
+      ...
+}
+
+// sendMessage
++     // Cycle Feature: Schedule Duet Narrator Refresh
++     setTimeout(async () => { 
++        await loadConversations();
++        renderDuetNarratorFromActiveConversation();
++     }, 600);
+```
+
 **db/messages_repository.py**
 ```python
 + from db.database import execute_and_fetch_one, fetch_all, fetch_one, execute_query
