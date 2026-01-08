@@ -3352,7 +3352,7 @@ def v1_messages():
         status="final",
         create_session_if_missing=True,
     )
-    return _v1_envelope(data={"message": record}, status=201)
+    return _v1_envelope(data={"message": record, "conversation_id": record.get("session_id")}, status=201)
 
 
 @v1.route("/data/clear", methods=["POST"])
@@ -5704,13 +5704,21 @@ def handle_message():
                  )
 
         def _persist_chat_exchange(reply_text: Optional[str]) -> None:
+            nonlocal conversation_id
             if not reply_text or not _should_persist_chat():
                 return
             cleaned_reply = str(reply_text).strip()
             if not cleaned_reply:
                 return
             try:
-                from db.messages_repository import create_message
+                from db.messages_repository import create_message, create_session
+
+                if conversation_id is None:
+                    # Fix for empty sessions (Phase 1/2 Persistence Regression)
+                    # Use create_session to ensure we have a valid ID before inserting messages
+                    new_sess = create_session(user_id)
+                    conversation_id = new_sess.get("id")
+                    logger.info("API: Created new session %s for chat exchange (latching fix)", conversation_id)
 
                 create_message(
                     user_id=user_id,
