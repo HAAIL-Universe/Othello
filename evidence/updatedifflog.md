@@ -14,22 +14,11 @@ Stop and commit. `Fix: duet narrator render/write path`
 **static/othello.js** (Fix)
 ```javascript
 function renderDuetNarratorFromActiveConversation() {
-+     // Phase 2 Fix: Duet Ghost Narrator (View-Gated)
-+     if (othelloState.chatViewMode !== "duet") return;
-+     
-+     // 3-State Logic
-+     // 0 messages: "Start a conversation"
-+     // 1-2 messages: Hidden (black gap)
-+     // 3+ messages: Narrator text (if exists) or Hidden
-      ...
-}
-
-// sendMessage
-+     // Cycle Feature: Schedule Duet Narrator Refresh
-+     setTimeout(async () => { 
-+        await loadConversations();
-+        renderDuetNarratorFromActiveConversation();
-+     }, 600);
+      // Phase 2 Fix: Duet Ghost Narrator (View-Gated)
+      if (othelloState.chatViewMode !== "duet") return;
+      
+-     const conv = othelloState.conversations.find(c => c.conversation_id === othelloState.activeConversationId);
++     const conv = othelloState.conversations.find(c => Number(c.conversation_id) === Number(othelloState.activeConversationId));
 ```
 
 **db/messages_repository.py**

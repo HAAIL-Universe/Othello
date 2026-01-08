@@ -5653,8 +5653,19 @@ def handle_message():
         def _should_persist_chat() -> bool:
             if not user_id:
                 return False
-            if not is_chat_view:
-                return False
+            
+            # Case 3 Fix: Allow persistence in Duet mode
+            # If explicit "duet" view, we allow. If "chat", we allow.
+            # Original 'is_chat_view' only checked "chat".
+            
+            allow_views = ["chat", "duet"]
+            if view_label not in allow_views:
+                 # If using a view like 'goals', we historically didn't persist chat there?
+                 # Preserving existing behavior: ONLY return False if strictly not in allowed set.
+                 # But wait, original code was: 'if not is_chat_view: return False'.
+                 # So it ONLY persisted if view=="chat".
+                 return False
+
             if ui_action:
                 return False
             if user_input.startswith("__"):
