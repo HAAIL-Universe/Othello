@@ -42,6 +42,8 @@ def create_message(
     source: str = "text",
     channel: str = "companion",
     session_id: Optional[int] = None,
+    checkpoint_id: Optional[int] = None,
+    client_message_id: Optional[str] = None,
     status: str = "ready",
     stt_provider: Optional[str] = None,
     stt_model: Optional[str] = None,
@@ -57,6 +59,8 @@ def create_message(
         INSERT INTO messages (
             user_id,
             session_id,
+            checkpoint_id,
+            client_message_id,
             source,
             channel,
             transcript,
@@ -67,8 +71,8 @@ def create_message(
             error,
             created_at
         )
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
-        RETURNING id, user_id, session_id, source, channel, transcript, status,
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+        RETURNING id, user_id, session_id, checkpoint_id, client_message_id, source, channel, transcript, status,
                   stt_provider, stt_model, audio_duration_ms, error, created_at
     """
     record = execute_and_fetch_one(
@@ -76,6 +80,8 @@ def create_message(
         (
             user_id,
             session_id,
+            checkpoint_id,
+            client_message_id,
             source,
             channel,
             transcript,
@@ -102,7 +108,7 @@ def list_messages_by_ids(user_id: str, message_ids: List[int]) -> List[Dict[str,
     if not message_ids:
         return []
     query = """
-        SELECT id, user_id, session_id, source, transcript, status, error, created_at
+        SELECT id, user_id, session_id, checkpoint_id, source, transcript, status, error, created_at
         FROM messages
         WHERE user_id = %s AND id = ANY(%s)
         ORDER BY id ASC
@@ -112,10 +118,24 @@ def list_messages_by_ids(user_id: str, message_ids: List[int]) -> List[Dict[str,
 
 def list_messages_for_session(user_id: str, session_id: int, limit: int = 50, channel: Optional[str] = "companion") -> List[Dict[str, Any]]:
     if channel:
+        if channel == "companion":
+             query = """
+                SELECT id, user_id, session_id, checkpoint_id, client_message_id, source, channel, transcript, status, error, created_at
+                FROM (
+                    SELECT id, user_id, session_id, checkpoint_id, client_message_id, source, channel, transcript, status, error, created_at
+                    FROM messages
+                    WHERE user_id = %s AND session_id = %s AND (channel = 'companion' OR channel = 'duet' OR channel = 'auto')
+                    ORDER BY created_at DESC, id DESC
+                    LIMIT %s
+                ) recent
+                ORDER BY created_at ASC, id ASC
+            """
+             return fetch_all(query, (user_id, session_id, limit))
+
         query = """
-            SELECT id, user_id, session_id, source, channel, transcript, status, error, created_at
+            SELECT id, user_id, session_id, checkpoint_id, client_message_id, source, channel, transcript, status, error, created_at
             FROM (
-                SELECT id, user_id, session_id, source, channel, transcript, status, error, created_at
+                SELECT id, user_id, session_id, checkpoint_id, client_message_id, source, channel, transcript, status, error, created_at
                 FROM messages
                 WHERE user_id = %s AND session_id = %s AND channel = %s
                 ORDER BY created_at DESC, id DESC
@@ -127,9 +147,9 @@ def list_messages_for_session(user_id: str, session_id: int, limit: int = 50, ch
     else:
         # Fetch all messages in session regardless of channel
         query = """
-            SELECT id, user_id, session_id, source, channel, transcript, status, error, created_at
+            SELECT id, user_id, session_id, checkpoint_id, client_message_id, source, channel, transcript, status, error, created_at
             FROM (
-                SELECT id, user_id, session_id, source, channel, transcript, status, error, created_at
+                SELECT id, user_id, session_id, checkpoint_id, client_message_id, source, channel, transcript, status, error, created_at
                 FROM messages
                 WHERE user_id = %s AND session_id = %s
                 ORDER BY created_at DESC, id DESC
@@ -141,10 +161,31 @@ def list_messages_for_session(user_id: str, session_id: int, limit: int = 50, ch
 
 
 def list_recent_messages(user_id: str, limit: int = 50, channel: str = "companion") -> List[Dict[str, Any]]:
+    # If channel is 'duet', we still query 'companion' underlying but theoretically could differ.
+    # Actually, Duet UI might pass 'duet' as channel param to API, which then saves as 'duet'.
+    # But filtering by it might be strict.
+    # Phase 23 Compatibility: If channel is 'companion', we also include 'duet' to show history in main chat?
+    # Or strict separation?
+    # For now, let's allow "companion" to fetch both "companion" and "auto" and "duet" if we want unified history.
+    
+    if channel == "companion":
+         query = """
+            SELECT id, user_id, session_id, checkpoint_id, client_message_id, source, channel, transcript, status, error, created_at
+            FROM (
+                SELECT id, user_id, session_id, checkpoint_id, client_message_id, source, channel, transcript, status, error, created_at
+                FROM messages
+                WHERE user_id = %s AND (channel = 'companion' OR channel = 'duet' OR channel = 'auto')
+                ORDER BY created_at DESC, id DESC
+                LIMIT %s
+            ) recent
+            ORDER BY created_at ASC, id ASC
+        """
+         return fetch_all(query, (user_id, limit))
+    
     query = """
-        SELECT id, user_id, session_id, source, channel, transcript, status, error, created_at
+        SELECT id, user_id, session_id, checkpoint_id, client_message_id, source, channel, transcript, status, error, created_at
         FROM (
-            SELECT id, user_id, session_id, source, channel, transcript, status, error, created_at
+            SELECT id, user_id, session_id, checkpoint_id, client_message_id, source, channel, transcript, status, error, created_at
             FROM messages
             WHERE user_id = %s AND channel = %s
             ORDER BY created_at DESC, id DESC
@@ -157,11 +198,20 @@ def list_recent_messages(user_id: str, limit: int = 50, channel: str = "companio
 
 def get_message(user_id: str, message_id: int) -> Optional[Dict[str, Any]]:
     query = """
-        SELECT id, user_id, session_id, source, transcript, status, error, created_at
+        SELECT id, user_id, session_id, checkpoint_id, client_message_id, source, transcript, status, error, created_at
         FROM messages
         WHERE user_id = %s AND id = %s
     """
     return fetch_one(query, (user_id, message_id))
+
+
+def get_message_by_client_id(user_id: str, client_message_id: str) -> Optional[Dict[str, Any]]:
+    query = """
+        SELECT id, user_id, session_id, checkpoint_id, client_message_id, source, transcript, status, error, created_at
+        FROM messages
+        WHERE user_id = %s AND client_message_id = %s
+    """
+    return fetch_one(query, (user_id, client_message_id))
 
 
 def update_message(
@@ -170,6 +220,7 @@ def update_message(
     message_id: int,
     status: Optional[str] = None,
     transcript: Optional[str] = None,
+    checkpoint_id: Optional[int] = None,
 ) -> Optional[Dict[str, Any]]:
     current_transcript = None
     if transcript is not None:
@@ -185,6 +236,9 @@ def update_message(
     if transcript is not None:
         set_clauses.append("transcript = %s")
         params.append(transcript)
+    if checkpoint_id is not None:
+        set_clauses.append("checkpoint_id = %s")
+        params.append(checkpoint_id)
 
     if not set_clauses:
         return get_message(user_id, message_id)
@@ -193,7 +247,7 @@ def update_message(
         UPDATE messages
         SET {", ".join(set_clauses)}
         WHERE user_id = %s AND id = %s
-        RETURNING id, user_id, session_id, source, transcript, status, error, created_at
+        RETURNING id, user_id, session_id, checkpoint_id, source, transcript, status, error, created_at
     """
     params.extend([user_id, message_id])
     record = execute_and_fetch_one(query, tuple(params))
@@ -209,10 +263,75 @@ def update_message(
 
     return record
 
+def get_active_checkpoint(user_id: str, channel: str = "companion") -> Optional[int]:
+    """
+    Get the most recent checkpoint_id from the user's message stream.
+    Used to propagate context linkage to new messages.
+    """
+    query = """
+        SELECT checkpoint_id
+        FROM messages
+        WHERE user_id = %s AND channel = %s AND checkpoint_id IS NOT NULL
+        ORDER BY created_at DESC, id DESC
+        LIMIT 1
+    """
+    res = fetch_one(query, (user_id, channel))
+    return res.get("checkpoint_id") if res else None
+
+def get_linked_messages_from_checkpoint(user_id: str, checkpoint_id: int) -> List[Dict[str, Any]]:
+    """
+    Reconstruct context window from a checkpoint.
+    Includes the checkpoint message itself (if it self-references) and all subsequent linked messages.
+    """
+    query = """
+        SELECT id, user_id, session_id, checkpoint_id, client_message_id, source, transcript, status, error, created_at
+        FROM messages
+        WHERE user_id = %s AND (id = %s OR checkpoint_id = %s)
+        ORDER BY created_at ASC, id ASC
+    """
+    return fetch_all(query, (user_id, checkpoint_id, checkpoint_id))
+
+
 def count_session_messages(user_id: str, session_id: int) -> int:
     query = "SELECT COUNT(*) as count FROM messages WHERE user_id=%s AND session_id=%s"
     result = fetch_one(query, (user_id, session_id))
     return int(result.get("count", 0)) if result else 0
+
+
+def create_draft_context(user_id: str, session_id: int, start_message_id: int, intent_kind: str, status: str = "active") -> Dict[str, Any]:
+    """
+    Populate the draft_contexts table when an intent is detected.
+    """
+    query = """
+        INSERT INTO draft_contexts (user_id, session_id, start_message_id, intent_kind, status, created_at, updated_at)
+        VALUES (%s, %s, %s, %s, %s, NOW(), NOW())
+        RETURNING id, user_id, session_id, start_message_id, intent_kind, status, created_at
+    """
+    return execute_and_fetch_one(query, (user_id, session_id, start_message_id, intent_kind, status)) or {}
+
+
+def get_latest_active_draft_context(user_id: str, session_id: Optional[int] = None) -> Optional[Dict[str, Any]]:
+    """
+    Retrieve the most recent active draft context for a session (or user).
+    """
+    if session_id:
+        query = """
+            SELECT id, user_id, session_id, start_message_id, intent_kind, status, created_at
+            FROM draft_contexts
+            WHERE user_id = %s AND session_id = %s AND status = 'active'
+            ORDER BY created_at DESC
+            LIMIT 1
+        """
+        return fetch_one(query, (user_id, session_id))
+    else:
+        query = """
+            SELECT id, user_id, session_id, start_message_id, intent_kind, status, created_at
+            FROM draft_contexts
+            WHERE user_id = %s AND status = 'active'
+            ORDER BY created_at DESC
+            LIMIT 1
+        """
+        return fetch_one(query, (user_id,))
 
 
 def get_session_narrator_state(user_id: str, session_id: int) -> Dict[str, Any]:

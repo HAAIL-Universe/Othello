@@ -180,6 +180,7 @@ try {
   $flaskDebug = -not $NoFlaskDebug
   $flaskDebugStr = if ($flaskDebug) { "1" } else { "0" }
   [Environment]::SetEnvironmentVariable("FLASK_DEBUG", $flaskDebugStr, "Process")
+  [Environment]::SetEnvironmentVariable("DEBUG_INTENT", "1", "Process")
 
   $pyExe = Get-PythonExe -RepoRoot $repoRoot
 

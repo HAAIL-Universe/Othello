@@ -8118,62 +8118,26 @@
     function renderGoalDetail(goal) {
       if (!goal) return;
       detailGoalId.textContent = `Goal #${goal.id}`;
-      detailGoalTitle.innerHTML = formatMessageText(goal.text || "Untitled Goal");
+      detailGoalTitle.innerHTML = formatMessageText(goal.text || goal.title || "Untitled Goal");
 
       // Build detail content
       let contentHtml = "";
 
-      // Draft (New)
-      if (goal.draft_text) {
-        contentHtml += `
-          <div class="detail-section">
-            <div class="detail-section__title">Draft</div>
-            <div class="detail-section__body" style="white-space: pre-wrap;">${formatMessageText(goal.draft_text)}</div>
-          </div>
-        `;
-      }
-
-      // Seed Steps (Checklist)
-      if (goal.checklist && Array.isArray(goal.checklist) && goal.checklist.length > 0) {
-        const stepsHtml = goal.checklist.map((step, idx) => {
-            const stepText = typeof step === 'string' ? step : (step.text || JSON.stringify(step));
-            return `<div class="intent-item"><div class="intent-item__text">${idx + 1}. ${formatMessageText(stepText)}</div></div>`;
-        }).join("");
-        
-        contentHtml += `
-          <div class="detail-section">
-            <div class="detail-section__title">Seed Steps</div>
-            <div class="intent-list">
-              ${stepsHtml}
-            </div>
-          </div>
-        `;
-      }
-
-      // Description / Intent
+      // Intent Section (Description)
       const intentBody = (goal.description || goal.intent || goal.body || "").trim();
-      const intentText = intentBody || goal.text || "No description provided.";
-      const intentItems = parseIntentItems(intentBody || intentText);
-      const goalIdNum = normalizeGoalId(goal.id);
-      const activeIdNum = normalizeGoalId(othelloState.activeGoalId);
-      const isFocusedGoal = goalIdNum != null && activeIdNum != null && goalIdNum === activeIdNum;
-      if (BOOT_DEBUG) {
-        console.log("[Goal Detail] intent buttons", {
-          activeGoalId: othelloState.activeGoalId,
-          activeGoalIdType: typeof othelloState.activeGoalId,
-          goalId: goal.id,
-          goalIdType: typeof goal.id,
-          goalIdNum,
-          activeIdNum,
-          isFocusedGoal,
-          intentCount: intentItems.length,
-        });
+      const intentText = intentBody || "TBA";
+      
+      let intentItems = [];
+      if (typeof parseIntentItems === 'function' && intentText !== "TBA") {
+          intentItems = parseIntentItems(intentText);
       }
+
       if (intentItems.length > 0) {
         const itemsHtml = intentItems.map((item, idx) => {
           const itemIndex = Number.isFinite(item.index) ? item.index : (idx + 1);
           const itemText = item.text || "";
           const safeText = formatMessageText(itemText);
+          const goalIdNum = normalizeGoalId(goal.id);
           const planBtn = `
             <button class="commitment-btn intent-plan-btn" data-intent-index="${itemIndex}" data-intent-text="${encodeURIComponent(itemText)}" data-goal-id="${goalIdNum || ""}">
               Build plan
@@ -8192,6 +8156,11 @@
             <div class="intent-list">
               ${itemsHtml}
             </div>
+            <div class="detail-actions" style="padding: 8px 0 0 0;">
+                <button class="action-btn clarify-intent-btn" data-goal-id="${goal.id}" style="font-size: 0.85em; padding: 4px 8px; border: 1px solid var(--border-color); background: var(--bg-secondary); border-radius: 4px; cursor: pointer; display: inline-flex; align-items: center; gap: 4px;">
+                   <span class="codicon codicon-question"></span> Clarify Intent
+                </button>
+            </div>
           </div>
         `;
       } else {
@@ -8199,28 +8168,47 @@
           <div class="detail-section">
             <div class="detail-section__title">Intent</div>
             <div class="detail-section__body">${formatMessageText(intentText)}</div>
+            <div class="detail-actions" style="padding: 8px 0 0 0;">
+                <button class="action-btn clarify-intent-btn" data-goal-id="${goal.id}" style="font-size: 0.85em; padding: 4px 8px; border: 1px solid var(--border-color); background: var(--bg-secondary); border-radius: 4px; cursor: pointer; display: inline-flex; align-items: center; gap: 4px;">
+                   <span class="codicon codicon-question"></span> Clarify Intent
+                </button>
+            </div>
           </div>
         `;
       }
 
-      // Phase 18: Clarify Intent Button
-      contentHtml += `
-          <div class="detail-actions" style="padding: 0 16px 16px 16px;">
-            <button class="action-btn clarify-intent-btn" data-goal-id="${goal.id}" style="font-size: 0.9em; padding: 6px 12px; border: 1px solid var(--border-color); background: var(--bg-secondary); border-radius: 4px; cursor: pointer; display: flex; align-items: center; gap: 6px;">
-               <span class="codicon codicon-question"></span> Clarify Intent
-            </button>
-          </div>
-      `;
-
-      // Deadline
-      if (goal.deadline) {
+      // Steps (Checklist)
+      let stepsHtml = "";
+      if (goal.checklist && Array.isArray(goal.checklist) && goal.checklist.length > 0) {
+        stepsHtml = goal.checklist.map((step, idx) => {
+            const stepText = typeof step === 'string' ? step : (step.text || JSON.stringify(step));
+            return `<div class="intent-item"><div class="intent-item__text">${idx + 1}. ${formatMessageText(stepText)}</div></div>`;
+        }).join("");
         contentHtml += `
           <div class="detail-section">
-            <div class="detail-section__title">Deadline</div>
-            <div class="detail-section__body">${goal.deadline}</div>
+            <div class="detail-section__title">Steps</div>
+            <div class="intent-list">
+              ${stepsHtml}
+            </div>
+          </div>
+        `;
+      } else {
+         contentHtml += `
+          <div class="detail-section">
+            <div class="detail-section__title">Steps</div>
+            <div class="detail-section__body" style="color: var(--text-muted); font-style: italic;">TBA</div>
           </div>
         `;
       }
+
+      // Deadline
+      const deadlineText = goal.deadline ? new Date(goal.deadline).toLocaleString() : "TBA";
+      contentHtml += `
+        <div class="detail-section">
+            <div class="detail-section__title">Deadline</div>
+            <div class="detail-section__body">${deadlineText}</div>
+        </div>
+      `;
 
       // Activity log (conversation history)
       const activityEntries = normalizeGoalActivity(goal);

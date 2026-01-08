@@ -101,8 +101,8 @@ def list_goals(user_id: str, *, include_archived: bool = False) -> List[Dict[str
     """
     if include_archived:
         query = """
-            SELECT id, user_id, title, description, status, priority, category,
-                   plan, checklist, last_conversation_summary, created_at, updated_at, draft_text
+            SELECT id, user_id, title, description, deadline, status, priority, category,
+                   plan, checklist, last_conversation_summary, created_at, updated_at
             FROM goals
             WHERE user_id = %s
             ORDER BY created_at DESC
@@ -110,8 +110,8 @@ def list_goals(user_id: str, *, include_archived: bool = False) -> List[Dict[str
         return fetch_all(query, (user_id,))
 
     query = """
-        SELECT id, user_id, title, description, status, priority, category,
-               plan, checklist, last_conversation_summary, created_at, updated_at, draft_text
+        SELECT id, user_id, title, description, deadline, status, priority, category,
+               plan, checklist, last_conversation_summary, created_at, updated_at
         FROM goals
         WHERE user_id = %s AND (status IS NULL OR status != 'archived')
         ORDER BY created_at DESC
@@ -131,8 +131,8 @@ def get_goal(goal_id: int, user_id: str) -> Optional[Dict[str, Any]]:
         Goal dictionary if found, None otherwise
     """
     query = """
-        SELECT id, user_id, title, description, status, priority, category,
-               plan, checklist, last_conversation_summary, created_at, updated_at, draft_text
+        SELECT id, user_id, title, description, deadline, status, priority, category,
+               plan, checklist, last_conversation_summary, created_at, updated_at
         FROM goals
         WHERE id = %s AND user_id = %s
     """
@@ -152,9 +152,14 @@ def create_goal(data: Dict[str, Any], user_id: str) -> Dict[str, Any]:
     """
     title = data.get("title") or data.get("text") or "Untitled Goal"
     description = data.get("description") or ""
+    # Enforce intent (description) requirement
+    if not description and data.get("body"):
+         description = data.get("body")
+    
     status = data.get("status") or "active"
     priority = normalize_priority(data.get("priority", "medium"))
     category = data.get("category") or ""
+    deadline = data.get("deadline")
     plan = data.get("plan") or ""
     checklist = data.get("checklist", [])
     
@@ -167,15 +172,15 @@ def create_goal(data: Dict[str, Any], user_id: str) -> Dict[str, Any]:
     
     query = """
         INSERT INTO goals 
-        (user_id, title, description, status, priority, category, plan, checklist, created_at, updated_at)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
-        RETURNING id, user_id, title, description, status, priority, category,
+        (user_id, title, description, deadline, status, priority, category, plan, checklist, created_at, updated_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
+        RETURNING id, user_id, title, description, deadline, status, priority, category,
                   plan, checklist, last_conversation_summary, created_at, updated_at
     """
     
     result = execute_and_fetch_one(
         query,
-        (user_id, title, description, status, priority, category, plan, json.dumps(checklist))
+        (user_id, title, description, deadline, status, priority, category, plan, json.dumps(checklist))
     )
     
     return result or {}
@@ -202,6 +207,7 @@ def update_goal_meta(
     allowed_fields = {
         "title",
         "description",
+        "deadline",
         "status",
         "priority",
         "category",

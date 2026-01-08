@@ -41,7 +41,8 @@ CREATE TABLE IF NOT EXISTS goals (
     id SERIAL PRIMARY KEY,
     user_id TEXT NOT NULL,
     title TEXT NOT NULL,
-    description TEXT DEFAULT '',
+    description TEXT NOT NULL,
+    deadline TIMESTAMPTZ,
     status TEXT DEFAULT 'active',  -- 'active', 'completed', 'paused', 'archived'
     priority INTEGER DEFAULT 3,     -- 1..5 (or your own scale)
     category TEXT DEFAULT '',

@@ -219,6 +219,8 @@ def ensure_core_schema() -> None:
             id SERIAL PRIMARY KEY,
             user_id TEXT NOT NULL,
             session_id INTEGER REFERENCES sessions(id) ON DELETE SET NULL,
+            checkpoint_id INTEGER, -- Link to the start of an intent context (self or parent)
+            client_message_id TEXT,
             source TEXT NOT NULL DEFAULT 'text',
             channel TEXT NOT NULL DEFAULT 'companion',
             transcript TEXT NOT NULL DEFAULT '',
@@ -230,10 +232,14 @@ def ensure_core_schema() -> None:
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
         """,
+        "ALTER TABLE messages ADD COLUMN IF NOT EXISTS channel TEXT NOT NULL DEFAULT 'companion';",
+        "ALTER TABLE messages ADD COLUMN IF NOT EXISTS checkpoint_id INTEGER;",
+        "ALTER TABLE messages ADD COLUMN IF NOT EXISTS client_message_id TEXT;",
+        "UPDATE messages SET channel = 'companion' WHERE channel IS NULL;",
         "CREATE INDEX IF NOT EXISTS idx_messages_user_id ON messages(user_id);",
         "CREATE INDEX IF NOT EXISTS idx_messages_session_id ON messages(session_id);",
-        "ALTER TABLE messages ADD COLUMN IF NOT EXISTS channel TEXT NOT NULL DEFAULT 'companion';",
-        "UPDATE messages SET channel = 'companion' WHERE channel IS NULL;",
+        "CREATE INDEX IF NOT EXISTS idx_messages_checkpoint_id ON messages(checkpoint_id);",
+        "CREATE INDEX IF NOT EXISTS idx_messages_client_message_id ON messages(client_message_id);",
         """
         CREATE TABLE IF NOT EXISTS transcripts (
             id SERIAL PRIMARY KEY,

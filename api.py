@@ -4416,6 +4416,22 @@ def handle_message():
         if user_id and ui_action == "create_goal_from_message":
              source_message_id = data.get("source_message_id")
              goal_context = data.get("goal_context") # Phase 22: Context seed for goal activity
+             
+             # Phase 23: Reconstruct Context from DB if missing
+             if not goal_context and source_message_id:
+                  try:
+                      from db.messages_repository import get_message_by_client_id, get_linked_messages_from_checkpoint
+                      msg = get_message_by_client_id(user_id, source_message_id)
+                      if msg and msg.get("checkpoint_id"):
+                          linked = get_linked_messages_from_checkpoint(user_id, msg["checkpoint_id"])
+                          lines = []
+                          for m in linked:
+                               role = "User" if m.get("source") == "user" else "Othello"
+                               lines.append(f"{role}: {m.get('transcript')}")
+                          goal_context = "\n".join(lines)
+                  except Exception as e:
+                      logger.warning("Failed to reconstruct goal context: %s", e)
+
              override_title = data.get("title")
              override_desc = data.get("description")
              
@@ -4493,11 +4509,14 @@ def handle_message():
         # A) data.ui_action == "confirm_draft"
         # B) user_input == "confirm goal" (exact)
         # C) user_input == "confirm" ONLY if draft_id is present
+        # Phase 23: Broadened confirm. Catch "confirm" in sentence if draft exists.
+        norm_input = user_input.strip().lower()
         is_confirm_action = data.get("ui_action") == "confirm_draft"
-        is_confirm_goal_text = user_input.strip().lower() == "confirm goal"
-        is_confirm_text_with_id = user_input.strip().lower() == "confirm" and data.get("draft_id")
+        is_confirm_goal_text = norm_input == "confirm goal"
+        is_fuzzy_confirm = "confirm" in norm_input
+        is_confirm_text_with_id = is_fuzzy_confirm and data.get("draft_id")
 
-        if user_id and (is_confirm_action or is_confirm_goal_text or is_confirm_text_with_id):
+        if user_id and (is_confirm_action or is_confirm_goal_text or is_confirm_text_with_id or is_fuzzy_confirm):
             draft_id = data.get("draft_id")
             
             if draft_id:
@@ -4509,8 +4528,8 @@ def handle_message():
                         draft = None # Invalid draft_id provided
                 except (ValueError, TypeError):
                     draft = None
-            elif is_confirm_goal_text:
-                # Find latest pending goal draft ONLY if explicit "confirm goal"
+            elif is_confirm_goal_text or is_fuzzy_confirm:
+                # Find latest pending goal draft ONLY if explicit "confirm goal" OR fuzzy match
                 pending_drafts = suggestions_repository.list_suggestions(
                     user_id=user_id,
                     status="pending",
@@ -4655,22 +4674,58 @@ def handle_message():
                 })
 
         # Draft Focus: Create Draft (Voice-First)
-        # Trigger: "create a goal draft", "start a goal draft", etc.
+        # Trigger: "create a goal draft", "start a goal draft", "build mode", "turn this into a goal"
         is_create_draft = False
+        hydration_source_msg_id = None
+        
         if user_id and user_input:
             norm_input = user_input.strip().lower()
             if "create a goal draft" in norm_input or "start a goal draft" in norm_input:
+                is_create_draft = True
+            elif "build mode" in norm_input: # Phase 23: Explicit Build Mode Trigger
+                is_create_draft = True
+            elif "turn this into a goal" in norm_input: # Phase 23: Context Switch Trigger
                 is_create_draft = True
             elif re.search(r"\b(create|make|start)\b.*\bgoal\b.*\bdraft\b", norm_input):
                 is_create_draft = True
         
         if is_create_draft:
             payload = _generate_goal_draft_payload(user_input)
+            
+            # Phase 23: Context Hydration from Checkpoint (if enabled)
+            from db.messages_repository import get_latest_active_draft_context, get_linked_messages_from_checkpoint
+            try:
+                latest_dc = get_latest_active_draft_context(user_id)
+                if latest_dc:
+                     start_msg_id = latest_dc["start_message_id"]
+                     linked = get_linked_messages_from_checkpoint(user_id, start_msg_id)
+                     if linked:
+                         lines = []
+                         for m in linked:
+                             role = "User" if m.get("source") == "user" else "Othello"
+                             lines.append(f"{role}: {m.get('transcript')}")
+                         full_transcript = "\n".join(lines)
+                         
+                         # Naïve hydration: Append transcript to body so user (and LLM) sees it
+                         current_body = payload.get("body", "")
+                         payload["body"] = (current_body + "\n\nContext:\n" + full_transcript).strip()
+                         
+                         hydration_source_msg_id = start_msg_id
+                         # If title is default, try to improve it?
+                         if payload.get("title") == "New Goal":
+                             # Very dumb heuristic: First 5 words of first user message
+                             first_user_msg = next((m for m in linked if m.get("source") == "user"), None)
+                             if first_user_msg:
+                                 txt = first_user_msg.get("transcript", "")
+                                 payload["title"] = " ".join(txt.split()[:5]) + "..."
+            except Exception as e:
+                logger.warning("Failed to hydrate draft context: %s", e)
+
             suggestion = suggestions_repository.create_suggestion(
                 user_id=user_id,
                 kind="goal",
                 payload=payload,
-                provenance={"source": "api_message_create_goal_draft", "original_text": user_input},
+                provenance={"source": "api_message_create_goal_draft", "original_text": user_input, "checkpoint_id": hydration_source_msg_id},
                 status="pending"
             )
             
@@ -4678,11 +4733,12 @@ def handle_message():
             
             # Construct response with draft context
             response = {
-                "reply": "I've drafted that goal for you. What would you like to change first?",
+                "reply": "I've drafted that goal for you based on our conversation. What would you like to change first?",
                 "draft_context": {
                     "draft_id": draft_id,
                     "draft_type": "goal",
-                    "source_message_id": client_message_id
+                    "source_message_id": client_message_id,
+                    "checkpoint_id": hydration_source_msg_id
                 },
                 "draft_payload": payload,
                 "request_id": request_id
@@ -5652,6 +5708,7 @@ def handle_message():
 
         def _should_persist_chat() -> bool:
             if not user_id:
+                logger.info("API: _should_persist_chat=False (no user_id)")
                 return False
             
             # Case 3 Fix: Allow persistence in Duet mode (and all other views)
@@ -5661,12 +5718,18 @@ def handle_message():
             #      return False
             
             # Allow all views by default to ensure Global Chat works everywhere.
-            pass
+            # pass (Removed view filter)
 
-            if ui_action:
-                return False
+            # Only block persistence if it's a pure UI action (no text) or a special hidden command
+            # if ui_action:
+            #    logger.info("API: _should_persist_chat=False (ui_action=%s)", ui_action)
+            #    return False
+            
             if user_input.startswith("__"):
+                logger.debug("API: _should_persist_chat=False (hidden input)")
                 return False
+                
+            logger.info("API: _should_persist_chat=True (user_id=%s view=%s action=%s)", user_id, view_label, ui_action)
             return True
 
         companion_context = None
@@ -5700,15 +5763,18 @@ def handle_message():
                      max_turns=30
                  )
 
-        def _persist_chat_exchange(reply_text: Optional[str]) -> None:
+        def _persist_chat_exchange(reply_text: Optional[str], payload: Optional[Dict[str, Any]] = None) -> None:
             nonlocal conversation_id
-            if not reply_text or not _should_persist_chat():
+            _persist = _should_persist_chat()
+            if not reply_text or not _persist:
+                logger.info(f"API: Skipping persistence. reply_exists={bool(reply_text)} persist_check={_persist}")
                 return
             cleaned_reply = str(reply_text).strip()
             if not cleaned_reply:
                 return
             try:
-                from db.messages_repository import create_message, create_session
+                logger.info("API: Persisting chat exchange... (convo=%s)", conversation_id)
+                from db.messages_repository import create_message, create_session, get_active_checkpoint, update_message
 
                 if conversation_id is None:
                     # Fix for empty sessions (Phase 1/2 Persistence Regression)
@@ -5717,14 +5783,84 @@ def handle_message():
                     conversation_id = new_sess.get("id")
                     logger.info("API: Created new session %s for chat exchange (latching fix)", conversation_id)
 
-                create_message(
-                    user_id=user_id,
-                    transcript=user_input,
-                    source="user",
-                    channel=effective_channel,
-                    status="final",
-                    session_id=conversation_id,
-                )
+                # Phase 23: Context Linkage
+                active_cp = get_active_checkpoint(user_id)
+                logger.info("API: Active Checkpoint: %s", active_cp)
+                
+                # Check for Intent (Blue ?)
+                has_intent = False
+                intent_source = None
+                
+                if payload:
+                     # Debug Log for Payload Inspection
+                     if os.environ.get("DEBUG_INTENT") == "1":
+                         logger.info("API: [Checkpoint Debug] Payload Meta Keys: %s", list(payload.get("meta", {}).keys()))
+                         
+                     if payload.get("meta"):
+                        suggestions = payload["meta"].get("suggestions", [])
+                        for s in suggestions:
+                            if s.get("is_virtual"):
+                                has_intent = True
+                                intent_source = "virtual_suggestion"
+                                break
+                        
+                        # Fallback: check goal_intent_suggestion direct object (Phase 21 shim)
+                        if not has_intent and payload["meta"].get("goal_intent_suggestion"):
+                             has_intent = True
+                             intent_source = "direct_meta"
+
+                try:
+                    user_msg = create_message(
+                        user_id=user_id,
+                        transcript=user_input,
+                        source="user",
+                        channel=effective_channel,
+                        status="final",
+                        session_id=conversation_id,
+                        checkpoint_id=active_cp,
+                        client_message_id=client_message_id,
+                    )
+                except Exception as insert_e:
+                    logger.warning("API: create_message failed (likely stale session_id=%s): %s. Creating new session...", conversation_id, insert_e)
+                    # Recovery: Create new session and retry
+                    new_sess = create_session(user_id)
+                    conversation_id = new_sess.get("id")
+                    user_msg = create_message(
+                        user_id=user_id,
+                        transcript=user_input,
+                        source="user",
+                        channel=effective_channel,
+                        status="final",
+                        session_id=conversation_id,
+                        checkpoint_id=active_cp,
+                        client_message_id=client_message_id,
+                    )
+                
+                # If this message starts a new goal intent context, mark it as a checkpoint (self-reference)
+                if has_intent and user_msg.get("id"):
+                    new_cp = user_msg["id"]
+                    logger.info("API: [Checkpoint] Detected Intent (%s). Marking message %s as Start Checkpoint.", intent_source, new_cp)
+                    update_message(user_id=user_id, message_id=new_cp, checkpoint_id=new_cp)
+                    active_cp = new_cp # Assistant response belongs to this new context
+
+                    # Phase 23: Populate draft_contexts for visibility
+                    try:
+                        from db.messages_repository import create_draft_context
+                        create_draft_context(
+                            user_id=user_id, 
+                            session_id=conversation_id, 
+                            start_message_id=new_cp, 
+                            intent_kind=intent_source or "unknown", 
+                            status="active"
+                        )
+                        logger.info("API: [Checkpoint] Persisted draft_context for message %s", new_cp)
+                    except Exception as dc_err:
+                        # Log but don't fail the request if this table is experimental
+                        logger.warning("API: Failed to populate draft_contexts: %s", dc_err)
+
+                elif active_cp:
+                    logger.debug("API: [Checkpoint] Linking message to active checkpoint %s", active_cp)
+
                 create_message(
                     user_id=user_id,
                     transcript=cleaned_reply,
@@ -5732,6 +5868,7 @@ def handle_message():
                     channel=effective_channel,
                     status="final",
                     session_id=conversation_id,
+                    checkpoint_id=active_cp,
                 )
 
                 # --- Duet Narrator Logic (Cycle Feature) ---
@@ -5789,7 +5926,7 @@ def handle_message():
 
         def _respond(payload: Dict[str, Any]):
             reply_text = payload.get("reply") if isinstance(payload, dict) else None
-            _persist_chat_exchange(reply_text)
+            _persist_chat_exchange(reply_text, payload)
             if isinstance(payload, dict):
                 if conversation_id:
                     payload["conversation_id"] = conversation_id
