@@ -4811,7 +4811,7 @@
       }
       
       if (!othelloState.activeConversationId || !Array.isArray(othelloState.conversations)) return;
-      const conv = othelloState.conversations.find(c => c.conversation_id === othelloState.activeConversationId);
+      const conv = othelloState.conversations.find(c => Number(c.conversation_id) === Number(othelloState.activeConversationId));
       
       const chatPlaceholder = document.getElementById("chat-placeholder");
       if (!chatPlaceholder) return;
