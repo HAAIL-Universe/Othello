@@ -1,4 +1,4 @@
-# Cycle Status: COMPLETE (Channel Fix)
+﻿# Cycle Status: COMPLETE (Channel Fix)
 
 ## Todo Ledger
 - [x] Audit: Confirm `planner` channel mismatch in `loadChatHistory`
