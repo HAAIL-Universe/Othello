@@ -4968,10 +4968,10 @@
         container.appendChild(base);
         container.appendChild(overlay);
         
-        // Speed calculation: ~0.8s total
+        // Speed calculation: Slowed down by half (~1.6s total target)
         const words = newText.split(/(\s+)/);
         const totalWords = words.length;
-        const duration = Math.min(1200, Math.max(600, totalWords * 30)); 
+        const duration = Math.min(2400, Math.max(1200, totalWords * 60)); 
         const interval = duration / totalWords;
         
         let wordIndex = 0;
