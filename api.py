@@ -1122,7 +1122,9 @@ def _generate_goal_draft_payload(user_input: str) -> Dict[str, Any]:
         "- title: string (concise goal title)\n"
         "- target_days: integer or null (number of days to achieve)\n"
         "- steps: array of strings (actionable steps) - keep these high-level and few (3-5 max). If the user request is vague, provide only 1-2 starting steps.\n"
-        "- body: string or null (additional context/description)\n"
+        "- intent: string (specific objective or outcome)\n"
+        "- resources: array of strings (tools, links, or support needed)\n"
+        "- metrics: array of strings (success criteria)\n"
         "Return ONLY valid JSON."
     )
     
@@ -1134,11 +1136,42 @@ def _generate_goal_draft_payload(user_input: str) -> Dict[str, Any]:
                 {"role": "user", "content": user_input}
             ],
             temperature=0.1,
-            max_tokens=500,
+            max_tokens=800,
             response_format={"type": "json_object"}
         )
         content = response.choices[0].message.content
-        return _normalize_goal_draft_payload(json.loads(content))
+        data = json.loads(content)
+        
+        # Format body to match Standard Flow markdown style
+        intent = data.get("intent") or data.get("body") or ""
+        resources = data.get("resources") or []
+        metrics = data.get("metrics") or []
+        
+        body_parts = []
+        if intent:
+            body_parts.append(f"### Intent\n{intent}")
+        else:
+            # Fallback if LLM puts everything in body via old habit, unlikely with new prompt
+            pass
+            
+        if resources and isinstance(resources, list):
+            body_parts.append("### Resources")
+            for r in resources:
+                body_parts.append(f"- {r}")
+                
+        if metrics and isinstance(metrics, list):
+            body_parts.append("### Metrics")
+            for m in metrics:
+                body_parts.append(f"- {m}")
+        
+        final_body = "\n\n".join(body_parts)
+        if not final_body and intent:
+             final_body = intent
+
+        # Inject constructed body back into data
+        data["body"] = final_body
+        
+        return _normalize_goal_draft_payload(data)
     except Exception as e:
         logging.error(f"Failed to generate goal draft payload: {e}")
         # Fallback
@@ -4744,9 +4777,26 @@ def handle_message():
             
             draft_id = suggestion["id"]
             
-            # Construct response with draft context
+            # Construct rich markdown reply matching Standard Flow
+            md_lines = [f"Goal Title: **{payload.get('title', 'New Goal')}**\n"]
+            
+            body_text = payload.get("body", "").strip()
+            if body_text:
+                md_lines.append(body_text)
+                
+            steps = payload.get("steps", [])
+            if steps:
+                md_lines.append("\n### Steps:")
+                for i, s in enumerate(steps, 1):
+                    md_lines.append(f"{i}. {s}")
+            
+            # Additional closing
+            md_lines.append("\nPlease confirm if you'd like to finalize this goal or if you want to make any changes.")
+            
+            rich_reply = "\n".join(md_lines)
+
             response = {
-                "reply": "I've drafted that goal for you based on our conversation. What would you like to change first?",
+                "reply": rich_reply,
                 "draft_context": {
                     "draft_id": draft_id,
                     "draft_type": "goal",

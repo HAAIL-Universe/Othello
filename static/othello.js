@@ -8118,6 +8118,9 @@
     function renderGoalDetail(goal) {
       if (!goal) return;
       detailGoalId.textContent = `Goal #${goal.id}`;
+      // Fix: Define goalIdNum in the main scope so it's available for activity log planning logic
+      const goalIdNum = normalizeGoalId(goal.id);
+
       detailGoalTitle.innerHTML = formatMessageText(goal.text || goal.title || "Untitled Goal");
 
       // Build detail content
@@ -8137,7 +8140,10 @@
           const itemIndex = Number.isFinite(item.index) ? item.index : (idx + 1);
           const itemText = item.text || "";
           const safeText = formatMessageText(itemText);
-          const goalIdNum = normalizeGoalId(goal.id);
+          // goalIdNum is now available from outer scope, but we can redeclare or use it. 
+          // To match previous logic, we can keep using normalizeGoalId here or just use the outer one.
+          // The previous code had `const goalIdNum = normalizeGoalId(goal.id);` here.
+          // We can remove the inner declaration to use the outer one.
           const planBtn = `
             <button class="commitment-btn intent-plan-btn" data-intent-index="${itemIndex}" data-intent-text="${encodeURIComponent(itemText)}" data-goal-id="${goalIdNum || ""}">
               Build plan
