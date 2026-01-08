@@ -4956,25 +4956,38 @@
         container.classList.remove("dim"); // allow children opacity control
         container.innerHTML = "";
         
+        // Base layer (dimmed old text)
         const base = document.createElement("div");
         base.className = "narrator-base dim"; // explicit dim
         base.textContent = oldText;
         base.style.opacity = "0.3"; // Enforce dim visually
         
+        // Overlay layer (bright new text) - Pre-filled spans for "Reveal" animation (prevents alignment jitter)
         const overlay = document.createElement("div");
         overlay.className = "narrator-overlay";
-        overlay.textContent = ""; 
+        
+        // Split and wrap in spans to preserve layout
+        const tokens = newText.split(/(\s+)/);
+        const spans = [];
+        
+        tokens.forEach(t => {
+            const span = document.createElement("span");
+            span.textContent = t;
+            span.style.opacity = "0"; // Start invisible
+            overlay.appendChild(span);
+            spans.push(span);
+        });
         
         container.appendChild(base);
         container.appendChild(overlay);
         
         // Speed calculation: Slowed down by half (~1.6s total target)
-        const words = newText.split(/(\s+)/);
-        const totalWords = words.length;
-        const duration = Math.min(2400, Math.max(1200, totalWords * 60)); 
-        const interval = duration / totalWords;
+        // using token count (words + whitespace)
+        const totalTokens = spans.length;
+        const duration = Math.min(2400, Math.max(1200, totalTokens * 60)); 
+        const interval = duration / totalTokens;
         
-        let wordIndex = 0;
+        let index = 0;
         
         function tick() {
             if (window.othelloNarratorToken !== token) return;
@@ -4982,15 +4995,15 @@
             // Batch words if interval is too small (<10ms)
             const batchSize = interval < 10 ? 3 : 1;
             
-            for(let i=0; i<batchSize && wordIndex < words.length; i++) {
-                overlay.textContent += words[wordIndex];
-                wordIndex++;
+            for(let i=0; i<batchSize && index < spans.length; i++) {
+                spans[index].style.opacity = "1";
+                index++;
             }
             
-            if (wordIndex < words.length) {
+            if (index < spans.length) {
                 setTimeout(tick, interval);
             } else {
-                // Done
+                // Done - clear overlay DOM mess and finalize text
                 container.innerHTML = "";
                 container.textContent = newText;
             }
