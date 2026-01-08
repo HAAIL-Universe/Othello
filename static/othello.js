@@ -6864,6 +6864,17 @@
           bumpActiveGoalUpdates();
         }
 
+        // --- Fix for Narrator UI Stale Data ---
+        // Refresh conversation metadata (Duet Narrator Text)
+        if (othelloState.activeConversationId) {
+            // Run in background to avoid blocking
+            loadConversations().then(() => {
+                if (typeof renderDuetNarratorFromActiveConversation === 'function') {
+                    renderDuetNarratorFromActiveConversation();
+                }
+            }).catch(e => console.warn("[UI] Background conversation refresh failed", e));
+        }
+
         if (metaIntent === "pending_goal_edit_set") {
           const pendingMode = data.meta && data.meta.mode ? data.meta.mode : "update";
           if (othelloState.activeGoalId !== null) {
