@@ -848,6 +848,8 @@
       activeGoalId: null,
       activeConversationId: null, // New Chat support
       conversations: [], // Cache for narrator logic
+      lastDuetNarratorText: null, // Persistent narrator text across sends
+      duetNarratorInFlight: false, // Flag prevents hide during send
       activeDraft: null, // { draft_id, draft_type, source_message_id }
       activeDraftPayload: null,
       lastGoalDraftByConversationId: {}, // Stores the last assistant goal summary per conversation
@@ -4812,6 +4814,23 @@
       
       const chatPlaceholder = document.getElementById("chat-placeholder");
       if (!chatPlaceholder) return;
+      
+      console.debug("[Narrator] Render. InFlight:", othelloState.duetNarratorInFlight, "LastText:", othelloState.lastDuetNarratorText ? "Yes" : "No");
+
+      // If In-Flight, preserve existing text and ensure DIM is on.
+      if (othelloState.duetNarratorInFlight) {
+           if (othelloState.lastDuetNarratorText) {
+               // Ensure it's showing the LAST known text
+               chatPlaceholder.textContent = othelloState.lastDuetNarratorText;
+               // Re-apply specific clamp if needed (though usually textContent is enough for the dim background)
+               chatPlaceholder.textContent = fitNarratorTextToLines(othelloState.lastDuetNarratorText, chatPlaceholder, 15);
+               
+               chatPlaceholder.classList.remove("hidden");
+               chatPlaceholder.classList.add("duet-narrator", "dim");
+               chatPlaceholder.style.display = "";
+           }
+           return; 
+      }
 
       if (!othelloState.activeConversationId || !Array.isArray(othelloState.conversations)) return;
       const conv = othelloState.conversations.find(c => Number(c.conversation_id) === Number(othelloState.activeConversationId));
@@ -4832,12 +4851,14 @@
           chatPlaceholder.textContent = "Start a conversation";
           chatPlaceholder.classList.remove("hidden", "duet-narrator", "is-visible", "dim");
           chatPlaceholder.style.display = "";
+          othelloState.lastDuetNarratorText = null;
           return;
       }
       
       // State 1: < 3 messages. 
-      // Persistence Fix: If we have content (via dim or prior text) and are in send-flow (dim), keep it visible.
-      // But usually checking `total` is enough. If we just sent, total increases.
+      // Persistence Fix: If we have content (via dim or prior text), keeps it visible? 
+      // Current rule: If total < 3, hide. 
+      // BUT if we just sent, flight flag handles it.
       if (total < 3) {
           chatPlaceholder.classList.add("hidden");
           chatPlaceholder.classList.remove("duet-narrator", "is-visible", "dim");
@@ -4854,6 +4875,9 @@
 
           const rawNewText = `"${conv.duet_narrator_text}"`;
           const currentText = (chatPlaceholder.dataset.fullText || chatPlaceholder.textContent).trim();
+          
+          // Update Persistence State
+          othelloState.lastDuetNarratorText = rawNewText;
           
           // If text changed OR we are in dim state (completion of turn), update/animate.
           // Note: dataset.fullText tracks the *target* text.
@@ -5215,8 +5239,11 @@
     function addMessage(role, text, options = {}) {
       console.log("DEBUG: addMessage called", role, text.substring(0, 20) + "...");
       // Hide chat placeholder when first message appears
+      // Fix: Do NOT hide Duet Narrator (it must persist)
       const chatPlaceholder = document.getElementById("chat-placeholder");
-      if (chatPlaceholder && !chatPlaceholder.classList.contains("hidden")) {
+      const isDuetNarrator = chatPlaceholder && chatPlaceholder.classList.contains("duet-narrator");
+      
+      if (chatPlaceholder && !chatPlaceholder.classList.contains("hidden") && !isDuetNarrator) {
         chatPlaceholder.classList.add("hidden");
       }
 
@@ -6640,10 +6667,12 @@
           input.focus();
       }
       
-      // Duet Narrator: Dim on send
+      // Duet Narrator: Dim on send & Mark In-Flight
       const chatPlaceholder = document.getElementById("chat-placeholder");
       if (chatPlaceholder && chatPlaceholder.classList.contains("duet-narrator") && !chatPlaceholder.classList.contains("hidden")) {
           chatPlaceholder.classList.add("dim");
+          othelloState.duetNarratorInFlight = true;
+          console.debug("[Narrator] marked in-flight (dim)");
       }
 
       let sendUiState = beginSendUI({ label: isConfirmSave ? "Saving..." : "Thinking…", disableSend: true });
@@ -6958,6 +6987,12 @@
           await applyRoutineMeta(meta, botEntry, clientMessageId);
         } catch (err) {
           console.warn("[Othello UI] routine meta render failed:", err);
+        }
+        
+        // Reset In-Flight Flag
+        if (othelloState.duetNarratorInFlight) {
+            othelloState.duetNarratorInFlight = false;
+            console.debug("[Narrator] in-flight released");
         }
         
         // Update agent status display
