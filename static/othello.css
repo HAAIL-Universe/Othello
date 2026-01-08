@@ -6923,30 +6923,37 @@ body.chat-open #global-chat-fab {
 /* History UX Redesign */
 .history-bar {
   display: flex !important;
-  justify-content: center;
+  justify-content: flex-start; /* Move to left */
   align-items: center;
-  padding: 8px 0;
-  background: var(--bg-1);
+  padding: 0 16px; /* Compact padding */
+  background: transparent; /* Remove black bar */
   border-top: none;
-  min-height: 32px;
-  cursor: pointer;
+  min-height: 0;
+  
+  /* Float above messages */
+  position: fixed;
+  bottom: calc(4.5rem + var(--safe-bottom)); /* Sit just above input bar */
+  left: 0;
+  width: 100%;
   z-index: 150;
-  position: relative;
+  pointer-events: none; /* Allow clicks to pass through empty space */
 }
 
 .history-toggle-btn {
-  background: none;
-  border: none;
+  pointer-events: auto; /* Enable button interaction */
+  background: rgba(var(--bg-1-rgb), 0.8); /* Slight pill background for contrast */
+  border: 1px solid var(--border);
   color: var(--text-soft);
-  font-size: 0.8rem;
+  font-size: 0.75rem;
   font-weight: 600;
-  padding: 4px 16px;
+  padding: 4px 12px;
   border-radius: 16px;
   cursor: pointer;
-  transition: color 0.2s, background 0.2s;
+  transition: all 0.2s;
   display: flex;
   align-items: center;
   gap: 6px;
+  backdrop-filter: blur(4px);
 }
 .history-toggle-btn::before {
   content: '';
@@ -6955,6 +6962,7 @@ body.chat-open #global-chat-fab {
 .history-toggle-btn:hover {
   color: var(--text-main);
   background: var(--card-bg);
+  border-color: var(--border-hover);
 }
 
 .history-panel {
