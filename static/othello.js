@@ -5020,10 +5020,7 @@
       try {
         const viewName = othelloState.currentView || "chat";
         const modeName = othelloState.currentMode || "companion";
-        const requestedChannel = effectiveChannelForView({
-          currentView: viewName,
-          currentMode: modeName,
-        });
+        const requestedChannel = "companion"; // Force companion channel for chat UI history
         const messages = await fetchChatHistory(50, requestedChannel);
         clearChatState();
         chatHydrated = true;
@@ -6634,8 +6631,8 @@
         }
 
         const mode = (othelloState.currentMode || "companion").toLowerCase();
-        // Phase 6: Auto-routing (backend decides, avoids forced planner)
-        const channel = "auto";
+        // Fix: Force companion channel for chat messages to ensure visibility
+        const channel = "companion";
         console.debug(`[Othello UI] sendMessage mode=${mode} channel=${channel} view=${othelloState.currentView}`);
         console.log("[Othello UI] Sending plain-message payload:", text);
         
