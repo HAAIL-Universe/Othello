@@ -5654,17 +5654,14 @@ def handle_message():
             if not user_id:
                 return False
             
-            # Case 3 Fix: Allow persistence in Duet mode
-            # If explicit "duet" view, we allow. If "chat", we allow.
-            # Original 'is_chat_view' only checked "chat".
+            # Case 3 Fix: Allow persistence in Duet mode (and all other views)
+            # Originally restricted to ["chat", "duet"], but global chat overlay needs persistence everywhere.
+            # allow_views = ["chat", "duet", "goals", "focus", "today-planner", "routine-planner", "insights"]
+            # if view_label not in allow_views:
+            #      return False
             
-            allow_views = ["chat", "duet"]
-            if view_label not in allow_views:
-                 # If using a view like 'goals', we historically didn't persist chat there?
-                 # Preserving existing behavior: ONLY return False if strictly not in allowed set.
-                 # But wait, original code was: 'if not is_chat_view: return False'.
-                 # So it ONLY persisted if view=="chat".
-                 return False
+            # Allow all views by default to ensure Global Chat works everywhere.
+            pass
 
             if ui_action:
                 return False

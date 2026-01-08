@@ -545,7 +545,7 @@
       async function loadConversations() {
         if (!isAuthed) return;
         try {
-          const resp = await fetch("/api/conversations", { credentials: "include" });
+          const resp = await fetch("/api/conversations?ts=" + Date.now(), { credentials: "include" });
           if (resp.ok) {
             const data = await resp.json();
             const conversations = data.conversations || [];
@@ -4804,6 +4804,7 @@
 
     function renderDuetNarratorFromActiveConversation() {
       // Phase 2 Fix: Duet Ghost Narrator (View-Gated)
+      console.debug("[Narrator] Render triggered. Mode:", othelloState.chatViewMode, "ConvID:", othelloState.activeConversationId);
       
       // 1) Exit early unless in Duet mode
       if (othelloState.chatViewMode !== "duet") {
