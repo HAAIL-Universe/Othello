@@ -1741,6 +1741,24 @@
       opacity: 0.6;
     }
 
+    .chat-placeholder.dim {
+        opacity: 0.3 !important;
+    }
+
+    .narrator-base {
+        transition: opacity 0.5s ease;
+    }
+    .narrator-overlay {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+        color: var(--text-normal);
+        opacity: 1;
+    }
+
     @keyframes fadeIn {
       from {
         opacity: 0;

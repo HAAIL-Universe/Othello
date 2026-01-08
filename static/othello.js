@@ -4802,22 +4802,21 @@
       }
     }
 
+    // Global token for narrator animation
+    if (typeof window.othelloNarratorToken === 'undefined') window.othelloNarratorToken = 0;
+
     function renderDuetNarratorFromActiveConversation() {
-      // Phase 2 Fix: Duet Ghost Narrator (View-Gated)
-      console.debug("[Narrator] Render triggered. Mode:", othelloState.chatViewMode, "ConvID:", othelloState.activeConversationId);
-      
+      // Phase 2/3/4/5 Fix: Narrator UI Polish
       // 1) Exit early unless in Duet mode
-      if (othelloState.chatViewMode !== "duet") {
-          return; 
-      }
-      
-      if (!othelloState.activeConversationId || !Array.isArray(othelloState.conversations)) return;
-      const conv = othelloState.conversations.find(c => Number(c.conversation_id) === Number(othelloState.activeConversationId));
+      if (othelloState.chatViewMode !== "duet") return;
       
       const chatPlaceholder = document.getElementById("chat-placeholder");
       if (!chatPlaceholder) return;
+
+      if (!othelloState.activeConversationId || !Array.isArray(othelloState.conversations)) return;
+      const conv = othelloState.conversations.find(c => Number(c.conversation_id) === Number(othelloState.activeConversationId));
       
-      // Count visible messages to determine state
+      // Count visible messages
       const chatLog = document.getElementById("chat-log");
       const duetTop = document.getElementById("duet-top");
       const duetBottom = document.getElementById("duet-bottom");
@@ -4829,35 +4828,151 @@
       
       // State 0: Empty -> "Start a conversation"
       if (total === 0) {
+          window.othelloNarratorToken++; // Cancel animation
           chatPlaceholder.textContent = "Start a conversation";
-          chatPlaceholder.classList.remove("hidden", "duet-narrator", "is-visible");
+          chatPlaceholder.classList.remove("hidden", "duet-narrator", "is-visible", "dim");
           chatPlaceholder.style.display = "";
           return;
       }
       
-      // State 1: 1-2 messages -> Blank (Black Gap)
+      // State 1: < 3 messages. 
+      // Persistence Fix: If we have content (via dim or prior text) and are in send-flow (dim), keep it visible.
+      // But usually checking `total` is enough. If we just sent, total increases.
       if (total < 3) {
           chatPlaceholder.classList.add("hidden");
-          chatPlaceholder.classList.remove("duet-narrator", "is-visible");
+          chatPlaceholder.classList.remove("duet-narrator", "is-visible", "dim");
           return;
       }
       
-      // State 2: 3+ messages -> Narrator (if exists)
+      // State 2: 3+ messages -> Narrator
       if (conv && conv.duet_narrator_text) {
-          chatPlaceholder.textContent = `"${conv.duet_narrator_text}"`;
-          chatPlaceholder.classList.add("duet-narrator");
           chatPlaceholder.classList.remove("hidden");
           chatPlaceholder.style.display = "";
+          chatPlaceholder.classList.add("duet-narrator");
+          // Ensure fade-in if not visible
+          requestAnimationFrame(() => chatPlaceholder.classList.add("is-visible"));
+
+          const rawNewText = `"${conv.duet_narrator_text}"`;
+          const currentText = (chatPlaceholder.dataset.fullText || chatPlaceholder.textContent).trim();
           
-          // Trigger Fade In
-          requestAnimationFrame(() => {
-             chatPlaceholder.classList.add("is-visible"); 
-          });
+          // If text changed OR we are in dim state (completion of turn), update/animate.
+          // Note: dataset.fullText tracks the *target* text.
+          if (rawNewText !== currentText || chatPlaceholder.classList.contains("dim")) {
+               chatPlaceholder.dataset.fullText = rawNewText;
+               
+               // Clamp (Phase 5)
+               const clampedText = fitNarratorTextToLines(rawNewText, chatPlaceholder, 15);
+               
+               if (chatPlaceholder.classList.contains("dim")) {
+                   // Phase 4: Overwrite Animation (Bright New over Dim Old)
+                   runNarratorOverwriteAnimation(chatPlaceholder, clampedText);
+               } else {
+                   // Instant update (or initial load)
+                   chatPlaceholder.textContent = clampedText;
+               }
+          }
       } else {
-          // If 3+ messages but no narrator yet -> Blank/Hidden (NOT "Start...")
-          chatPlaceholder.classList.add("hidden");
-          chatPlaceholder.classList.remove("duet-narrator", "is-visible");
+          // No narrator text yet.
+          // If we are "dim", we should probably stay dim until we get text?
+          // If conv.duet_narrator_text is missing, implies no summary.
+          if (!chatPlaceholder.classList.contains("dim")) {
+             chatPlaceholder.classList.add("hidden");
+             chatPlaceholder.classList.remove("duet-narrator", "is-visible");
+          }
       }
+    }
+
+    function fitNarratorTextToLines(text, container, maxLines) {
+        // Deterministic JS Clamp
+        // Create offscreen clone
+        const clone = container.cloneNode(true);
+        clone.style.visibility = 'hidden';
+        clone.style.position = 'absolute';
+        clone.style.width = container.offsetWidth + 'px'; // use offsetWidth for accurate sizing
+        clone.classList.remove("hidden", "dim");
+        clone.style.display = "block";
+        clone.innerHTML = "";
+        clone.textContent = text;
+        document.body.appendChild(clone);
+        
+        const lineHeight = parseFloat(window.getComputedStyle(clone).lineHeight) || 20; // fallback
+        const maxHeight = lineHeight * maxLines;
+        
+        if (clone.scrollHeight <= maxHeight + (lineHeight * 0.5)) {
+            document.body.removeChild(clone);
+            return text;
+        }
+        
+        // Binary search for length to fit
+        let min = 0, max = text.length;
+        let bestFit = text.substring(0, 100) + "…"; // safe fallback
+        
+        while (min <= max) {
+            const mid = Math.floor((min + max) / 2);
+            const tryText = text.substring(0, mid) + "…";
+            clone.textContent = tryText;
+            
+            if (clone.scrollHeight <= maxHeight + (lineHeight * 0.5)) {
+                bestFit = tryText;
+                min = mid + 1;
+            } else {
+                max = mid - 1;
+            }
+        }
+        
+        document.body.removeChild(clone);
+        return bestFit;
+    }
+
+    function runNarratorOverwriteAnimation(container, newText) {
+        const token = ++window.othelloNarratorToken;
+        const oldText = container.textContent;
+        
+        // Phase 4: Dim Old + Bright New Overlay
+        container.classList.remove("dim"); // allow children opacity control
+        container.innerHTML = "";
+        
+        const base = document.createElement("div");
+        base.className = "narrator-base dim"; // explicit dim
+        base.textContent = oldText;
+        base.style.opacity = "0.3"; // Enforce dim visually
+        
+        const overlay = document.createElement("div");
+        overlay.className = "narrator-overlay";
+        overlay.textContent = ""; 
+        
+        container.appendChild(base);
+        container.appendChild(overlay);
+        
+        // Speed calculation: ~0.8s total
+        const words = newText.split(/(\s+)/);
+        const totalWords = words.length;
+        const duration = Math.min(1200, Math.max(600, totalWords * 30)); 
+        const interval = duration / totalWords;
+        
+        let wordIndex = 0;
+        
+        function tick() {
+            if (window.othelloNarratorToken !== token) return;
+            
+            // Batch words if interval is too small (<10ms)
+            const batchSize = interval < 10 ? 3 : 1;
+            
+            for(let i=0; i<batchSize && wordIndex < words.length; i++) {
+                overlay.textContent += words[wordIndex];
+                wordIndex++;
+            }
+            
+            if (wordIndex < words.length) {
+                setTimeout(tick, interval);
+            } else {
+                // Done
+                container.innerHTML = "";
+                container.textContent = newText;
+            }
+        }
+        
+        tick();
     }
 
     function updateChatPlaceholderVisibility() {
@@ -6524,6 +6639,13 @@
           input.value = "";
           input.focus();
       }
+      
+      // Duet Narrator: Dim on send
+      const chatPlaceholder = document.getElementById("chat-placeholder");
+      if (chatPlaceholder && chatPlaceholder.classList.contains("duet-narrator") && !chatPlaceholder.classList.contains("hidden")) {
+          chatPlaceholder.classList.add("dim");
+      }
+
       let sendUiState = beginSendUI({ label: isConfirmSave ? "Saving..." : "Thinking…", disableSend: true });
       try {
         const pendingRoutineId = othelloState.pendingRoutineSuggestionId;
