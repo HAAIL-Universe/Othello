@@ -380,12 +380,14 @@
 
       <!-- Moved Input Bar -->
       <div class="input-bar" id="input-bar">
-        <textarea id="user-input" placeholder="Tell Othello what you're working towards..." rows="1" style="resize:none; overflow-y:hidden;"></textarea>
-        
-        <!-- Animated Border Overlay for Typing State -->
-        <svg class="input-border-overlay" preserveAspectRatio="none">
-            <rect x="0" y="0" width="100%" height="100%" rx="20" ry="20" pathLength="100"></rect>
-        </svg>
+        <div class="input-wrapper">
+            <textarea id="user-input" placeholder="Tell Othello what you're working towards..." rows="1" style="resize:none; overflow-y:hidden;"></textarea>
+            
+            <!-- Animated Border Overlay for Typing State -->
+            <svg class="input-border-overlay" preserveAspectRatio="none">
+                <rect x="0" y="0" width="100%" height="100%" rx="20" ry="20" pathLength="100"></rect>
+            </svg>
+        </div>
 
         <!-- Single action button controlled by JS state -->
         <button type="button" id="composer-action-btn" class="composer-action-btn" data-action="mic" aria-label="Start voice input">

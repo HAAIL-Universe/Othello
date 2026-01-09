@@ -12717,3 +12717,34 @@ body.mode-duet-user-overlay .duet-peek-tab { display: none; }
 .input-bar.typing #user-input {
     border-color: transparent !important;
 }
+
+/* === FIX: Wrapping Input Layout === */
+.input-wrapper {
+  position: relative; 
+  flex: 1; /* Takes the flex growth that textarea used to have */
+  display: flex; /* Ensures textarea fills it */
+}
+
+/* Make textarea fill the wrapper */
+#user-input {
+  width: 100%;
+  box-sizing: border-box; /* CRITICAL */
+}
+
+/* --- Adjusted Overlay Positioning for Wrapper --- */
+.input-border-overlay {
+  position: absolute;
+  /* Match the border-radius of the textarea exactly */
+  /* In regular CSS #user-input has border-radius: 20px */
+  /* We inset slightly to cover the border, as we did before */
+  inset: -2px;
+  width: calc(100% + 4px);
+  height: calc(100% + 4px);
+  pointer-events: none;
+  z-index: 10;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+/* Important: The SVG rect needs to match the textarea curvature */
+/* The previous HTML had rx=20 ry=20 which matches current #user-input CSS */
