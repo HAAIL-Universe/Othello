@@ -7160,11 +7160,13 @@ body.mode-duet-user-overlay .duet-peek-tab { display: none; }
 .msg-row .bubble.msg--draft {
   position: relative !important;
   z-index: 1;
-  /* Remove default bot container styles so only the Draft Border exists */
-  background: transparent !important; 
-  border: none !important;
+  /* Restore bubble background for readability/pill shape */
+  background: var(--card-bg) !important; 
+  backdrop-filter: blur(12px) !important;
+  /* Hide default border so only the Draft Gradient SVG shows */
+  border: 1px solid transparent !important;
+  /* Optional: keep shadow or not. Standard bot bubble has no shadow usually, or small. */
   box-shadow: none !important;
-  backdrop-filter: none !important;
 }
 
 /* 1. Remove any legacy CSS-only pseudo-elements that created "bars" */
