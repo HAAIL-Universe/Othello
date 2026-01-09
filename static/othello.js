@@ -6877,7 +6877,8 @@
                 const svg = document.createElementNS(svgNS, "svg");
                 svg.setAttribute("class", "draft-border-overlay");
                 svg.setAttribute("preserveAspectRatio", "none");
-                
+                svg.style.background = "transparent"; // Explicit safety
+
                 // Use JS calculation to avoid calc() in attributes issues
                 const rect = document.createElementNS(svgNS, "rect");
                 rect.setAttribute("x", "0");
@@ -6886,6 +6887,7 @@
                 rect.setAttribute("height", "100%");
                 rect.setAttribute("rx", "18"); // Match CSS border-radius exactly
                 rect.setAttribute("ry", "18");
+                rect.setAttribute("fill", "none"); // CRITICAL safety against black box
                 rect.setAttribute("pathLength", "100"); // Standardize path length for percentages
                 
                 svg.appendChild(rect);

@@ -7151,96 +7151,65 @@ body.mode-duet-user-overlay .duet-peek-tab { display: none; }
 }
 
   
-/* Draft Mode Bubble Effect */  
-.msg-row .bubble.msg--draft {  
-  position: relative;  
-  z-index: 0;  
-}  
-.msg-row .bubble.msg--draft::before {  
-  content: '';  
-  position: absolute;  
-  inset: -3px;  
-  border-radius: inherit;  
-  padding: 3px;  
-  background: conic-gradient(from 0deg, transparent 0deg, transparent 45deg, #a855f7 45deg, #d8b4fe 135deg, transparent 135deg, transparent 225deg, #a855f7 225deg, #d8b4fe 315deg, transparent 315deg);  
-  -webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);  
-  -webkit-mask-composite: xor;  
-  mask-composite: exclude;  
-  animation: spin-glow 6s linear infinite;  
-  pointer-events: none;  
-  z-index: -1;  
-}  
-@keyframes spin-glow {  
-  0% { --angle: 0deg; transform: rotate(0deg); }  
-  100% { --angle: 360deg; transform: rotate(360deg); }  
-}  
-@media (prefers-reduced-motion: reduce) {  
-  .msg-row .bubble.msg--draft::before {  
-    animation: none;  
-  }  
+/* =========================================
+   DRAFT MODE FOCUS VISUALIZATION
+   ========================================= */
+
+/* Ensure the bubble can position the absolute overlay */
+.msg-row .bubble.msg--draft {
+  position: relative !important;
+  z-index: 1;
+}
+
+/* 1. Remove any legacy CSS-only pseudo-elements that created "bars" */
+.msg-row .bubble.msg--draft::before,
+.msg-row .bubble.msg--draft::after {
+  content: none !important;
+  display: none !important;
+  background: none !important;
+  border: none !important;
+  animation: none !important;
+}
+
+/* 2. The SVG container overrides */
+.draft-border-overlay {
+  position: absolute;
+  inset: -2px; /* Slight overlap to frame the bubble */
+  width: calc(100% + 4px);
+  height: calc(100% + 4px);
+  pointer-events: none;
+  z-index: 10;
+  overflow: visible;
+  background: transparent !important; /* Ensure SVG container is transparent */
+}
+
+/* 3. The Traveling Gradient Stroke */
+.draft-border-overlay rect {
+  fill: none !important; /* CRITICAL: Prevent black box */
+  stroke-width: 3px;
+  stroke-linecap: round;
   
-/* Draft Mode Bubble Effect */  
-.msg-row .bubble.msg--draft {  
-position: relative;  
-z-index: 0;  
-}  
-.msg-row .bubble.msg--draft::before {  
-content: ';  
-position: absolute;  
-inset: -3px;  
-border-radius: inherit;  
-padding: 3px;  
-background: conic-gradient(from 0deg, transparent 0deg, transparent 45deg, #a855f7 45deg, #d8b4fe 135deg, transparent 135deg, transparent 225deg, #a855f7 225deg, #d8b4fe 315deg, transparent 315deg);  
--webkit-mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);  
--webkit-mask-composite: xor;  
-mask-composite: exclude;  
-animation: spin-glow 6s linear infinite;  
-pointer-events: none;  
-z-index: -1;  
-}  
-@keyframes spin-glow {  
-0% { --angle: 0deg; transform: rotate(0deg); }  
-100% { --angle: 360deg; transform: rotate(360deg); }  
-}  
-@media (prefers-reduced-motion: reduce) {  
-.msg-row .bubble.msg--draft::before {  
-animation: none;  
-}  
+  /* 
+     pathLength="100" is set in JS. 
+     50 dash (lit), 50 gap (transparent).
+     This creates a "half-border" that travels.
+  */
+  stroke-dasharray: 50 50; 
   
-/* FIXED: Draft Mode Bubble Effect - SVG Overlay version */  
-.msg-row .bubble.msg--draft {  
-position: relative !important;  
-z-index: 1;  
-}  
-/* Reset previous broken specific styles */  
-.msg-row .bubble.msg--draft::before {  
-content: none !important;  
-display: none !important;  
-}  
-.draft-border-overlay {  
-position: absolute;  
-inset: -2px;  
-width: calc(100% + 4px);  
-height: calc(100% + 4px);  
-pointer-events: none;  
-z-index: 10;  
-overflow: visible;  
-}  
-.draft-border-overlay rect {  
-fill: none;  
-stroke-width: 3px;  
-stroke-linecap: round;  
-stroke-dasharray: 50 200; /* 50 units dash (approx 25-50% depending on size relative to path), gap large enough to see it move. Actually, with pathLength=100, 50 150 ensures single stroke? No. '50 50' means 50% on, 50% off. */
-stroke-dasharray: 50 50;
-animation: draft-orbit 4s linear infinite;  
-stroke: url(#draft-gradient);  
-filter: drop-shadow(0 0 4px rgba(124, 58, 237, 0.6)); /* Subtle flow */
-}  
-@keyframes draft-orbit {  
-to { stroke-dashoffset: -100; }  
-}  
-@media (prefers-reduced-motion: reduce) {  
-.draft-border-overlay rect { animation: none; stroke-dasharray: 100 0; }
-}  
+  animation: draft-orbit 4s linear infinite;
+  stroke: url(#draft-gradient);
+  filter: drop-shadow(0 0 4px rgba(124, 58, 237, 0.6));
+}
+
+@keyframes draft-orbit {
+  /* Move the dash offset by 100 units (one full cycle of dash+gap) to loop smoothly */
+  to { stroke-dashoffset: -100; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .draft-border-overlay rect { 
+    animation: none; 
+    stroke-dasharray: 100 0; /* Solid border if no motion */
+  }
+}
   
-asharray: 0.25 0.25; }  
