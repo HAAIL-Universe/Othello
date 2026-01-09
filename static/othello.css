@@ -7184,7 +7184,7 @@ body.mode-duet-user-overlay .duet-peek-tab { display: none; }
   width: calc(100% + 4px);
   height: calc(100% + 4px);
   pointer-events: none;
-  z-index: 10;
+  z-index: -1; /* Move BEHIND text for safety */
   overflow: visible;
   background: transparent !important; /* Ensure SVG container is transparent */
 }
@@ -7192,6 +7192,7 @@ body.mode-duet-user-overlay .duet-peek-tab { display: none; }
 /* 3. The Traveling Gradient Stroke */
 .draft-border-overlay rect {
   fill: none !important; /* CRITICAL: Prevent black box */
+  fill-opacity: 0 !important;
   stroke-width: 3px;
   stroke-linecap: round;
   
