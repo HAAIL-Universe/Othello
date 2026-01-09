@@ -4293,16 +4293,16 @@
           return text.substring(0, splitIdx);
       }
 
-      // Rule 2: First line end with (...)
+      // Rule 2: First line end with ...
       const newlineIdx = text.indexOf('\n');
       if (newlineIdx !== -1) {
-          return text.substring(0, newlineIdx) + "(...)";
+          return text.substring(0, newlineIdx) + "...";
       }
 
       // Rule 3: Fallback length check (if no dots or newlines but long text)
       const words = text.trim().split(/\s+/);
       if (words.length > maxWords) {
-          return words.slice(0, maxWords).join(" ") + "(...)";
+          return words.slice(0, maxWords).join(" ") + "...";
       }
       
       return text;
