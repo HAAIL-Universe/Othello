@@ -4335,6 +4335,12 @@
             row.dataset.collapsed = "1";
             row.classList.remove("is-expanded");
         }
+
+        // Trigger layout update for Duet/Focus mode (e.g. un-peek user message if bot shrinks)
+        if (typeof updateFocusPeekBehavior === 'function') {
+            // Small delay to ensure DOM paint has settled the new height
+            requestAnimationFrame(() => updateFocusPeekBehavior());
+        }
     }
     
     // Alias for backward compatibility if needed, though we will update usages

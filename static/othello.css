@@ -7160,6 +7160,11 @@ body.mode-duet-user-overlay .duet-peek-tab { display: none; }
 .msg-row .bubble.msg--draft {
   position: relative !important;
   z-index: 1;
+  /* Remove default bot container styles so only the Draft Border exists */
+  background: transparent !important; 
+  border: none !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
 }
 
 /* 1. Remove any legacy CSS-only pseudo-elements that created "bars" */
