@@ -7160,13 +7160,13 @@ body.mode-duet-user-overlay .duet-peek-tab { display: none; }
 .msg-row .bubble.msg--draft {
   position: relative !important;
   z-index: 1;
-  /* Restore bubble background for readability/pill shape */
-  background: var(--card-bg) !important; 
+  /* "Almost identical to background" - Darker than card-bg */
+  background: var(--bg-1) !important; 
+  /* "Subtle teal solid glow on the full parameter" */
+  box-shadow: 0 0 20px rgba(20, 184, 166, 0.1), 0 0 0 1px rgba(20, 184, 166, 0.25) !important;
   backdrop-filter: blur(12px) !important;
-  /* Hide default border so only the Draft Gradient SVG shows */
+  /* Hide default border so only the Draft Gradient SVG (and our glow) shows */
   border: 1px solid transparent !important;
-  /* Optional: keep shadow or not. Standard bot bubble has no shadow usually, or small. */
-  box-shadow: none !important;
 }
 
 /* 1. Remove any legacy CSS-only pseudo-elements that created "bars" */
