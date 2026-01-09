@@ -7796,75 +7796,118 @@ body.chat-open #global-chat-fab {
 
 
 .kitt-scanner::before,
+.kitt-scanner::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 15%;
+  /* Shooting star base props */
+  border-radius: 999px;
+  opacity: 0.9;
+  will-change: left, right, width;
+}
+
+.kitt-scanner::before {
+  /* White tip on left, fading red to right */
+  background: linear-gradient(90deg, 
+      rgba(255, 255, 255, 1) 0%, 
+      rgba(255, 60, 60, 0.9) 15%, 
+      rgba(255, 60, 60, 0) 100%);
+  /* Intense neon glow: White core -> Bright Red -> Deep Red -> Ambient Red */
+  box-shadow: 
+      0 0 5px rgba(255, 255, 255, 1), 
+      0 0 10px rgba(255, 50, 50, 1), 
+      0 0 25px rgba(255, 30, 30, 0.9),
+      0 0 50px rgba(255, 0, 0, 0.7);
+}
 
 .kitt-scanner::after {
-
-  content: '';
-
-  position: absolute;
-
-  top: 0;
-
-  bottom: 0;
-
-  width: 15%;
-
-  /* Red KITT scanner style */
-
-  background: rgba(255, 60, 60, 0.9);
-
-  box-shadow: 0 0 10px rgba(255, 60, 60, 0.8), 0 0 5px rgba(255, 80, 80, 0.6);
-
-  border-radius: 2px;
-
-  opacity: 0.9;
-
-  will-change: left, right;
-
+  /* White tip on right, fading red to left */
+  background: linear-gradient(-90deg, 
+      rgba(255, 255, 255, 1) 0%, 
+      rgba(255, 60, 60, 0.9) 15%, 
+      rgba(255, 60, 60, 0) 100%);
+  /* Intense neon glow: White core -> Bright Red -> Deep Red -> Ambient Red */
+  box-shadow: 
+      0 0 5px rgba(255, 255, 255, 1), 
+      0 0 10px rgba(255, 50, 50, 1), 
+      0 0 25px rgba(255, 30, 30, 0.9),
+      0 0 50px rgba(255, 0, 0, 0.7);
 }
 
 
 
 .chat-sheet.is-thinking .kitt-scanner::before {
-
-  left: 50%;
-
-  transform: translateX(-50%);
-
-  animation: scanner-split-left 1.5s ease-in-out infinite alternate;
-
+  animation: scanner-cycle 2s ease-in-out infinite;
 }
-
-
 
 .chat-sheet.is-thinking .kitt-scanner::after {
-
-  right: 50%;
-
-  transform: translateX(50%);
-
-  animation: scanner-split-right 1.5s ease-in-out infinite alternate;
-
+  display: none;
 }
 
-
-
-@keyframes scanner-split-left {
-
-  0% { left: 50%; width: 5%; opacity: 0.5; }
-
-  100% { left: 0%; width: 20%; opacity: 1; }
-
+@keyframes scanner-cycle {
+  0% { 
+    left: 0; 
+    width: 0.5%; 
+    transform: scaleX(-1); /* Head facing Right */
+  }
+  10% { width: 25%; }
+  50% { 
+    left: 100%; 
+    width: 0.5%; 
+    transform: translateX(-100%) scaleX(-1); /* Hit Right Wall */
+  }
+  50.1% { 
+    left: 100%;
+    transform: translateX(-100%) scaleX(1); /* Flip - Head facing Left */
+  }
+  60% { width: 25%; }
+  100% { 
+    left: 0; 
+    width: 0.5%; 
+    transform: scaleX(1); /* Hit Left Wall */
+  }
 }
-
-
 
 @keyframes scanner-split-right {
-
-  0% { right: 50%; width: 5%; opacity: 0.5; }
-
-  100% { right: 0%; width: 20%; opacity: 1; }
-
+  0% { 
+    right: 50%; 
+    width: 0.5%; 
+    opacity: 0; 
+    transform: translateX(50%) scaleX(1); 
+  }
+  10% {
+    width: 25%;
+    opacity: 1;
+  }
+  45% {
+    width: 25%;
+  }
+  50% { 
+    right: 0%; 
+    width: 0.5%; /* Squash at wall */
+    opacity: 1; 
+    transform: translateX(50%) scaleX(1); 
+  }
+  50.1% { 
+    right: 0%;
+    width: 0.5%;
+    transform: translateX(50%) scaleX(-1); /* Flip while squashed */
+  }
+  60% {
+    width: 25%;
+  }
+  90% {
+    width: 25%;
+    opacity: 1;
+  }
+  100% { 
+    right: 50%; 
+    width: 0.5%; 
+    opacity: 0; 
+    transform: translateX(50%) scaleX(-1); 
+  }
 }
 
 

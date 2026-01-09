@@ -6684,6 +6684,7 @@
           console.log(`[Othello UI] Intercepted focus command for goal ${targetId}`);
           
           input.value = "";
+          document.getElementById('input-bar')?.classList.remove('typing');
           addMessage("user", text); // Echo user input
           
           if (typeof setActiveGoal === "function") {
@@ -6701,6 +6702,7 @@
 
       if (commandPhrases.has(lowerText) && !isQuestion) {
           input.value = "";
+          document.getElementById('input-bar')?.classList.remove('typing');
           input.focus();
           
           const convKey = othelloState.activeConversationId ? String(othelloState.activeConversationId) : "default";
@@ -6742,6 +6744,7 @@
 
       if (overrideText === null) {
           input.value = "";
+          document.getElementById('input-bar')?.classList.remove('typing');
           input.focus();
       }
       
@@ -7438,6 +7441,9 @@
       if (inputBarContainer) {
           if (currentMode === "recording") inputBarContainer.classList.add("is-recording");
           else inputBarContainer.classList.remove("is-recording");
+          
+          if (currentMode === "typing" && !inputBarContainer.classList.contains("typing")) inputBarContainer.classList.add("typing");
+          else if (currentMode !== "typing" && inputBarContainer.classList.contains("typing")) inputBarContainer.classList.remove("typing");
       }
       if (currentMode === "recording") input.classList.add("composer-ghost");
       else input.classList.remove("composer-ghost");
