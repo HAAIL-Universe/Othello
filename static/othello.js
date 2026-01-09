@@ -5268,25 +5268,16 @@
       bubble.appendChild(meta);
 
       // Inject Traveling Border for User Messages
+      // REMOVED: Using CSS background-gradient method instead (Commit b49272d styling)
+      /* 
       if (role === "user") {
           const svgNS = "http://www.w3.org/2000/svg";
           const svg = document.createElementNS(svgNS, "svg");
           svg.setAttribute("class", "user-border-overlay");
-          svg.setAttribute("preserveAspectRatio", "none");
-          svg.style.borderRadius = "inherit"; 
-          
-          const rect = document.createElementNS(svgNS, "rect");
-          rect.setAttribute("x", "0");
-          rect.setAttribute("y", "0");
-          rect.setAttribute("width", "100%");
-          rect.setAttribute("height", "100%");
-          rect.setAttribute("rx", "18"); // Approx match to css border-radius
-          rect.setAttribute("ry", "18");
-          rect.setAttribute("pathLength", "100");
-          
-          svg.appendChild(rect);
+          // ... 
           bubble.appendChild(svg);
       }
+      */
 
       if (role === "bot" && othelloState.currentMode === "companion") {
         const sourceClientMessageId = options && typeof options.sourceClientMessageId === "string"

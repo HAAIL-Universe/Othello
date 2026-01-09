@@ -1027,17 +1027,30 @@
     }
 
     .msg-row.user .bubble {
-      /* New User Style: Dark background (no static glowbar) */
-      background: var(--bg-1);
+      /* New User Style: Dark background with Animated Gradient Border */
+      border: 1px solid transparent; /* or transparent !important if needed */
+      
+      background: 
+        /* The Fill: Deep Charcoal Gradient */
+        linear-gradient(to top, #0a0a0c, #141418) padding-box, 
+        /* The Border: Seamless Rainbow Loop (Matching Input) */
+        linear-gradient(135deg, 
+          #a855f7, #6366f1, #3b82f6, #14b8a6, #d946ef, #a855f7, 
+          #6366f1, #3b82f6, #14b8a6, #d946ef, #a855f7
+        ) border-box;
+      
+      background-size: 100% 100%, 200% 100%;
+      animation: typing-gradient-move 3s linear infinite;
+      
       color: var(--text-main); 
       border-bottom-right-radius: 0.3rem;
-      /* Remove static glow, let SVG pinstripe handle it */
-      box-shadow: none; 
-      /* Or maybe just a faint border so it's not invisible if SVG fails? */
-      border: 1px solid transparent; 
-      backdrop-filter: blur(12px);
+      
+      /* Matching glow, subtle */
+      box-shadow: 0 0 15px rgba(99, 102, 241, 0.15);
+      
       position: relative;
       z-index: 1; 
+      backdrop-filter: blur(12px); 
     }
 
     .msg-row.bot .bubble {
@@ -18121,9 +18134,23 @@ body.mode-duet-user-overlay .duet-peek-tab { display: none; }
   box-shadow: none !important;
 }
 
-/* Also ensure the non-focused typing state (if any) is clean */
+/* New Gradient Border Style (from Commit b49272d) */
 .input-bar.typing #user-input {
-    border-color: transparent !important;
+      border: 2px solid transparent !important; 
+      background: 
+        linear-gradient(rgba(15, 23, 42, 0.95), rgba(15, 23, 42, 0.95)) padding-box, 
+        linear-gradient(135deg, 
+          #a855f7, #6366f1, #3b82f6, #14b8a6, #d946ef, #a855f7, 
+          #6366f1, #3b82f6, #14b8a6, #d946ef, #a855f7
+        ) border-box;
+      background-size: 100% 100%, 200% 100%;
+      animation: typing-gradient-move 3s linear infinite;
+      box-shadow: 0 0 15px rgba(99, 102, 241, 0.2);
+}
+
+@keyframes typing-gradient-move {
+  0% { background-position: 0 0, 0 0; }
+  100% { background-position: 0 0, -200% 0; }
 }
 
 /* === FIX: Wrapping Input Layout === */
@@ -18139,20 +18166,7 @@ body.mode-duet-user-overlay .duet-peek-tab { display: none; }
   box-sizing: border-box; /* CRITICAL */
 }
 
-/* --- Adjusted Overlay Positioning for Wrapper --- */
+/* Disable old overlay */
 .input-border-overlay {
-  position: absolute;
-  /* Match the border-radius of the textarea exactly */
-  /* In regular CSS #user-input has border-radius: 20px */
-  /* We inset to 0 to show on the inner perimeter */
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  pointer-events: none;
-  z-index: 10;
-  opacity: 0;
-  transition: opacity 0.3s ease;
+  display: none !important;
 }
-
-/* Important: The SVG rect needs to match the textarea curvature */
-/* The previous HTML had rx=20 ry=20 which matches current #user-input CSS */
