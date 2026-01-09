@@ -7026,9 +7026,10 @@ body.chat-open #global-chat-fab {
 }
 
 
-/* User Message Collapsing */
-.msg-row.user.can-collapse .bubble { cursor: pointer; }
-.msg-row.user.can-collapse .bubble:hover { filter: brightness(0.95); }
+/* Message Collapsing (User & Bot) */
+.msg-row.can-collapse .bubble { cursor: pointer; }
+.msg-row.can-collapse .bubble:hover { filter: brightness(0.95); }
+.msg-row.bot.can-collapse .bubble:hover { filter: brightness(1.05); } /* Slightly lighter for dark bot bubbles */
 
 
 /* User Peek Tab (Focus Mode) */

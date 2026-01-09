@@ -4308,7 +4308,7 @@
         if (meta) bubble.appendChild(meta);
     }
 
-    function handleUserMessageClick(e) {
+    function handleMessageCollapseClick(e) {
         if (e.target.closest("button") || e.target.closest("a") || e.target.closest(".interactive")) return;
         const row = e.currentTarget;
         if (row.dataset.collapsed === "1") {
@@ -4323,6 +4323,9 @@
             row.classList.remove("is-expanded");
         }
     }
+    
+    // Alias for backward compatibility if needed, though we will update usages
+    const handleUserMessageClick = handleMessageCollapseClick;
 
     function applyUserCollapseIfNeeded(rowEl, text) {
       if (!rowEl || !rowEl.classList.contains("user")) return;
@@ -4345,9 +4348,62 @@
       updateBubbleContent(rowEl, preview);
 
       if (rowEl.dataset.boundToggle !== "1") {
-          rowEl.addEventListener("click", handleUserMessageClick);
+          rowEl.addEventListener("click", handleMessageCollapseClick);
           rowEl.dataset.boundToggle = "1";
           rowEl.classList.add("can-collapse");
+      }
+    }
+    
+    // New Function: Enable collapse for long Bot messages, but default to EXPANDED
+    function applyBotCollapseIfNeeded(rowEl, text) {
+      if (!rowEl || !rowEl.classList.contains("bot")) return;
+      // Exclude messages with functional UI bars immediately visible inside text? 
+      // Actually updateBubbleContent overwrites innerHTML, so we must be careful if the bubble has appended children like goal bars.
+      // Current updateBubbleContent implementation:
+      // bubble.innerHTML = formatMessageText(simpleText);
+      // if (meta) bubble.appendChild(meta);
+      // It DOES NOT preserve other appended elements (like bars).
+      
+      // Strategy: Only collapse the TEXT portion. 
+      // But updateBubbleContent nukes everything.
+      // Checking updateBubbleContent:
+      /* 
+         function updateBubbleContent(rowEl, simpleText) {
+             const bubble = rowEl.querySelector(".bubble");
+             if (!bubble) return;
+             const meta = bubble.querySelector(".meta");
+             bubble.innerHTML = formatMessageText(simpleText);
+             if (meta) bubble.appendChild(meta);
+         }
+      */
+      // This function is destructive to appended bars (CommitmentBar, PlanActionBar, SVGs).
+      // We must check if the message has special interactive children before enabling collapse.
+      
+      const bubble = rowEl.querySelector(".bubble");
+      // If bubble has children other than .meta and text nodes, we might break things.
+      // Helper to check for interactive elements
+      const hasInteractive = bubble.querySelector(".commitment-bar, .planner-action-bar, .draft-border-overlay");
+      if (hasInteractive) return; // Do not enable collapse for interactive messages
+      
+      const fullText = text || rowEl.dataset.fullText;
+      if (!fullText) return;
+      
+      const wordCount = countWords(fullText);
+      if (wordCount <= 30) return; // Slightly higher threshold for bot (30)
+
+      rowEl.dataset.fullText = fullText;
+      const preview = getCollapsedPreview(fullText, 30);
+      rowEl.dataset.collapsedText = preview;
+      
+      // Default: EXPANDED (0)
+      rowEl.dataset.collapsed = "0";
+      // We don't change content, just enable the toggle
+      
+      if (rowEl.dataset.boundToggle !== "1") {
+          rowEl.addEventListener("click", handleMessageCollapseClick);
+          rowEl.dataset.boundToggle = "1";
+          rowEl.classList.add("can-collapse");
+          rowEl.classList.add("is-expanded");
       }
     }
 
@@ -4371,7 +4427,7 @@
                              row.dataset.collapsedText = getCollapsedPreview(row.dataset.fullText);
                          }
                          if (row.dataset.boundToggle !== "1") {
-                             row.addEventListener("click", handleUserMessageClick);
+                             row.addEventListener("click", handleMessageCollapseClick);
                              row.dataset.boundToggle = "1";
                              row.classList.add("can-collapse");
                          }
@@ -5207,6 +5263,8 @@
 
       // Collapse user message if needed (Duet Mode)
       applyUserCollapseIfNeeded(row, text);
+      // Allow collapsing large bot messages (Tap to collapse) -- Default Expanded
+      applyBotCollapseIfNeeded(row, text);
 
       if (role === "user" && clientMessageId) {
         othelloState.messagesByClientId[clientMessageId] = {
