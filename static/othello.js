@@ -4008,42 +4008,9 @@
     function renderDraftPreview() {
         const container = document.getElementById("draft-preview");
         if (!container) return;
-        
-        if (!othelloState.activeDraft || !othelloState.activeDraftPayload) {
-            container.style.display = "none";
-            container.innerHTML = "";
-            return;
-        }
-        
-        // Dynamic offset for ribbon
-        if (focusRibbon && focusRibbon.classList.contains("visible")) {
-            const h = focusRibbon.offsetHeight || 0;
-            container.style.marginTop = h ? (h + 8) + "px" : "0px";
-        } else {
-            container.style.marginTop = "0px";
-        }
-        
-        const p = othelloState.activeDraftPayload;
-        // Filter blank steps
-        const steps = (p.steps || []).filter(s => typeof s === "string" && s.trim());
-        
-        console.debug("[Othello UI] Draft preview steps:", steps.length);
-        
-        let html = `<h3>${p.title || "New Goal"}</h3>`;
-        html += `<div class="draft-meta">Target: ${p.target_days || 7} days</div>`;
-        
-        if (steps.length > 0) {
-            html += `<ul class="draft-steps">`;
-            steps.forEach(step => {
-                html += `<li>${step}</li>`;
-            });
-            html += `</ul>`;
-        } else {
-            html += `<div class="draft-meta">No steps generated yet.</div>`;
-        }
-        
-        container.innerHTML = html;
-        container.style.display = "block";
+        // User requested removal of draft header bar.
+        container.style.display = "none";
+        container.innerHTML = "";
     }
 
     // ===== FOCUS RIBBON =====
@@ -6899,6 +6866,32 @@
         if (hasRoutineIntent) intentMarkers.push("🔁 Routine");
 
         const botEntry = addMessage("bot", replyText, { sourceClientMessageId: clientMessageId, intentMarkers });
+
+        // Draft Mode Visual Cue: Apply rotating half-glow border to the draft card bubble
+        if (data.draft_context && data.draft_context.draft_type === "goal") {
+            if (botEntry && botEntry.bubble) {
+                botEntry.bubble.classList.add("msg--draft");
+                
+                // Inject SVG Overlay for smooth border animation
+                const svgNS = "http://www.w3.org/2000/svg";
+                const svg = document.createElementNS(svgNS, "svg");
+                svg.setAttribute("class", "draft-border-overlay");
+                svg.setAttribute("preserveAspectRatio", "none");
+                
+                // Use JS calculation to avoid calc() in attributes issues
+                const rect = document.createElementNS(svgNS, "rect");
+                rect.setAttribute("x", "0");
+                rect.setAttribute("y", "0");
+                rect.setAttribute("width", "100%");
+                rect.setAttribute("height", "100%");
+                rect.setAttribute("rx", "18"); // Match CSS border-radius exactly
+                rect.setAttribute("ry", "18");
+                rect.setAttribute("pathLength", "100"); // Standardize path length for percentages
+                
+                svg.appendChild(rect);
+                botEntry.bubble.appendChild(svg);
+            }
+        }
         
         // Clear hint to prevent reuse
         if (othelloState.intentHintsByClientId[clientMessageId]) {
@@ -7025,6 +7018,13 @@
             localStorage.removeItem("othello_active_draft");
             localStorage.removeItem("othello_active_draft_payload");
             
+            // Remove draft styling (glow) from any existing draft bubbles as draft is now complete
+            document.querySelectorAll('.msg--draft').forEach(el => {
+                el.classList.remove('msg--draft');
+                const overlay = el.querySelector('.draft-border-overlay');
+                if (overlay) overlay.remove();
+            });
+            
             if (data.saved_goal.goal_id) {
                 othelloState.activeGoalId = data.saved_goal.goal_id;
                 showToast(`Goal created: ${data.saved_goal.title || "New Goal"}`);
@@ -7034,6 +7034,13 @@
         }
 
         if (data.dismissed_draft_id) {
+            // Visual cleanup for dismissed draft
+            document.querySelectorAll('.msg--draft').forEach(el => {
+                el.classList.remove('msg--draft');
+                const overlay = el.querySelector('.draft-border-overlay');
+                if (overlay) overlay.remove();
+            });
+
             if (othelloState.activeDraft && othelloState.activeDraft.draft_id === data.dismissed_draft_id) {
                 othelloState.activeDraft = null;
                 othelloState.activeDraftPayload = null;

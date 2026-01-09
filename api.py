@@ -1117,18 +1117,19 @@ def _generate_goal_draft_payload(user_input: str) -> Dict[str, Any]:
     from core.llm_wrapper import LLMWrapper
     
     system_prompt = (
-        "You are a goal extraction engine. Extract goal details from the user's request into a JSON object.\n"
+        "You are a goal extraction engine. Extract goal details from the user's request into a structured draft.\n"
         "Input may contain 'User Request' and '[CONTEXT]' sections. \n"
         "CRITICAL RULE: The User Request might be a trigger like 'Turn that into a goal'. IGNORE the trigger phrase itself. Extract the goal title and details from the [CONTEXT] or the underlying intent.\n"
         "DO NOT include the context markers or raw transcript in the output fields.\n"
         "\n"
         "Required keys:\n"
         "- title: string (concise goal title, e.g. 'Learn to ride a bike'. Ignore 'make this a goal' triggers)\n"
-        "- intent: string (specific objective or outcome. Why is the user doing this?)\n"
-        "- steps: array of strings (suggested actionable steps) - keep these high-level and few (3-5 max).\n"
-        "- needs: array of strings (optional constraints, resources, or requirements)\n"
-        "- metrics: array of strings (success criteria) - optional\n"
-        "- target_days: integer or null (number of days to achieve)\n"
+        "- description: string (What is the goal? Detailed description.)\n"
+        "- objectives: array of strings (bullet points of sub-goals or major milestones)\n"
+        "- timeline: string or null (e.g. '2 weeks', 'by Friday', 'Q3 2026')\n"
+        "- resources: array of strings (resources needed, constraints, requirements)\n"
+        "- missing_fields: array of strings (list of keys from above that you could not confidently infer)\n"
+        "- next_question: string or null (If fields are missing, ask ONE specific question to gather the most important missing info. e.g. 'What is the timeline for this?')\n"
         "Return ONLY valid JSON."
     )
     
@@ -1158,46 +1159,32 @@ def _generate_goal_draft_payload(user_input: str) -> Dict[str, Any]:
             raw_title = raw_title.replace("**", "").strip()
             data["title"] = raw_title
 
-        # Format body to match Standard Flow markdown style
-        intent = data.get("intent") or data.get("body") or ""
-        # Ensure intent is stored independently
-        data["intent"] = intent
-
-        resources = data.get("resources") or data.get("needs") or []
-        metrics = data.get("metrics") or []
-        
-        body_parts = []
-        if intent:
-            body_parts.append(f"### Intent\n{intent}")
+        # Normalize keys
+        if "steps" not in data and "objectives" in data:
+            data["steps"] = data["objectives"]
             
-        if resources and isinstance(resources, list):
-            body_parts.append("### Resources / Needs")
-            for r in resources:
-                body_parts.append(f"- {r}")
-                
-        if metrics and isinstance(metrics, list):
-            body_parts.append("### Metrics")
-            for m in metrics:
-                body_parts.append(f"- {m}")
+        # Ensure lists are lists
+        for k in ["objectives", "resources", "missing_fields"]:
+            if k not in data or not isinstance(data[k], list):
+                data[k] = []
         
-        final_body = "\n\n".join(body_parts)
-        if not final_body and intent:
-             final_body = intent
+        # Construct body for legacy fields if needed
+        data["intent"] = data.get("description", "")
+        data["body"] = data.get("description", "")
 
-        # Inject constructed body back into data for legacy/UI compatibility
-        data["body"] = final_body
-        # Ensure needs are available as 'needs' or 'resources'
-        data["needs"] = resources
+        return data
         
-        return _normalize_goal_draft_payload(data)
     except Exception as e:
         logging.error(f"Failed to generate goal draft payload: {e}")
         # Fallback
         return {
-            "title": _extract_goal_title_suggestion(user_input) or "New Goal",
-            "target_days": 7,
-            "steps": [],
-            "body": user_input
+            "title": "New Goal",
+            "description": user_input[:200],
+            "objectives": [],
+            "timeline": None,
+            "resources": [],
+            "missing_fields": ["description", "objectives", "timeline"],
+            "next_question": "What specifically would you like to achieve?"
         }
 
 
@@ -4800,26 +4787,47 @@ def handle_message():
             
             draft_id = suggestion["id"]
             
-            # Construct rich markdown reply matching User Requested "Clean Draft" format
+            # Construct rich markdown reply matching Structured Goal Draft format
             md_lines = ["**Goal Draft**"]
-            md_lines.append(f"**Title:** {payload.get('title', 'New Goal')}")
+            md_lines.append(f"**Title:** {payload.get('title') or '(missing)'}")
             
-            intent = payload.get("intent")
-            if intent:
-                md_lines.append(f"**Why / Intent (optional):** {intent}")
-                
-            steps = payload.get("steps", [])
-            if steps:
-                md_lines.append("**Steps (suggested):**")
-                for i, s in enumerate(steps, 1):
-                    md_lines.append(f"{i}) {s}")
+            # Description
+            desc = payload.get("description")
+            md_lines.append(f"**Description:** {desc if desc else '(missing)'}")
             
-            needs = payload.get("needs") or payload.get("resources")
-            if needs:
-                val = "; ".join(needs) if isinstance(needs, list) else str(needs)
-                md_lines.append(f"**Needs / Constraints:** {val}")
+            # Objectives
+            obj = payload.get("objectives") or payload.get("steps")
+            md_lines.append("**Objectives:**")
+            if obj and isinstance(obj, list) and len(obj) > 0:
+                for o in obj:
+                    md_lines.append(f"- {o}")
+            else:
+                md_lines.append("(missing)")
                 
-            md_lines.append("**Question (single):** Create this goal?")
+            # Timeline
+            timeline = payload.get("timeline")
+            md_lines.append(f"**Timeline:** {timeline if timeline else '(missing)'}")
+            
+            # Resources
+            res = payload.get("resources") or payload.get("needs")
+            md_lines.append("**Resources Needed:**")
+            if res and isinstance(res, list) and len(res) > 0:
+                for r in res:
+                    md_lines.append(f"- {r}")
+            else:
+                md_lines.append("(missing)")
+            
+            # Determine question
+            next_q = payload.get("next_question")
+            if not next_q:
+                # Fallback if LLM didn't provide one but fields are missing
+                missing = payload.get("missing_fields", [])
+                if missing:
+                    next_q = f"What is the {missing[0]}?"
+                else:
+                    next_q = "Ready to confirm?"
+            
+            md_lines.append(f"\n**{next_q}**")
             
             rich_reply = "\n".join(md_lines)
 

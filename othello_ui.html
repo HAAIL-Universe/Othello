@@ -10,6 +10,16 @@
 </head>
 
 <body>
+    <!-- SVG Defs for Draft Gradient -->
+    <svg style="position: absolute; width: 0; height: 0; pointer-events: none;" aria-hidden="true">
+      <defs>
+        <linearGradient id="draft-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+          <!-- Exact purple focus glow style colors: #6366f1 (indigo-500) to #7c3aed (violet-600) -->
+          <stop offset="0%" stop-color="#6366f1" />
+          <stop offset="100%" stop-color="#7c3aed" /> 
+        </linearGradient>
+      </defs>
+    </svg>
     <div id="connect-overlay" class="waking-overlay" style="display:none;">
       <div class="waking-overlay__spinner" id="connect-spinner"></div>
       <div id="connect-status" class="waking-overlay__status" style="margin-top:1.2rem;">Connecting to server…</div>
