@@ -4285,23 +4285,27 @@
     function getCollapsedPreview(text, maxWords = 20) {
       if (!text) return "";
       
-      // Heuristic: First sentence logic
-      // Find first occurrence of . ! ? followed by whitespace or end
-      const match = text.match(/([.!?])(\s|$)/);
+      // Rule 1: First sentence with full-stop (User Request)
+      // Find first occurrence of . followed by whitespace or end
+      const match = text.match(/\.(\s|$)/);
       if (match) {
           const splitIdx = match.index + 1; // include punctuation
-          const sentence = text.substring(0, splitIdx);
-          // If first sentence is reasonable length, use it.
-          // Otherwise fall back to truncation.
-          if (countWords(sentence) < 60) {
-              return sentence;
-          }
+          return text.substring(0, splitIdx);
       }
 
+      // Rule 2: First line end with (...)
+      const newlineIdx = text.indexOf('\n');
+      if (newlineIdx !== -1) {
+          return text.substring(0, newlineIdx) + "(...)";
+      }
+
+      // Rule 3: Fallback length check (if no dots or newlines but long text)
       const words = text.trim().split(/\s+/);
-      if (words.length <= maxWords) return text;
-      // No space before dots
-      return words.slice(0, maxWords).join(" ") + "...";
+      if (words.length > maxWords) {
+          return words.slice(0, maxWords).join(" ") + "(...)";
+      }
+      
+      return text;
     }
 
     function updateBubbleContent(rowEl, simpleText) {
@@ -4353,20 +4357,25 @@
       
       if (rowEl.dataset.manuallyExpanded === "1") return;
       
-      const wordCount = countWords(fullText);
-      if (wordCount <= 20) return;
+      // Strict word count removed to allow specific full-stop auto-collapse
+      // const wordCount = countWords(fullText);
+      // if (wordCount <= 20) return;
 
       rowEl.dataset.fullText = fullText;
       const preview = getCollapsedPreview(fullText);
-      rowEl.dataset.collapsedText = preview;
       
-      rowEl.dataset.collapsed = "1";
-      updateBubbleContent(rowEl, preview);
+      // Only collapse if there is an actual reduction
+      if (preview.length < fullText.length) {
+          rowEl.dataset.collapsedText = preview;
+          
+          rowEl.dataset.collapsed = "1";
+          updateBubbleContent(rowEl, preview);
 
-      if (rowEl.dataset.boundToggle !== "1") {
-          rowEl.addEventListener("click", handleMessageCollapseClick);
-          rowEl.dataset.boundToggle = "1";
-          rowEl.classList.add("can-collapse");
+          if (rowEl.dataset.boundToggle !== "1") {
+              rowEl.addEventListener("click", handleMessageCollapseClick);
+              rowEl.dataset.boundToggle = "1";
+              rowEl.classList.add("can-collapse");
+          }
       }
     }
     
