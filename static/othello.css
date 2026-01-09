@@ -7196,9 +7196,10 @@ body.mode-duet-user-overlay .duet-peek-tab { display: none; }
   */
   stroke-dasharray: 50 50; 
   
-  animation: draft-orbit 4s linear infinite;
+  /* Slower animation (8s) and brighter/stronger glow to match Focus Mode */
+  animation: draft-orbit 8s linear infinite;
   stroke: url(#draft-gradient);
-  filter: drop-shadow(0 0 4px rgba(124, 58, 237, 0.6));
+  filter: drop-shadow(0 0 6px rgba(99, 102, 241, 0.8));
 }
 
 @keyframes draft-orbit {
