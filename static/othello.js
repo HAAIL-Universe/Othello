@@ -4302,10 +4302,14 @@
         const bubble = rowEl.querySelector(".bubble");
         if (!bubble) return;
         const meta = bubble.querySelector(".meta");
+        const overlay = bubble.querySelector(".draft-border-overlay");
+
         // formatMessageText is global/hoisted
         bubble.innerHTML = formatMessageText(simpleText);
         // Restore meta if it existed
         if (meta) bubble.appendChild(meta);
+        // Restore overlay if it existed (Goal Drafts)
+        if (overlay) bubble.appendChild(overlay);
     }
 
     function handleMessageCollapseClick(e) {
@@ -4382,8 +4386,9 @@
       const bubble = rowEl.querySelector(".bubble");
       // If bubble has children other than .meta and text nodes, we might break things.
       // Helper to check for interactive elements
-      const hasInteractive = bubble.querySelector(".commitment-bar, .planner-action-bar, .draft-border-overlay");
-      if (hasInteractive) return; // Do not enable collapse for interactive messages
+      // Update: .draft-border-overlay is specifically ALLOWED now (handled in updateBubbleContent)
+      const hasInteractive = bubble.querySelector(".commitment-bar, .planner-action-bar");
+      if (hasInteractive) return; // Do not enable collapse for messages with functional bars
       
       const fullText = text || rowEl.dataset.fullText;
       if (!fullText) return;
