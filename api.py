@@ -1118,8 +1118,9 @@ def _generate_goal_draft_payload(user_input: str) -> Dict[str, Any]:
     
     system_prompt = (
         "You are a goal extraction engine. Extract goal details from the user's request into a JSON object.\n"
+        "Input may contain 'User Request' and '[CONTEXT]' sections. Use the context to infer details but DO NOT include the context markers or raw transcript in the output fields.\n"
         "Required keys:\n"
-        "- title: string (concise goal title)\n"
+        "- title: string (concise goal title, e.g. 'Bake Chocolate Cake'. Do not include 'User Request' prefix)\n"
         "- target_days: integer or null (number of days to achieve)\n"
         "- steps: array of strings (actionable steps) - keep these high-level and few (3-5 max). If the user request is vague, provide only 1-2 starting steps.\n"
         "- intent: string (specific objective or outcome)\n"
@@ -4751,7 +4752,7 @@ def handle_message():
                          full_transcript = "\n".join(lines)
                          
                          # Prepend context to generation text so the LLM/Heuristic sees it
-                         generation_text = f"{user_input}\n\n[CONTEXT FROM CHECKPOINT]:\n{full_transcript}"
+                         generation_text = f"User Request: {user_input}\n\n[CONTEXT]:\n{full_transcript}"
                          hydration_source_msg_id = start_msg_id
                          logger.info("API: Hydrated draft generation with %d chars of context", len(full_transcript))
             except Exception as e:
@@ -4761,13 +4762,14 @@ def handle_message():
             payload = _generate_goal_draft_payload(generation_text)
             
             # If we hydrated, ensure the body contains the context reference if it wasn't captured
-            if hydration_source_msg_id and "CONTEXT FROM CHECKPOINT" not in str(payload.get("body", "")):
+            if hydration_source_msg_id:
                 # Just to be safe, we can append a clean summary or just rely on the generator having done its job.
                 # Let's trust _generate_goal_draft_payload to extract title/steps from generation_text.
                 # But we might want to store the raw context in the body for the user to see/edit.
                 current_body = payload.get("body", "")
                 if len(current_body) < 10: # If generator returned empty body
-                     payload["body"] = generation_text 
+                     # Fallback to transcript, but clean.
+                     payload["body"] = f"Context:\n{full_transcript}" if 'full_transcript' in locals() else user_input 
 
             suggestion = suggestions_repository.create_suggestion(
                 user_id=user_id,
