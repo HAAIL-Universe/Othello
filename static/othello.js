@@ -4285,25 +4285,42 @@
     function getCollapsedPreview(text, maxWords = 20) {
       if (!text) return "";
       
-      // Heuristic: If text has many lines (vertical list), truncate by lines first
-      const lines = text.trim().split('\n');
-      if (lines.length >= 5) {
-          // Take top 3 lines
-          const previewLines = lines.slice(0, 3).join('\n');
-          return previewLines + "...";
+      const trimmed = text.trim();
+      const lines = trimmed.split('\n');
+      
+      // Heuristic: Check for Structured Content (Goal Drafts, Lists)
+      const isGoalDraft = trimmed.startsWith("Goal Draft");
+      // Check for >1 line starting with list markers (bullet, number)
+      const isList = lines.filter(l => /^\s*([-*•]|\d+\.)\s/.test(l)).length >= 2;
+
+      // STRATEGY 1: Structured Content (Keep existing "Tall Message" logic)
+      if (isGoalDraft || isList) {
+          // If many lines, truncate by line count
+          if (lines.length >= 5) {
+              return lines.slice(0, 3).join('\n') + "...";
+          }
+          // Otherwise, fall through to word loop (or simple return if short)
+          // We skip the "First Sentence" rule for lists as it breaks items.
+      } else {
+          // STRATEGY 2: Prose (Collapse to First Full Stop)
+          // Find first sentence ending. Accounts for ". " or end of string.
+          // Simple regex for first period followed by space or EOF.
+          const match = trimmed.match(/[.!?](\s|$)/);
+          if (match) {
+              const endIndex = match.index + 1; // Include the punctuation
+              // Verify it's not effectively the whole text (allow fuzzy match for whitespace diff)
+              if (endIndex < trimmed.length - 2) { 
+                  return trimmed.substring(0, endIndex);
+              }
+              // If it IS the whole text, we might still want to truncate if it's huge?
+              // But user said "collapse to first full stop", implies that IS the desired state.
+              return trimmed.substring(0, endIndex);
+          }
       }
 
-      const sentenceEnd = text.search(/[.!?]/);
-      if (sentenceEnd !== -1) {
-        let firstSentence = text.substring(0, sentenceEnd + 1);
-        if (countWords(firstSentence) <= maxWords * 2) {
-             // Strip trailing punctuation and append dots directly
-             return firstSentence.replace(/[.!?]+$/, "") + "...";
-        }
-      }
-      const words = text.trim().split(/\s+/);
+      // Fallback: Word count
+      const words = trimmed.split(/\s+/);
       if (words.length <= maxWords) return text;
-      // No space before dots
       return words.slice(0, maxWords).join(" ") + "...";
     }
 
