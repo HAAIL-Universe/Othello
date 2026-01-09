@@ -7213,7 +7213,7 @@ body.mode-duet-user-overlay .duet-peek-tab { display: none; }
 }
 
 /* 3. The Traveling Gradient Stroke */
-.draft-border-overlay rect {
+.draft-border-overlay path {
   fill: none !important; /* CRITICAL: Prevent black box */
   fill-opacity: 0 !important;
   stroke-width: 3px;
@@ -7262,7 +7262,7 @@ body.mode-duet-user-overlay .duet-peek-tab { display: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .draft-border-overlay rect { 
+  .draft-border-overlay path { 
     animation: none; 
     stroke-dasharray: 100 0; /* Solid border if no motion */
   }

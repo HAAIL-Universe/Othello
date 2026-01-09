@@ -7074,22 +7074,50 @@
                 const svgNS = "http://www.w3.org/2000/svg";
                 const svg = document.createElementNS(svgNS, "svg");
                 svg.setAttribute("class", "draft-border-overlay");
-                svg.setAttribute("preserveAspectRatio", "none");
-                svg.style.background = "transparent"; // Explicit safety
+                svg.style.overflow = "visible";
+                svg.style.background = "transparent";
 
-                // Use JS calculation to avoid calc() in attributes issues
-                const rect = document.createElementNS(svgNS, "rect");
-                rect.setAttribute("x", "0");
-                rect.setAttribute("y", "0");
-                rect.setAttribute("width", "100%");
-                rect.setAttribute("height", "100%");
-                rect.setAttribute("rx", "18"); // Match CSS border-radius exactly
-                rect.setAttribute("ry", "18");
-                rect.setAttribute("fill", "none"); // CRITICAL safety against black box
-                rect.setAttribute("pathLength", "100"); // Standardize path length for percentages
-                
-                svg.appendChild(rect);
+                // Use path to handle the sharp Bottom-Left corner (bot bubble style)
+                const path = document.createElementNS(svgNS, "path");
+                path.setAttribute("fill", "none");
+                path.setAttribute("pathLength", "100");
+                svg.appendChild(path);
                 botEntry.bubble.appendChild(svg);
+
+                // Update path geometry to match bubble border exactly
+                const updateOverlayShape = () => {
+                    if (!botEntry.bubble.isConnected) return;
+                    const w = botEntry.bubble.offsetWidth;
+                    const h = botEntry.bubble.offsetHeight;
+                    
+                    // Overlay is inset -2px (so w+4, h+4 relative to bubble).
+                    // We want the stroke center to land on the bubble border.
+                    // The SVG is positioned at -2, -2.
+                    // So (2, 2) in SVG coords is (0, 0) in bubble coords.
+                    const x = 2; 
+                    const y = 2;
+                    const r = 18; // 1.1rem approx
+                    const rs = 5; // 0.3rem approx (Sharp BL corner)
+
+                    const d = [
+                        `M ${x} ${y + r}`,
+                        `A ${r} ${r} 0 0 1 ${x + r} ${y}`,
+                        `L ${x + w - r} ${y}`,
+                        `A ${r} ${r} 0 0 1 ${x + w} ${y + r}`,
+                        `L ${x + w} ${y + h - r}`, 
+                        `A ${r} ${r} 0 0 1 ${x + w - r} ${y + h}`,
+                        `L ${x + rs} ${y + h}`,
+                        `A ${rs} ${rs} 0 0 1 ${x} ${y + h - rs}`,
+                        `Z`
+                    ].join(" ");
+                    
+                    path.setAttribute("d", d);
+                };
+
+                const ro = new ResizeObserver(() => {
+                    requestAnimationFrame(updateOverlayShape);
+                });
+                ro.observe(botEntry.bubble);
             }
         }
         
