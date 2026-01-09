@@ -5984,14 +5984,15 @@ def handle_message():
                     if conversation_id:
                         total_msgs = count_session_messages(user_id, conversation_id)
                         
-                        # Rule: >=3 messages to show, update every 5 messages
-                        if total_msgs >= 3:
+                        # Rule: >=4 messages (Round 2+), update every round (even count)
+                        if total_msgs >= 4 and total_msgs % 2 == 0:
                             narrator_state = get_session_narrator_state(user_id, conversation_id)
                             last_count = narrator_state.get("duet_narrator_msg_count") or 0
                             curr_text = narrator_state.get("duet_narrator_text")
                             
-                            # Update if empty OR stride of 5 reached
-                            if (not curr_text) or ((total_msgs - last_count) >= 5):
+                            # Update if getting new content (msg check ensures we don't re-run same state)
+                            # Logic: If we haven't updated for this exact count yet.
+                            if (not curr_text) or (total_msgs > last_count):
                                 msgs = list_all_session_messages_for_summary(user_id, conversation_id)
                                 transcript_lines = []
                                 for m in msgs:
@@ -5999,16 +6000,41 @@ def handle_message():
                                     content = str(m.get("transcript") or "").strip()
                                     transcript_lines.append(f"{role}: {content}")
                                 
+                                # Dynamic prompt based on depth
+                                if total_msgs <= 4:
+                                    # First time: Intro
+                                    style_instruction = "Write one short, punchy sentence to set the scene (max 20 words). Focus only on the core intent."
+                                    context_instruction = "Here is the conversation so far:"
+                                    base_text = ""
+                                else:
+                                    # Subsequent times: Append
+                                    style_instruction = "Write exactly one short sentence to advance the narrative (max 15 words). Be dense. Do NOT repeat details."
+                                    context_instruction = f"Here is the narrative so far:\n\"{curr_text}\"\n\nHere is the latest exchange context to add to the narrative:"
+                                    base_text = curr_text if curr_text else ""
+
+                                # If appending, we probably want only the recent messages or the full context? 
+                                # Full context is safer for the LLM to understand what happened, but we ask it to *continue*.
+                                
                                 prompt_text = (
                                     "You are a ghost narrator for this conversation. "
-                                    "Write a 5-6 line summary in third-person, neutral, observational tone. "
+                                    f"{style_instruction} "
+                                    "Use a third-person, neutral, observational tone. "
                                     "No bullets, no headings. "
                                     "Focus on the evolving context of the user's situation and Othello's assistance.\n\n"
-                                    "Conversation:\n" + ("\n".join(transcript_lines))
+                                    f"{context_instruction}\n" + ("\n".join(transcript_lines))
                                 )
                                 
                                 temp_llm = LLMWrapper() # Init new wrapper for this side-task
-                                summary = temp_llm.generate(prompt=prompt_text, max_tokens=300).strip()
+                                new_chunk = temp_llm.generate(prompt=prompt_text, max_tokens=150).strip()
+                                
+                                if new_chunk:
+                                    # Append Logic
+                                    if base_text:
+                                        summary = f"{base_text} {new_chunk}"
+                                    else:
+                                        summary = new_chunk
+                                        
+                                    update_session_narrator_state(user_id, conversation_id, summary, total_msgs)
                                 
                                 if summary:
                                     update_session_narrator_state(user_id, conversation_id, summary, total_msgs)

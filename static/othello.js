@@ -4781,7 +4781,7 @@
     // Global token for narrator animation
     if (typeof window.othelloNarratorToken === 'undefined') window.othelloNarratorToken = 0;
 
-    function renderDuetNarratorFromActiveConversation() {
+    function renderDuetNarratorFromActiveConversation(forceAnimate = false) {
       // Phase 2/3/4/5 Fix: Narrator UI Polish
       // 1) Exit early unless in Duet mode
       if (othelloState.chatViewMode !== "duet") return;
@@ -4789,7 +4789,7 @@
       const chatPlaceholder = document.getElementById("chat-placeholder");
       if (!chatPlaceholder) return;
       
-      console.debug("[Narrator] Render. InFlight:", othelloState.duetNarratorInFlight, "LastText:", othelloState.lastDuetNarratorText ? "Yes" : "No");
+      console.debug("[Narrator] Render. InFlight:", othelloState.duetNarratorInFlight, "LastText:", othelloState.lastDuetNarratorText ? "Yes" : "No", "ForceAnimate:", forceAnimate);
 
       // If In-Flight, preserve existing text and ensure DIM is on.
       if (othelloState.duetNarratorInFlight) {
@@ -4829,10 +4829,10 @@
           return;
       }
       
-      // State 1: < 3 messages. 
-      // Persistence Fix: If we have content (via dim or prior text), keeps it visible? 
-      // Current rule: If total < 3, hide. 
-      // BUT if we just sent, flight flag handles it.
+      // State 1: < 4 messages (modified from 3 per user request for silent round 1). 
+      // Actually backend logic handles generation at 4. FE hides if < 3? 
+      // If we suppress < 4 strictly here, we ensure round 1 is truly silent even if persisted text exists?
+      // Keeping < 3 for safety but the backend ensures text only at 4 usually.
       if (total < 3) {
           chatPlaceholder.classList.add("hidden");
           chatPlaceholder.classList.remove("duet-narrator", "is-visible", "dim");
@@ -4841,6 +4841,8 @@
       
       // State 2: 3+ messages -> Narrator
       if (conv && conv.duet_narrator_text) {
+          const wasHidden = chatPlaceholder.classList.contains("hidden");
+          
           chatPlaceholder.classList.remove("hidden");
           chatPlaceholder.style.display = "";
           chatPlaceholder.classList.add("duet-narrator");
@@ -4853,16 +4855,17 @@
           // Update Persistence State
           othelloState.lastDuetNarratorText = rawNewText;
           
-          // If text changed OR we are in dim state (completion of turn), update/animate.
+          // If text changed OR we are in dim state (completion of turn) OR forceAnimate (live arrival), update/animate.
           // Note: dataset.fullText tracks the *target* text.
-          if (rawNewText !== currentText || chatPlaceholder.classList.contains("dim")) {
+          if (rawNewText !== currentText || chatPlaceholder.classList.contains("dim") || forceAnimate) {
                chatPlaceholder.dataset.fullText = rawNewText;
                
                // Clamp (Phase 5)
                const clampedText = fitNarratorTextToLines(rawNewText, chatPlaceholder, 15);
                
-               if (chatPlaceholder.classList.contains("dim")) {
-                   // Phase 4: Overwrite Animation (Bright New over Dim Old)
+               if (chatPlaceholder.classList.contains("dim") || forceAnimate || (wasHidden && total > 0)) {
+                   // Phase 4: Overwrite Animation (Bright New over Dim Old, or Fresh Typewriter)
+                   // Or Append (Jan 9 2026)
                    runNarratorOverwriteAnimation(chatPlaceholder, clampedText);
                } else {
                    // Instant update (or initial load)
@@ -4924,27 +4927,46 @@
 
     function runNarratorOverwriteAnimation(container, newText) {
         const token = ++window.othelloNarratorToken;
-        const oldText = container.textContent;
+        const oldText = container.textContent || "";
         
-        // Phase 4: Dim Old + Bright New Overlay
-        container.classList.remove("dim"); // allow children opacity control
+        // Detect Append Scenario (Append-Fade)
+        let startIndex = 0;
+        // Strip quotes for comparison if needed, but textContent usually has quotes if rawNewText does.
+        // Assuming consistent quoting.
+        if (oldText.length > 0 && newText.startsWith(oldText)) {
+            startIndex = oldText.length;
+        } else if (oldText.length > 0 && newText.startsWith(oldText.slice(0, -1))) { 
+            // Handle mismatched closing quote potential
+            startIndex = oldText.length - 1;
+        }
+        
+        container.classList.remove("dim"); 
+        
+        // Optimize: If append, keep old text static and just append new spans?
+        // But the previous implementation used an overlay div. 
+        // Let's rebuild the clean structure:
         container.innerHTML = "";
         
-        // Base layer (dimmed old text)
-        const base = document.createElement("div");
-        base.className = "narrator-base dim"; // explicit dim
-        base.textContent = oldText;
-        base.style.opacity = "0.3"; // Enforce dim visually
-        
-        // Overlay layer (bright new text) - Pre-filled spans for "Reveal" animation (prevents alignment jitter)
         const overlay = document.createElement("div");
         overlay.className = "narrator-overlay";
         
-        // Split and wrap in spans to preserve layout
-        const tokens = newText.split(/(\s+)/);
+        // 1. Existing text (static visibility)
+        if (startIndex > 0) {
+            const existingPart = newText.substring(0, startIndex);
+            const staticSpan = document.createElement("span");
+            staticSpan.textContent = existingPart;
+            staticSpan.style.opacity = "1";
+            overlay.appendChild(staticSpan);
+        }
+        
+        // 2. New text (to animate)
+        const newPart = newText.substring(startIndex);
+        
+        const tokens = newPart.split(/(\s+)/);
         const spans = [];
         
         tokens.forEach(t => {
+            if (!t) return;
             const span = document.createElement("span");
             span.textContent = t;
             span.style.opacity = "0"; // Start invisible
@@ -4952,24 +4974,15 @@
             spans.push(span);
         });
         
-        container.appendChild(base);
         container.appendChild(overlay);
         
-        // Speed calculation: Target 260 WPM
-        // 260 words / 60 sec = 4.33 words/sec => ~230ms per word.
-        // Tokens are split by whitespace, so roughly 2 tokens = 1 word (word + space).
-        // Interval per token = 115ms.
-        // Updated: Target 450 WPM
-        // 450 words / 60 sec = 7.5 words/sec => ~133ms per word.
-        // Interval per token = 66ms.
+        // Speed: 450 WPM => 66ms
         const interval = 66;
-        
         let index = 0;
         
         function tick() {
             if (window.othelloNarratorToken !== token) return;
             
-            // Batch words if interval is too small (<10ms)
             const batchSize = interval < 10 ? 3 : 1;
             
             for(let i=0; i<batchSize && index < spans.length; i++) {
@@ -4980,7 +4993,7 @@
             if (index < spans.length) {
                 setTimeout(tick, interval);
             } else {
-                // Done - clear overlay DOM mess and finalize text
+                // Done - finalize
                 container.innerHTML = "";
                 container.textContent = newText;
             }
@@ -5226,7 +5239,7 @@
 
     let globalMessageSequence = 0;
 
-    function typewriteElement(element) {
+    function typewriteElement(element, onComplete) {
         // Snapshot text nodes immediately so we don't animate subsequently appended elements (like meta)
         const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT, null, false);
         const textNodes = [];
@@ -5269,6 +5282,8 @@
                
                // Keep scrolling to bottom as we type
                scrollChatToBottom(false);
+           } else {
+               if (typeof onComplete === 'function') onComplete();
            }
         }
         
@@ -5310,7 +5325,10 @@
       
       // Feature: Typewriter Effect for Bot Messages (260 WPM)
       if (role === "bot" && options.animate !== false && text && text.trim().length > 0) {
-          typewriteElement(bubble);
+          typewriteElement(bubble, options.onTypewriterComplete);
+      } else if (typeof options.onTypewriterComplete === "function") {
+          // If no animation, fire callback immediately
+          options.onTypewriterComplete();
       }
       
       const clientMessageId = options && typeof options.clientMessageId === "string"
@@ -6727,12 +6745,12 @@
           input.focus();
       }
       
-      // Duet Narrator: Dim on send & Mark In-Flight
+      // Duet Narrator: Mark In-Flight but do NOT Dim (Seamless Append)
       const chatPlaceholder = document.getElementById("chat-placeholder");
       if (chatPlaceholder && chatPlaceholder.classList.contains("duet-narrator") && !chatPlaceholder.classList.contains("hidden")) {
-          chatPlaceholder.classList.add("dim");
+          // chatPlaceholder.classList.add("dim"); // Removed per Jan 9 2026 update
           othelloState.duetNarratorInFlight = true;
-          console.debug("[Narrator] marked in-flight (dim)");
+          console.debug("[Narrator] marked in-flight (seamless)");
       }
 
       // Feature: Dim previous visible Bot response on User Send
@@ -7063,7 +7081,35 @@
         if (hasGoalIntent) intentMarkers.push("🎯 Goal");
         if (hasRoutineIntent) intentMarkers.push("🔁 Routine");
 
-        const botEntry = addMessage("bot", replyText, { sourceClientMessageId: clientMessageId, intentMarkers });
+        // Define Narrator Update callback (triggers 1s after typing finishes)
+        const onBotTypingFinished = () => {
+             // 1s delay AFTER completion
+             setTimeout(() => {
+                if (othelloState.activeConversationId) {
+                    loadConversations().then(() => {
+                        // Release flight flag NOW, after data is fresh
+                        othelloState.duetNarratorInFlight = false;
+                        console.debug("[Narrator] in-flight released after delay");
+                        
+                        if (typeof renderDuetNarratorFromActiveConversation === 'function') {
+                            // Force animation because we know this is a live update
+                            renderDuetNarratorFromActiveConversation(true);
+                        }
+                    }).catch(e => {
+                        console.warn("[UI] Background conversation refresh failed", e);
+                        othelloState.duetNarratorInFlight = false;
+                    });
+                } else {
+                     othelloState.duetNarratorInFlight = false;
+                }
+             }, 1000);
+        };
+
+        const botEntry = addMessage("bot", replyText, { 
+             sourceClientMessageId: clientMessageId, 
+             intentMarkers,
+             onTypewriterComplete: onBotTypingFinished
+        });
 
         // Draft Mode Visual Cue: Apply rotating half-glow border to the draft card bubble
         if (data.draft_context && data.draft_context.draft_type === "goal") {
@@ -7132,11 +7178,11 @@
           console.warn("[Othello UI] routine meta render failed:", err);
         }
         
-        // Reset In-Flight Flag
-        if (othelloState.duetNarratorInFlight) {
-            othelloState.duetNarratorInFlight = false;
-            console.debug("[Narrator] in-flight released");
-        }
+        // Reset In-Flight Flag DEFERRED to Narrator Refresh block below
+        // if (othelloState.duetNarratorInFlight) {
+        //    othelloState.duetNarratorInFlight = false;
+        //    console.debug("[Narrator] in-flight released");
+        // }
         
         // Update agent status display
         if (data.agent_status) {
@@ -7167,14 +7213,8 @@
 
         // --- Fix for Narrator UI Stale Data ---
         // Refresh conversation metadata (Duet Narrator Text)
-        if (othelloState.activeConversationId) {
-            // Run in background to avoid blocking
-            loadConversations().then(() => {
-                if (typeof renderDuetNarratorFromActiveConversation === 'function') {
-                    renderDuetNarratorFromActiveConversation();
-                }
-            }).catch(e => console.warn("[UI] Background conversation refresh failed", e));
-        }
+        // MOVED: Logic is now attached to 'onTypewriterComplete' callback in addMessage() above.
+        // This ensures the 1s delay starts AFTER the typing animation finishes.
 
         if (metaIntent === "pending_goal_edit_set") {
           const pendingMode = data.meta && data.meta.mode ? data.meta.mode : "update";
@@ -7285,13 +7325,15 @@
            refreshGoalDetail();
         }
 
-        // Cycle Feature: Schedule Duet Narrator Refresh
+        // Cycle Feature: Schedule Duet Narrator Refresh -- REMOVED (Duplicate Old Path)
+        /* 
         setTimeout(async () => { 
            await loadConversations();
            if (typeof renderDuetNarratorFromActiveConversation === 'function') {
                renderDuetNarratorFromActiveConversation(); 
            }
         }, 600);
+        */
       } catch (err) {
         console.error("[sendMessage] outer exception:", err);
         const isNetwork = err instanceof TypeError && (
