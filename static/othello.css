@@ -7017,7 +7017,7 @@ body.chat-open #global-chat-fab {
   overflow-y: auto;
   padding: 1rem;
   border-bottom: none;
-  background: var(--bg-1);
+  background: transparent; /* Was var(--bg-1), causing container box effect */
 }
 .duet-pane--bottom {
   border-top: none;
