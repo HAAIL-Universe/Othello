@@ -4546,19 +4546,31 @@
        }
        
        const top = document.getElementById("duet-top");
-       if (!top) return;
+       const bottom = document.getElementById("duet-bottom");
+       if (!top || !bottom) return;
 
        // Measure
        const view = document.getElementById("chat-sheet") || document.getElementById("chat-view");
        if (!view) return;
        const sheetHeight = view.clientHeight;
-       const topHeight = top.scrollHeight; // Or getBoundingClientRect().height
-
-       // Threshold: Bot is > 45% of available space
-       const threshold = sheetHeight * 0.45; 
-       const isBotLong = topHeight > threshold;
        
-       if (isBotLong) {
+       // Measure content heights
+       // We want the 'natural' height of the bottom pane. 
+       // If currently peeked (absolute), scrollHeight might differ or be constrained by width.
+       // However, checking collision is usually about: Is the content too big?
+       // Use scrollHeight to capture full desired height.
+       const topContentHeight = top.scrollHeight;
+       const bottomContentHeight = bottom.scrollHeight;
+       
+       // Threshold: Translate ONLY if they would collide within buffer
+       // User requested: "only Translate if Othello's message will collide with a small amount of padding"
+       const paddingBuffer = 60; // Enough space for comfort
+       const availableHeight = sheetHeight - paddingBuffer;
+       const totalNeededHeight = topContentHeight + bottomContentHeight;
+
+       const isCrowded = totalNeededHeight > availableHeight;
+       
+       if (isCrowded) {
            updateDuetPeekState(!othelloState.focusPeekOpen);
        } else {
            updateDuetPeekState(false);
