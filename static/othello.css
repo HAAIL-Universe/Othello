@@ -1027,10 +1027,15 @@
     }
 
     .msg-row.user .bubble {
-      background: linear-gradient(135deg, #6366f1, #7c3aed);
-      color: white;
+      /* New User Style: Dark background with Pink/Blue glow */
+      background: var(--bg-1);
+      color: var(--text-main); /* Ensure contrast on dark bg */
       border-bottom-right-radius: 0.3rem;
-      box-shadow: 0 4px 12px rgba(99, 102, 241, 0.4);
+      /* Pink & Vibrant Blue glow (50/50 mix impression via shadow) */
+      box-shadow: 0 0 20px rgba(236, 72, 153, 0.15), 0 0 0 1px rgba(59, 130, 246, 0.3);
+      backdrop-filter: blur(12px);
+      position: relative;
+      z-index: 1; /* For overlay layering */
     }
 
     .msg-row.bot .bubble {
@@ -7215,6 +7220,28 @@ body.mode-duet-user-overlay .duet-peek-tab { display: none; }
 @keyframes draft-orbit {
   /* Move the dash offset by 100 units (one full cycle of dash+gap) to loop smoothly */
   to { stroke-dashoffset: -100; }
+}
+
+/* User Traveling Border (Pink/Blue) */
+.user-border-overlay {
+  position: absolute;
+  inset: -2px;
+  width: calc(100% + 4px);
+  height: calc(100% + 4px);
+  pointer-events: none;
+  z-index: -1;
+  overflow: visible;
+  background: transparent !important;
+}
+.user-border-overlay rect {
+  fill: none !important;
+  fill-opacity: 0 !important;
+  stroke-width: 3px;
+  stroke-linecap: round;
+  stroke-dasharray: 50 50;
+  animation: draft-orbit 8s linear infinite; /* Reuse same orbit animation */
+  stroke: url(#user-gradient); /* The Pink/Blue gradient */
+  filter: drop-shadow(0 0 6px rgba(236, 72, 153, 0.6)); /* Pinkish glow on the stroke */
 }
 
 @media (prefers-reduced-motion: reduce) {
