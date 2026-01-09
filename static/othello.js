@@ -10333,4 +10333,20 @@ function handleMessageClick(e) {
             row.classList.remove("is-expanded");
             row.dataset.manuallyExpanded = "0";
         }
+    }  
+
+/* === FIX: Input Bar Typing Animation === */
+document.addEventListener('DOMContentLoaded', () => {
+    const inputBar = document.getElementById('input-bar');
+    const userInput = document.getElementById('user-input');
+    
+    if (inputBar && userInput) {
+        userInput.addEventListener('input', () => {
+            if (userInput.value.trim().length > 0) {
+                inputBar.classList.add('typing');
+            } else {
+                inputBar.classList.remove('typing');
+            }
+        });
     }
+});

@@ -12674,3 +12674,46 @@ body.mode-duet-user-overlay .duet-peek-tab { display: none; }
    o p a c i t y :   0 . 3 ;   t r a n s i t i o n :   o p a c i t y   0 . 5 s   e a s e - o u t ;   
  
  
+/* === FIX: Input Bar Typing Animation === */
+.input-bar { 
+    position: relative; 
+    z-index: 1001; /* Ensure above others */
+}
+
+/* Default state: Overlay hidden */
+.input-border-overlay {
+  position: absolute;
+  inset: -2px;
+  width: calc(100% + 4px);
+  height: calc(100% + 4px);
+  pointer-events: none;
+  z-index: 10;
+  opacity: 0;
+  transition: opacity 0.3s ease;
+}
+
+/* Only show overlay when typing */
+.input-bar.typing .input-border-overlay {
+  opacity: 1;
+}
+
+.input-border-overlay rect {
+  fill: none;
+  stroke-width: 2px;
+  stroke-linecap: round;
+  stroke-dasharray: 50 50;
+  animation: draft-orbit 6s linear infinite; /* Reuse existing animation */
+  stroke: url(#user-gradient);
+  filter: drop-shadow(0 0 5px rgba(236, 72, 153, 0.6));
+}
+
+/* Override the default Blue Neon focus when typing */
+.input-bar.typing #user-input:focus {
+  border-color: transparent !important;
+  box-shadow: none !important;
+}
+
+/* Also ensure the non-focused typing state (if any) is clean */
+.input-bar.typing #user-input {
+    border-color: transparent !important;
+}
