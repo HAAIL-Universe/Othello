@@ -4285,53 +4285,22 @@
     function getCollapsedPreview(text, maxWords = 20) {
       if (!text) return "";
       
-      const trimmed = text.trim();
-      const lines = trimmed.split('\n');
-      
-      // Heuristics
-      // Goal Draft detection (Handles bolding/headers)
-      const isGoalDraft = /^(#+\s*)?(\*\*)?Goal Draft/i.test(trimmed);
-      
-      // Table detection: Look for pipe structure in header/separator
-      const isTable = lines.some(l => /^\s*\|.*\|/.test(l)) && lines.some(l => /^\s*\|\s*[: -]+\s*\|/.test(l));
-
-      // List detection
-      const isList = lines.filter(l => /^\s*([-*•]|\d+\.)\s/.test(l)).length >= 2;
-
-      // STRATEGY 1: Goal Drafts & Lists (Retain Line Preview - 3 lines)
-      if (isGoalDraft || isList) {
-          if (lines.length >= 5) {
-              return lines.slice(0, 3).join('\n') + "...";
-          }
-      }
-      
-      // STRATEGY 2: Tables (Summary)
-      if (isTable) {
-           // If table is detected, avoid showing raw Markdown pipes if possible.
-           // Try to find the intro text before the table
-           const tableStartIndex = lines.findIndex(l => /^\s*\|.*\|/.test(l));
-           if (tableStartIndex > 0) {
-               // Return text before table (limit to 3 lines)
-               return lines.slice(0, Math.min(tableStartIndex, 3)).join('\n') + "\n(Show Table...)";
-           } else {
-               // Table is at top. Return Headers + indicator.
-               return lines[0] + "\n(Show Table...)";
-           }
-      }
-
-      // STRATEGY 3: Prose (First Sentence)
-      const match = trimmed.match(/[.!?](\s|$)/);
+      // Heuristic: First sentence logic
+      // Find first occurrence of . ! ? followed by whitespace or end
+      const match = text.match(/([.!?])(\s|$)/);
       if (match) {
-          const endIndex = match.index + 1;
-          // Only collapse if the sentence is significantly shorter than the whole text
-          if (endIndex < trimmed.length - 5) { 
-              return trimmed.substring(0, endIndex);
+          const splitIdx = match.index + 1; // include punctuation
+          const sentence = text.substring(0, splitIdx);
+          // If first sentence is reasonable length, use it.
+          // Otherwise fall back to truncation.
+          if (countWords(sentence) < 60) {
+              return sentence;
           }
       }
 
-      // Fallback: Word count
-      const words = trimmed.split(/\s+/);
+      const words = text.trim().split(/\s+/);
       if (words.length <= maxWords) return text;
+      // No space before dots
       return words.slice(0, maxWords).join(" ") + "...";
     }
 
@@ -10102,3 +10071,266 @@
   observer.observe(statusEl, { childList: true, characterData: true, subtree: true });
 })();
 
+
+
+// --- Message Parking Logic (Added) ---
+(function() {
+    let isChatParked = false;
+    let isExplicitlyParked = false;
+    let touchStartX = 0;
+
+    // Robust Keyboard Detection
+    let maxViewportHeight = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+    function updateMaxHeight() {
+        const currentH = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+        if (currentH > maxViewportHeight) maxViewportHeight = currentH;
+    }
+
+    if (window.visualViewport) {
+        window.visualViewport.addEventListener('resize', updateMaxHeight);
+    }
+    window.addEventListener('resize', updateMaxHeight);
+
+    // Exposed helper
+    window.othelloIsKeyboardOpen = function() {
+        const currentH = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+        // If current height is significantly smaller (< 80%) of max seen, likely keyboard is open
+        return currentH < (maxViewportHeight * 0.80);
+    };
+
+    window.setChatParking = function(shouldPark, explicit = false, mode = 'standard') {
+        const targetView = document.getElementById('chat-view') || document.getElementById('chat-log');
+        if (!targetView) return;
+
+        if (shouldPark) {
+            if (mode === 'user-only') {
+                targetView.classList.add('parked-user-only');
+                targetView.classList.remove('parked');
+            } else {
+                targetView.classList.add('parked');
+                targetView.classList.remove('parked-user-only');
+            }
+            isChatParked = true;
+            if (explicit) isExplicitlyParked = true;
+
+            // Auto-collapse bubbles on Park: Scan ONLY User bubbles
+            // User requested Othello messages remain expanded by default (even in park)
+            // and only collapse via manual user interaction.
+            const userRows = document.querySelectorAll('.msg-row.user');
+            userRows.forEach(row => {
+               let fullText = row.dataset.fullText;
+               if (!fullText) {
+                   const bubble = row.querySelector('.bubble');
+                   if (bubble) fullText = bubble.textContent.trim(); 
+               }
+               
+               if (fullText && typeof window.getCollapsedPreview === 'function') {
+                   const preview = window.getCollapsedPreview(fullText);
+                   // If preview is effectively shorter, it is collapsible
+                   if (preview.length < fullText.length) {
+                       // Force collapse state if not already collapsed
+                       if (row.dataset.collapsed !== "1") {
+                           row.dataset.fullText = fullText;
+                           row.dataset.collapsedText = preview;
+                           
+                           row.dataset.collapsed = "1";
+                           row.classList.remove("is-expanded");
+                           row.classList.add("can-collapse");
+                           
+                           if (typeof window.updateBubbleContent === 'function') {
+                               window.updateBubbleContent(row, preview);
+                           }
+                       }
+                   }
+               }
+            });
+
+        } else {
+            targetView.classList.remove('parked');
+            targetView.classList.remove('parked-user-only');
+            isChatParked = false;
+            // Reset explicit flag on any restore (simplification)
+            if (explicit || !isChatParked) isExplicitlyParked = false;
+        }
+    };
+
+    window.isChatViewParked = function() { return isChatParked; };
+
+    // Attach listeners to chat-view to capture events from chat-log AND duet panes
+    const parkingTarget = document.getElementById('chat-view') || document.getElementById('chat-log');
+    if (parkingTarget) {
+        let touchStartX = 0;
+        let touchStartY = 0;
+
+        parkingTarget.addEventListener('touchstart', e => {
+            if (e.touches.length > 1) return;
+            touchStartX = e.touches[0].clientX;
+            touchStartY = e.touches[0].clientY;
+        }, { passive: true });
+
+        parkingTarget.addEventListener('touchend', e => {
+            if (e.changedTouches.length === 0) return;
+            const touchEndX = e.changedTouches[0].clientX;
+            const touchEndY = e.changedTouches[0].clientY;
+            
+            const diffX = touchEndX - touchStartX;
+            const diffY = touchEndY - touchStartY;
+
+            if (Math.abs(diffX) > 40 && Math.abs(diffX) > Math.abs(diffY)) {
+                if (isChatParked) {
+                    window.setChatParking(false, true);
+                } else {
+                    window.setChatParking(true, true);
+                }
+            }
+        }, { passive: true });
+    }
+
+    // Auto-Restore Logic
+    const handleResize = () => {
+        const isKeyboardOpen = window.othelloIsKeyboardOpen();
+        if (!isKeyboardOpen && isChatParked && !isExplicitlyParked) {
+            window.setChatParking(false);
+        }
+    };
+
+    if (window.visualViewport) {
+        window.visualViewport.addEventListener('resize', handleResize);
+    } else {
+        window.addEventListener('resize', handleResize);
+    }
+
+    // --- iOS Keyboard Scroll Fix ---
+    let lockedScrollY = 0;
+    function lockPageScroll() {
+        if (document.body.classList.contains('scroll-locked')) return;
+        lockedScrollY = window.scrollY;
+        document.body.classList.add('scroll-locked');
+        document.body.style.top = `-${lockedScrollY}px`;
+    }
+
+    function unlockPageScroll() {
+        if (!document.body.classList.contains('scroll-locked')) return;
+        document.body.classList.remove('scroll-locked');
+        document.body.style.top = '';
+        window.scrollTo(0, lockedScrollY);
+    }
+
+    const userInput = document.getElementById('user-input');
+    if (userInput) {
+        userInput.addEventListener('focus', lockPageScroll);
+        userInput.addEventListener('blur', unlockPageScroll);
+    }
+
+    // Trap Touchmove on Overlay (prevent background scroll)
+    const overlay = document.getElementById('global-chat-overlay');
+    if (overlay) {
+        overlay.addEventListener('touchmove', e => {
+            let el = e.target;
+            let isScroller = false;
+            while (el && el !== overlay && el !== document.body) {
+                if (el.classList && (
+                    el.classList.contains('chat-log') ||
+                    el.classList.contains('duet-pane') ||
+                    el.id === 'chat-view' ||
+                    el.id === 'history-log' ||
+                    el.id === 'chat-log' ||
+                    el.id === 'draft-preview'
+                )) {
+                    isScroller = true;
+                }
+                if (isScroller) break;
+                el = el.parentElement;
+            }
+
+            if (!isScroller) {
+                if (e.cancelable) e.preventDefault();
+            }
+        }, { passive: false });
+    }
+
+    function updateAppHeight() {
+       const h = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+       document.documentElement.style.setProperty("--app-height", h + "px");
+    }
+
+    window.addEventListener('resize', updateAppHeight);
+    if (window.visualViewport) {
+       window.visualViewport.addEventListener('resize', updateAppHeight);
+    }
+    updateAppHeight();
+    updateMaxHeight();
+})();
+
+
+
+function applyCollapseBehavior(rowEl, text) {
+      if (!rowEl) return;
+      const fullText = text || rowEl.dataset.fullText;
+      if (!fullText) return;
+      
+      const wordCount = countWords(fullText);
+      // Logic: > 20 words OR > 1 sentence
+      // Check for sentence split
+      const hasSentenceBreak = /[.!?](\s|$)/.test(fullText);
+      
+      // If it's short and no sentence break, don't collapse
+      if (wordCount <= 20 && !hasSentenceBreak) return;
+      
+      const preview = getCollapsedPreview(fullText);
+      // Safety: If preview isn't effectively shorter, skip
+      if (preview.length >= fullText.length) return; 
+      
+      rowEl.dataset.fullText = fullText;
+      rowEl.dataset.collapsedText = preview;
+      rowEl.classList.add("can-collapse");
+      
+      if (rowEl.dataset.boundToggle !== "1") {
+          rowEl.addEventListener("click", handleMessageClick);
+          rowEl.dataset.boundToggle = "1";
+      }
+      
+      const isUser = rowEl.classList.contains("user");
+      
+      // Default States
+      if (isUser) {
+          // User: Auto-collapse if previously not manually expanded
+          if (rowEl.dataset.manuallyExpanded !== "1") {
+              rowEl.dataset.collapsed = "1";
+              updateBubbleContent(rowEl, preview);
+              rowEl.classList.remove("is-expanded");
+          }
+      } else {
+          // Bot: Default Expanded
+          if (rowEl.dataset.collapsed !== "1") {
+             rowEl.dataset.collapsed = "0";
+             rowEl.classList.add("is-expanded");
+          }
+      }
+    }
+
+function handleMessageClick(e) {
+        if (e.target.closest("button") || e.target.closest("a") || e.target.closest(".interactive")) return;
+        
+        const selection = window.getSelection();
+        if (selection.toString().length > 0) return;
+
+        const row = e.currentTarget;
+        if (!row.classList.contains("can-collapse")) return;
+        
+        const isCollapsed = row.dataset.collapsed === "1";
+        
+        if (isCollapsed) {
+            // Expand
+            updateBubbleContent(row, row.dataset.fullText);
+            row.dataset.collapsed = "0";
+            row.classList.add("is-expanded");
+            row.dataset.manuallyExpanded = "1";
+        } else {
+            // Collapse
+            updateBubbleContent(row, row.dataset.collapsedText);
+            row.dataset.collapsed = "1";
+            row.classList.remove("is-expanded");
+            row.dataset.manuallyExpanded = "0";
+        }
+    }
