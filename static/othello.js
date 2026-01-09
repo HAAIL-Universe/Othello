@@ -4394,7 +4394,11 @@
       if (!fullText) return;
       
       const wordCount = countWords(fullText);
-      if (wordCount <= 30) return; // Slightly higher threshold for bot (30)
+      // Heuristic: Collapse if word count is high OR if extensive vertical space (many newlines)
+      const lineCount = (fullText.match(/\n/g) || []).length;
+      
+      // Threshold: 30 words OR 5 lines (Goal Drafts often have low words but many lines)
+      if (wordCount <= 30 && lineCount < 5) return; 
 
       rowEl.dataset.fullText = fullText;
       const preview = getCollapsedPreview(fullText, 30);
