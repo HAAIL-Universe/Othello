@@ -4284,6 +4284,15 @@
 
     function getCollapsedPreview(text, maxWords = 20) {
       if (!text) return "";
+      
+      // Heuristic: If text has many lines (vertical list), truncate by lines first
+      const lines = text.trim().split('\n');
+      if (lines.length >= 5) {
+          // Take top 3 lines
+          const previewLines = lines.slice(0, 3).join('\n');
+          return previewLines + "...";
+      }
+
       const sentenceEnd = text.search(/[.!?]/);
       if (sentenceEnd !== -1) {
         let firstSentence = text.substring(0, sentenceEnd + 1);
