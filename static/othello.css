@@ -18170,3 +18170,10 @@ body.mode-duet-user-overlay .duet-peek-tab { display: none; }
 .input-border-overlay {
   display: none !important;
 }
+
+/* Feature: Dim previous Bot messages on User Send */
+.msg-row.bot.dim .bubble {
+  opacity: 0.5;
+  filter: grayscale(0.8);
+  transition: all 0.5s ease;
+}

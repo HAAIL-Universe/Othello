@@ -4955,11 +4955,14 @@
         container.appendChild(base);
         container.appendChild(overlay);
         
-        // Speed calculation: Slowed down by half (~1.6s total target)
-        // using token count (words + whitespace)
-        const totalTokens = spans.length;
-        const duration = Math.min(2400, Math.max(1200, totalTokens * 60)); 
-        const interval = duration / totalTokens;
+        // Speed calculation: Target 260 WPM
+        // 260 words / 60 sec = 4.33 words/sec => ~230ms per word.
+        // Tokens are split by whitespace, so roughly 2 tokens = 1 word (word + space).
+        // Interval per token = 115ms.
+        // Updated: Target 450 WPM
+        // 450 words / 60 sec = 7.5 words/sec => ~133ms per word.
+        // Interval per token = 66ms.
+        const interval = 66;
         
         let index = 0;
         
@@ -5157,7 +5160,7 @@
             const text = msg && msg.transcript ? String(msg.transcript) : "";
             if (!text.trim()) return;
             const role = msg && msg.source === "assistant" ? "bot" : "user";
-            addMessage(role, text);
+            addMessage(role, text, { animate: false });
           });
           
           // applyChatViewMode();
@@ -5223,6 +5226,56 @@
 
     let globalMessageSequence = 0;
 
+    function typewriteElement(element) {
+        // Snapshot text nodes immediately so we don't animate subsequently appended elements (like meta)
+        const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT, null, false);
+        const textNodes = [];
+        let node;
+        while(node = walker.nextNode()) textNodes.push(node);
+        
+        const outputSpans = [];
+        
+        textNodes.forEach(textNode => {
+           const text = textNode.nodeValue;
+           if (text.length === 0) return;
+           
+           const tokens = text.split(/(\s+)/);
+           const fragment = document.createDocumentFragment();
+           
+           tokens.forEach(token => {
+               if(token === "") return;
+               const span = document.createElement('span');
+               span.textContent = token;
+               span.style.opacity = '0';
+               span.style.transition = 'opacity 0.2s ease-out'; // Smooth reveal
+               fragment.appendChild(span);
+               outputSpans.push(span);
+           });
+           
+           textNode.parentNode.replaceChild(fragment, textNode);
+        });
+        
+        // Target: 260 WPM
+        // Updated: Target 450 WPM (66ms per token)
+        const interval = 66;
+        let i = 0;
+        
+        function tick() {
+           if (i < outputSpans.length) {
+               outputSpans[i].style.opacity = '1';
+               i++;
+               // Ensure next tick covers remaining
+               setTimeout(tick, interval);
+               
+               // Keep scrolling to bottom as we type
+               scrollChatToBottom(false);
+           }
+        }
+        
+        // Start immediately
+        requestAnimationFrame(tick);
+    }
+
     function addMessage(role, text, options = {}) {
       console.log("DEBUG: addMessage called", role, text.substring(0, 20) + "...");
       // Hide chat placeholder when first message appears
@@ -5254,6 +5307,12 @@
       const bubble = document.createElement("div");
       bubble.className = "bubble";
       bubble.innerHTML = formatMessageText(text);
+      
+      // Feature: Typewriter Effect for Bot Messages (260 WPM)
+      if (role === "bot" && options.animate !== false && text && text.trim().length > 0) {
+          typewriteElement(bubble);
+      }
+      
       const clientMessageId = options && typeof options.clientMessageId === "string"
         ? options.clientMessageId.trim()
         : "";
@@ -6674,6 +6733,33 @@
           chatPlaceholder.classList.add("dim");
           othelloState.duetNarratorInFlight = true;
           console.debug("[Narrator] marked in-flight (dim)");
+      }
+
+      // Feature: Dim previous visible Bot response on User Send
+      try {
+        let dimmed = false;
+        // 1. Check Duet Top (Active Bot Message in Duet Mode)
+        const duetTop = document.getElementById("duet-top");
+        if (duetTop && duetTop.childElementCount > 0) {
+             const botRows = duetTop.querySelectorAll('.msg-row.bot:not(.dim)');
+             if (botRows.length > 0) {
+                 botRows[botRows.length - 1].classList.add('dim');
+                 dimmed = true;
+             }
+        }
+        
+        // 2. Fallback to Standard/History Container if not active in Duet Top
+        if (!dimmed) {
+            const visibleContainer = getChatContainer();
+            if (visibleContainer) {
+               const botRows = visibleContainer.querySelectorAll('.msg-row.bot:not(.dim)');
+               if (botRows.length > 0) {
+                  botRows[botRows.length - 1].classList.add('dim');
+               }
+            }
+        }
+      } catch (e) {
+         console.warn("[Othello UI] Failed to dim previous message", e);
       }
 
       let sendUiState = beginSendUI({ label: isConfirmSave ? "Saving..." : "Thinking…", disableSend: true });
