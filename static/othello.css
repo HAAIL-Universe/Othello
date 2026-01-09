@@ -1027,15 +1027,17 @@
     }
 
     .msg-row.user .bubble {
-      /* New User Style: Dark background with Pink/Blue glow */
+      /* New User Style: Dark background (no static glowbar) */
       background: var(--bg-1);
-      color: var(--text-main); /* Ensure contrast on dark bg */
+      color: var(--text-main); 
       border-bottom-right-radius: 0.3rem;
-      /* Pink & Vibrant Blue glow (50/50 mix impression via shadow) */
-      box-shadow: 0 0 20px rgba(236, 72, 153, 0.15), 0 0 0 1px rgba(59, 130, 246, 0.3);
+      /* Remove static glow, let SVG pinstripe handle it */
+      box-shadow: none; 
+      /* Or maybe just a faint border so it's not invisible if SVG fails? */
+      border: 1px solid transparent; 
       backdrop-filter: blur(12px);
       position: relative;
-      z-index: 1; /* For overlay layering */
+      z-index: 1; 
     }
 
     .msg-row.bot .bubble {
@@ -7236,12 +7238,14 @@ body.mode-duet-user-overlay .duet-peek-tab { display: none; }
 .user-border-overlay rect {
   fill: none !important;
   fill-opacity: 0 !important;
-  stroke-width: 3px;
+  /* Pinstripe thickness */
+  stroke-width: 1.5px;
   stroke-linecap: round;
   stroke-dasharray: 50 50;
   animation: draft-orbit 8s linear infinite; /* Reuse same orbit animation */
   stroke: url(#user-gradient); /* The Pink/Blue gradient */
-  filter: drop-shadow(0 0 6px rgba(236, 72, 153, 0.6)); /* Pinkish glow on the stroke */
+  /* Tighter, subtler glow ("pinstripe glow") */
+  filter: drop-shadow(0 0 3px rgba(236, 72, 153, 0.5)); 
 }
 
 @media (prefers-reduced-motion: reduce) {
