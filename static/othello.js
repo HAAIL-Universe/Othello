@@ -4288,32 +4288,43 @@
       const trimmed = text.trim();
       const lines = trimmed.split('\n');
       
-      // Heuristic: Check for Structured Content (Goal Drafts, Lists)
-      const isGoalDraft = trimmed.startsWith("Goal Draft");
-      // Check for >1 line starting with list markers (bullet, number)
+      // Heuristics
+      // Goal Draft detection (Handles bolding/headers)
+      const isGoalDraft = /^(#+\s*)?(\*\*)?Goal Draft/i.test(trimmed);
+      
+      // Table detection: Look for pipe structure in header/separator
+      const isTable = lines.some(l => /^\s*\|.*\|/.test(l)) && lines.some(l => /^\s*\|\s*[: -]+\s*\|/.test(l));
+
+      // List detection
       const isList = lines.filter(l => /^\s*([-*•]|\d+\.)\s/.test(l)).length >= 2;
 
-      // STRATEGY 1: Structured Content (Keep existing "Tall Message" logic)
+      // STRATEGY 1: Goal Drafts & Lists (Retain Line Preview - 3 lines)
       if (isGoalDraft || isList) {
-          // If many lines, truncate by line count
           if (lines.length >= 5) {
               return lines.slice(0, 3).join('\n') + "...";
           }
-          // Otherwise, fall through to word loop (or simple return if short)
-          // We skip the "First Sentence" rule for lists as it breaks items.
-      } else {
-          // STRATEGY 2: Prose (Collapse to First Full Stop)
-          // Find first sentence ending. Accounts for ". " or end of string.
-          // Simple regex for first period followed by space or EOF.
-          const match = trimmed.match(/[.!?](\s|$)/);
-          if (match) {
-              const endIndex = match.index + 1; // Include the punctuation
-              // Verify it's not effectively the whole text (allow fuzzy match for whitespace diff)
-              if (endIndex < trimmed.length - 2) { 
-                  return trimmed.substring(0, endIndex);
-              }
-              // If it IS the whole text, we might still want to truncate if it's huge?
-              // But user said "collapse to first full stop", implies that IS the desired state.
+      }
+      
+      // STRATEGY 2: Tables (Summary)
+      if (isTable) {
+           // If table is detected, avoid showing raw Markdown pipes if possible.
+           // Try to find the intro text before the table
+           const tableStartIndex = lines.findIndex(l => /^\s*\|.*\|/.test(l));
+           if (tableStartIndex > 0) {
+               // Return text before table (limit to 3 lines)
+               return lines.slice(0, Math.min(tableStartIndex, 3)).join('\n') + "\n(Show Table...)";
+           } else {
+               // Table is at top. Return Headers + indicator.
+               return lines[0] + "\n(Show Table...)";
+           }
+      }
+
+      // STRATEGY 3: Prose (First Sentence)
+      const match = trimmed.match(/[.!?](\s|$)/);
+      if (match) {
+          const endIndex = match.index + 1;
+          // Only collapse if the sentence is significantly shorter than the whole text
+          if (endIndex < trimmed.length - 5) { 
               return trimmed.substring(0, endIndex);
           }
       }
