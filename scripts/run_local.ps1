@@ -132,9 +132,10 @@ try {
 
   # FORCE AUTH: Override any complex .env settings to ensure local access works with the known code
   # This strips out hashes/keys that might conflict with the plaintext password
-  [Environment]::SetEnvironmentVariable("OTHELLO_PIN_HASH", $null, "Process")
-  [Environment]::SetEnvironmentVariable("OTHELLO_LOGIN_KEY", $null, "Process")
-  [Environment]::SetEnvironmentVariable("OTHELLO_LOGIN_KEYS", $null, "Process")
+  # Note: Must use empty string "" not $null, otherwise python-dotenv re-loads them from .env file!
+  [Environment]::SetEnvironmentVariable("OTHELLO_PIN_HASH", "", "Process")
+  [Environment]::SetEnvironmentVariable("OTHELLO_LOGIN_KEY", "", "Process")
+  [Environment]::SetEnvironmentVariable("OTHELLO_LOGIN_KEYS", "", "Process")
   
   # Set the user's specific code
   [Environment]::SetEnvironmentVariable("OTHELLO_PASSWORD", "9465869", "Process")

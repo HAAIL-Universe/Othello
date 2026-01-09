@@ -1118,14 +1118,17 @@ def _generate_goal_draft_payload(user_input: str) -> Dict[str, Any]:
     
     system_prompt = (
         "You are a goal extraction engine. Extract goal details from the user's request into a JSON object.\n"
-        "Input may contain 'User Request' and '[CONTEXT]' sections. Use the context to infer details but DO NOT include the context markers or raw transcript in the output fields.\n"
+        "Input may contain 'User Request' and '[CONTEXT]' sections. \n"
+        "CRITICAL RULE: The User Request might be a trigger like 'Turn that into a goal'. IGNORE the trigger phrase itself. Extract the goal title and details from the [CONTEXT] or the underlying intent.\n"
+        "DO NOT include the context markers or raw transcript in the output fields.\n"
+        "\n"
         "Required keys:\n"
-        "- title: string (concise goal title, e.g. 'Bake Chocolate Cake'. Do not include 'User Request' prefix)\n"
+        "- title: string (concise goal title, e.g. 'Learn to ride a bike'. Ignore 'make this a goal' triggers)\n"
+        "- intent: string (specific objective or outcome. Why is the user doing this?)\n"
+        "- steps: array of strings (suggested actionable steps) - keep these high-level and few (3-5 max).\n"
+        "- needs: array of strings (optional constraints, resources, or requirements)\n"
+        "- metrics: array of strings (success criteria) - optional\n"
         "- target_days: integer or null (number of days to achieve)\n"
-        "- steps: array of strings (actionable steps) - keep these high-level and few (3-5 max). If the user request is vague, provide only 1-2 starting steps.\n"
-        "- intent: string (specific objective or outcome)\n"
-        "- resources: array of strings (tools, links, or support needed)\n"
-        "- metrics: array of strings (success criteria)\n"
         "Return ONLY valid JSON."
     )
     
@@ -1143,20 +1146,32 @@ def _generate_goal_draft_payload(user_input: str) -> Dict[str, Any]:
         content = response.choices[0].message.content
         data = json.loads(content)
         
+        # Defense in depth: Sanitize title to prevent context leaks
+        if "title" in data and isinstance(data["title"], str):
+            raw_title = data["title"]
+            # Remove [CONTEXT] marker and everything after it
+            if "[CONTEXT]" in raw_title:
+                raw_title = raw_title.split("[CONTEXT]")[0]
+            # Remove explicit prefixes if LLM echoed them
+            raw_title = raw_title.replace("User Request:", "").replace("**User Request:", "").strip()
+            # Clean markup
+            raw_title = raw_title.replace("**", "").strip()
+            data["title"] = raw_title
+
         # Format body to match Standard Flow markdown style
         intent = data.get("intent") or data.get("body") or ""
-        resources = data.get("resources") or []
+        # Ensure intent is stored independently
+        data["intent"] = intent
+
+        resources = data.get("resources") or data.get("needs") or []
         metrics = data.get("metrics") or []
         
         body_parts = []
         if intent:
             body_parts.append(f"### Intent\n{intent}")
-        else:
-            # Fallback if LLM puts everything in body via old habit, unlikely with new prompt
-            pass
             
         if resources and isinstance(resources, list):
-            body_parts.append("### Resources")
+            body_parts.append("### Resources / Needs")
             for r in resources:
                 body_parts.append(f"- {r}")
                 
@@ -1169,8 +1184,10 @@ def _generate_goal_draft_payload(user_input: str) -> Dict[str, Any]:
         if not final_body and intent:
              final_body = intent
 
-        # Inject constructed body back into data
+        # Inject constructed body back into data for legacy/UI compatibility
         data["body"] = final_body
+        # Ensure needs are available as 'needs' or 'resources'
+        data["needs"] = resources
         
         return _normalize_goal_draft_payload(data)
     except Exception as e:
@@ -4769,7 +4786,9 @@ def handle_message():
                 current_body = payload.get("body", "")
                 if len(current_body) < 10: # If generator returned empty body
                      # Fallback to transcript, but clean.
-                     payload["body"] = f"Context:\n{full_transcript}" if 'full_transcript' in locals() else user_input 
+                     # payload["body"] = f"Context:\n{full_transcript}" if 'full_transcript' in locals() else user_input 
+                     # Refactor: DISABLED fallback to transcript dumping. We trust the generator or show a blank drafts rather than noise.
+                     pass
 
             suggestion = suggestions_repository.create_suggestion(
                 user_id=user_id,
@@ -4781,21 +4800,26 @@ def handle_message():
             
             draft_id = suggestion["id"]
             
-            # Construct rich markdown reply matching Standard Flow
-            md_lines = [f"Goal Title: **{payload.get('title', 'New Goal')}**\n"]
+            # Construct rich markdown reply matching User Requested "Clean Draft" format
+            md_lines = ["**Goal Draft**"]
+            md_lines.append(f"**Title:** {payload.get('title', 'New Goal')}")
             
-            body_text = payload.get("body", "").strip()
-            if body_text:
-                md_lines.append(body_text)
+            intent = payload.get("intent")
+            if intent:
+                md_lines.append(f"**Why / Intent (optional):** {intent}")
                 
             steps = payload.get("steps", [])
             if steps:
-                md_lines.append("\n### Steps:")
+                md_lines.append("**Steps (suggested):**")
                 for i, s in enumerate(steps, 1):
-                    md_lines.append(f"{i}. {s}")
+                    md_lines.append(f"{i}) {s}")
             
-            # Additional closing
-            md_lines.append("\nPlease confirm if you'd like to finalize this goal or if you want to make any changes.")
+            needs = payload.get("needs") or payload.get("resources")
+            if needs:
+                val = "; ".join(needs) if isinstance(needs, list) else str(needs)
+                md_lines.append(f"**Needs / Constraints:** {val}")
+                
+            md_lines.append("**Question (single):** Create this goal?")
             
             rich_reply = "\n".join(md_lines)
 

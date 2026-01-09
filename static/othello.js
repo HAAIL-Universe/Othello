@@ -4062,101 +4062,10 @@
 
       // Draft Focus (Priority over Active Goal)
       if (othelloState.activeDraft) {
-          const draftType = othelloState.activeDraft.draft_type || "Goal";
-          const displayType = draftType.charAt(0).toUpperCase() + draftType.slice(1);
-          focusRibbonTitle.textContent = `Drafting ${displayType}...`; 
-          
-          // Add actions if not present
-          let actionsDiv = focusRibbon.querySelector(".ribbon-actions");
-          if (!actionsDiv) {
-              actionsDiv = document.createElement("div");
-              actionsDiv.className = "ribbon-actions";
-              actionsDiv.style.marginLeft = "auto";
-              actionsDiv.style.display = "flex";
-              actionsDiv.style.gap = "8px";
-              focusRibbon.appendChild(actionsDiv);
-          }
-          
-          // Rebuild actions
-          actionsDiv.innerHTML = "";
-
-          const genStepsBtn = document.createElement("button");
-          genStepsBtn.textContent = "Generate Steps";
-          genStepsBtn.className = "ribbon-btn";
-          genStepsBtn.onclick = async (e) => {
-              e.stopPropagation();
-              if (othelloState.isGeneratingSteps) return;
-              
-              othelloState.isGeneratingSteps = true;
-              genStepsBtn.disabled = true;
-              genStepsBtn.textContent = "Generating...";
-              const regenBtn = actionsDiv.querySelector(".regen-btn");
-              if (regenBtn) regenBtn.disabled = true;
-              
-              try {
-                  await sendMessage("", { ui_action: "generate_draft_steps" });
-              } finally {
-                  othelloState.isGeneratingSteps = false;
-                  if (genStepsBtn) { // Check if still exists
-                      genStepsBtn.disabled = false;
-                      genStepsBtn.textContent = "Generate Steps";
-                  }
-                  if (regenBtn) regenBtn.disabled = false;
-              }
-          };
-          
-          const regenStepsBtn = document.createElement("button");
-          regenStepsBtn.textContent = "Regenerate";
-          regenStepsBtn.className = "ribbon-btn regen-btn";
-          regenStepsBtn.onclick = async (e) => {
-              e.stopPropagation();
-              if (othelloState.isGeneratingSteps) return;
-              
-              othelloState.isGeneratingSteps = true;
-              regenStepsBtn.disabled = true;
-              regenStepsBtn.textContent = "Generating...";
-              genStepsBtn.disabled = true;
-              
-              try {
-                  await sendMessage("", { ui_action: "regenerate_draft_steps" });
-              } finally {
-                  othelloState.isGeneratingSteps = false;
-                  if (regenStepsBtn) {
-                      regenStepsBtn.disabled = false;
-                      regenStepsBtn.textContent = "Regenerate";
-                  }
-                  if (genStepsBtn) genStepsBtn.disabled = false;
-              }
-          };
-          
-          const confirmBtn = document.createElement("button");
-          confirmBtn.textContent = "Confirm";
-          confirmBtn.className = "ribbon-btn confirm-btn";
-          confirmBtn.onclick = (e) => {
-              e.stopPropagation();
-              sendMessage("", { ui_action: "confirm_draft" });
-          };
-
-          const dismissBtn = document.createElement("button");
-          dismissBtn.textContent = "Dismiss";
-          dismissBtn.className = "ribbon-btn dismiss-btn";
-          dismissBtn.onclick = (e) => {
-              e.stopPropagation();
-              sendMessage("", { ui_action: "dismiss_draft" });
-          };
-
-          actionsDiv.appendChild(genStepsBtn);
-          actionsDiv.appendChild(regenStepsBtn);
-          actionsDiv.appendChild(confirmBtn);
-          actionsDiv.appendChild(dismissBtn);
-
-          focusRibbon.classList.add("visible");
-          focusRibbon.classList.add("draft-mode");
+          // User Request: Remove draft bar from UI entirely.
+          // Drafts are handled in-chat only.
+          focusRibbon.classList.remove("visible"); 
           return;
-      } else {
-          focusRibbon.classList.remove("draft-mode");
-          const actions = focusRibbon.querySelector(".ribbon-actions");
-          if (actions) actions.remove();
       }
 
       if (othelloState.activeGoalId !== null) {
@@ -8120,6 +8029,7 @@
       detailGoalId.textContent = `Goal #${goal.id}`;
       // Fix: Define goalIdNum in the main scope so it's available for activity log planning logic
       const goalIdNum = normalizeGoalId(goal.id);
+      const activeIdNum = normalizeGoalId(othelloState.activeGoalId);
 
       detailGoalTitle.innerHTML = formatMessageText(goal.text || goal.title || "Untitled Goal");
 
