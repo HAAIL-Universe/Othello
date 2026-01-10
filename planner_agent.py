@@ -330,14 +330,20 @@ def format_plan_draft_reply(draft_payload: Dict[str, Any]) -> str:
     objective = payload.get("objective") or "(missing)"
     timeline = payload.get("timeline") or "(missing)"
     tasks = _stringify_list(payload.get("tasks"))
+    next_line = _format_next_line(payload)
 
-    lines = [
-        "**Plan Draft**",
-        "",
-        f"**Objective:** {objective}",
-        f"**Timeline:** {timeline}",
-        "**Tasks:**",
-    ]
+    lines = []
+    if next_line:
+        lines.extend([next_line, ""])
+    lines.extend(
+        [
+            "**Plan Draft**",
+            "",
+            f"**Objective:** {objective}",
+            f"**Timeline:** {timeline}",
+            "**Tasks:**",
+        ]
+    )
     if tasks:
         for task in tasks:
             lines.append(f"- {task}")
@@ -347,10 +353,6 @@ def format_plan_draft_reply(draft_payload: Dict[str, Any]) -> str:
     missing_line = _format_missing_line(payload)
     if missing_line:
         lines.append(missing_line)
-
-    next_line = _format_next_line(payload)
-    if next_line:
-        lines.append(next_line)
 
     return "\n".join(lines)
 
