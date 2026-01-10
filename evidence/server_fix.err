@@ -1,0 +1,24 @@
+2026-01-10 18:07:28,003 - API.Auth - INFO - AuthConfig: secret_present=True pin_hash_present=False login_key_present=True legacy_pwd_present=False auth_mode=login_key
+2026-01-10 18:07:28,789 - API - INFO - [API] Insights table check: count=988
+2026-01-10 18:07:28,792 - API.Startup - INFO - [Startup] OPENAI_API_KEY_present=True model=gpt-4o-mini
+2026-01-10 18:07:28,792 - API.Startup - INFO - LibraryVersions: openai=1.33.0 httpx=0.27.2
+2026-01-10 18:07:28,823 - root - INFO - [CONFIG] auth_mode=none, secret_key_source=OTHELLO_SECRET_KEY, db_configured=configured, model=gpt-4o-mini, build=unknown
+2026-01-10 18:07:28,831 - werkzeug - INFO - [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on http://127.0.0.1:8000
+2026-01-10 18:07:28,831 - werkzeug - INFO - [33mPress CTRL+C to quit[0m
+2026-01-10 18:07:49,873 - API - INFO - API: request start request_id=ed883ef3-8d41-440d-bfb7-e9e27531371e method=POST path=/api/auth/login
+2026-01-10 18:07:49,923 - werkzeug - INFO - 127.0.0.1 - - [10/Jan/2026 18:07:49] "POST /api/auth/login HTTP/1.1" 200 -
+2026-01-10 18:07:49,935 - API - INFO - API: request start request_id=f17242b4-be97-41f4-9afe-70889867fd98 method=POST path=/api/message
+2026-01-10 18:07:49,935 - API - INFO - API: routing decision request_id=f17242b4-be97-41f4-9afe-70889867fd98 incoming='companion' user_input_len=0 effective=companion
+2026-01-10 18:07:49,935 - API - INFO - API: message meta request_id=f17242b4-be97-41f4-9afe-70889867fd98 current_view=None current_mode=companion keys=['message', 'channel', 'conversation_id', 'ui_action'] goal_id=None active_goal_id=None conversation_id=124
+2026-01-10 18:07:49,935 - API - INFO - API: handle_message start request_id=f17242b4-be97-41f4-9afe-70889867fd98 payload_bytes=124 goal_id=None
+2026-01-10 18:07:49,936 - API - INFO - API: Received message:  request_id=f17242b4-be97-41f4-9afe-70889867fd98
+2026-01-10 18:07:49,981 - API - INFO - API: handle_message done request_id=f17242b4-be97-41f4-9afe-70889867fd98 elapsed_ms=47 goal_events_ok=None
+2026-01-10 18:07:49,981 - werkzeug - INFO - 127.0.0.1 - - [10/Jan/2026 18:07:49] "POST /api/message HTTP/1.1" 200 -
+2026-01-10 18:07:50,015 - API - INFO - API: request start request_id=70b4e334-c12c-4b14-8aa8-c5f082d29d34 method=POST path=/api/message
+2026-01-10 18:07:50,016 - API - INFO - API: routing decision request_id=70b4e334-c12c-4b14-8aa8-c5f082d29d34 incoming='' user_input_len=4 effective=planner
+2026-01-10 18:07:50,016 - API - INFO - API: message meta request_id=70b4e334-c12c-4b14-8aa8-c5f082d29d34 current_view=None current_mode=companion keys=['message', 'draft_type', 'conversation_id', 'draft_id'] goal_id=None active_goal_id=None conversation_id=124
+2026-01-10 18:07:50,016 - API - INFO - API: handle_message start request_id=70b4e334-c12c-4b14-8aa8-c5f082d29d34 payload_bytes=98 goal_id=None
+2026-01-10 18:07:50,017 - API - INFO - API: Received message: plan request_id=70b4e334-c12c-4b14-8aa8-c5f082d29d34
+2026-01-10 18:07:50,039 - API - INFO - API: handle_message done request_id=70b4e334-c12c-4b14-8aa8-c5f082d29d34 elapsed_ms=14 goal_events_ok=None
+2026-01-10 18:07:50,039 - werkzeug - INFO - 127.0.0.1 - - [10/Jan/2026 18:07:50] "POST /api/message HTTP/1.1" 200 -

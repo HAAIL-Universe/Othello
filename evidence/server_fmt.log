@@ -1,0 +1,6 @@
+[Database] Connection pool initialized (min=1, max=10)
+[API] [OK] Ensured goals.draft_text column exists
+[API] [OK] Database connection pool initialized successfully
+[API] [OK] Connected to Neon PostgreSQL database
+ * Serving Flask app 'api'
+ * Debug mode: off

@@ -30,6 +30,7 @@ from db import goal_events_repository
 from db.database import get_connection
 import hashlib
 import json
+import planner_agent
 
 # NOTE: Keep import-time work minimal! Do not import LLM/agent modules or connect to DB at module scope unless required for health endpoints.
 from dotenv import load_dotenv
@@ -4839,99 +4840,108 @@ def handle_message():
             except Exception as e:
                 logger.warning("Failed to hydrate draft context: %s", e)
 
-            # Now generate payload with full context
-            payload = _generate_goal_draft_payload(generation_text)
-            
-            # If we hydrated, ensure the body contains the context reference if it wasn't captured
-            if hydration_source_msg_id:
-                # Just to be safe, we can append a clean summary or just rely on the generator having done its job.
-                # Let's trust _generate_goal_draft_payload to extract title/steps from generation_text.
-                # But we might want to store the raw context in the body for the user to see/edit.
-                current_body = payload.get("body", "")
-                if len(current_body) < 10: # If generator returned empty body
-                     # Fallback to transcript, but clean.
-                     # payload["body"] = f"Context:\n{full_transcript}" if 'full_transcript' in locals() else user_input 
-                     # Refactor: DISABLED fallback to transcript dumping. We trust the generator or show a blank drafts rather than noise.
-                     pass
+            # PHASE 3B UPDATE: Type Gate (No Auto-Wins)
+            # Create a pending draft of kind="build" asking the user for the type.
+            payload = planner_agent.init_build_draft_payload()
+            gate_question = payload.get("next_question") or "What are we building: a plan, a goal, a routine, or a task?"
 
             suggestion = suggestions_repository.create_suggestion(
                 user_id=user_id,
-                kind="goal",
+                kind="build", # Pending type
                 payload=payload,
-                provenance={"source": "api_message_create_goal_draft", "original_text": user_input, "checkpoint_id": hydration_source_msg_id},
+                provenance={"source": "api_message_enter_build_mode_gate", "original_text": user_input, "checkpoint_id": hydration_source_msg_id},
                 status="pending"
             )
-            
+
             draft_id = suggestion["id"]
-            
-            # Construct rich markdown reply matching Structured Goal Draft format
-            md_lines = ["**Goal Draft**"]
-            md_lines.append(f"**Title:** {payload.get('title') or '(missing)'}")
-            
-            # Description
-            desc = payload.get("description")
-            md_lines.append(f"**Description:** {desc if desc else '(missing)'}")
-            
-            # Objectives
-            obj = payload.get("objectives") or payload.get("steps")
-            md_lines.append("**Objectives:**")
-            if obj and isinstance(obj, list) and len(obj) > 0:
-                for o in obj:
-                    md_lines.append(f"- {o}")
-            else:
-                md_lines.append("(missing)")
-                
-            # Timeline
-            timeline = payload.get("timeline")
-            md_lines.append(f"**Timeline:** {timeline if timeline else '(missing)'}")
-            
-            # Resources
-            res = payload.get("resources") or payload.get("needs")
-            md_lines.append("**Resources Needed:**")
-            if res and isinstance(res, list) and len(res) > 0:
-                for r in res:
-                    md_lines.append(f"- {r}")
-            else:
-                md_lines.append("(missing)")
-            
-            # Determine question
-            next_q = payload.get("next_question")
-            if not next_q:
-                # Fallback if LLM didn't provide one but fields are missing
-                missing = payload.get("missing_fields", [])
-                if missing:
-                    next_q = f"What is the {missing[0]}?"
-                else:
-                    next_q = "Ready to confirm?"
-            
-            md_lines.append(f"\n**{next_q}**")
-            
-            rich_reply = "\n".join(md_lines)
+
+            # Simple Gate Response
+            rich_reply = planner_agent.format_build_mode_reply(payload)
 
             response = {
                 "reply": rich_reply,
                 "draft_context": {
                     "draft_id": draft_id,
-                    "draft_type": "goal",
+                    "draft_type": "build", # Pending type
                     "source_message_id": client_message_id,
                     "checkpoint_id": hydration_source_msg_id
                 },
                 "draft_payload": payload,
                 "request_id": request_id
             }
-            
+
             # Add to meta.suggestions for completeness
             meta = response.setdefault("meta", {})
             suggestions = meta.setdefault("suggestions", [])
             suggestion_out = dict(suggestion)
             suggestion_out["suggestion_id"] = draft_id
             suggestions.append(suggestion_out)
-            
+
             return jsonify(response)
 
+        # Draft Focus: Type Gate (Pending Type Selection)
+        if user_id and data.get("draft_id") and data.get("draft_type") == "build" and not ui_action:
+            draft_id = int(data.get("draft_id"))
+            build_kind = planner_agent.determine_build_kind(user_input)
+
+            if not build_kind:
+                # Loop back
+                payload = planner_agent.init_build_draft_payload()
+                gate_question = payload.get("next_question") or "What are we building: a plan, a goal, a routine, or a task?"
+                return jsonify({
+                    "reply": planner_agent.format_build_mode_reply(payload),
+                    "draft_context": {
+                        "draft_id": draft_id,
+                        "draft_type": "build",
+                        "request_id": request_id
+                    },
+                    "draft_payload": payload,
+                    "request_id": request_id
+                })
+
+            # Valid type selected - Transition
+            new_kind = build_kind
+            new_type_display = new_kind
+            if new_kind == "goal":
+                new_payload = {
+                     "title": None,
+                     "description": None,
+                     "missing_fields": ["title", "description"],
+                     "next_question": "What is the goal you want to achieve?"
+                }
+                reply_text = planner_agent.format_goal_draft_reply(new_payload)
+            elif new_kind == "plan":
+                new_payload = planner_agent.init_plan_draft_payload()
+                reply_text = planner_agent.format_plan_draft_reply(new_payload)
+            else:
+                 # Minimal fallback for Routine/Task
+                 return jsonify({
+                    "reply": "Routine/Task build isn't implemented yet.",
+                    "draft_context": {
+                        "draft_id": draft_id,
+                        "draft_type": "build", # Stay in build
+                        "request_id": request_id
+                    },
+                    "request_id": request_id
+                 })
+
+            suggestions_repository.update_suggestion_kind(user_id, draft_id, new_kind, new_payload)
+            
+            return jsonify({
+                "reply": reply_text,
+                "draft_context": {
+                    "draft_id": draft_id,
+                    "draft_type": new_type_display,
+                    "request_id": request_id
+                },
+                "draft_payload": new_payload,
+                "request_id": request_id
+            })
+
         # Draft Focus: Edit Draft (While Pending)
-        # Trigger: draft_id present + draft_type="goal" + NO ui_action
-        if user_id and data.get("draft_id") and data.get("draft_type") == "goal" and not ui_action:
+        # Trigger: draft_id present + (type="goal" OR "plan") + NO ui_action
+        draft_type_in = data.get("draft_type")
+        if user_id and data.get("draft_id") and draft_type_in in ["goal", "plan"] and not ui_action:
             draft_id = data.get("draft_id")
             logger.info("Draft edit lane draft_id=%s", draft_id)
             try:
@@ -4942,6 +4952,32 @@ def handle_message():
                     # This is an edit instruction
                     current_payload = draft.get("payload", {})
                     
+                    # Plan Branch
+                    if draft.get("kind") == "plan":
+                        updated_payload, changed = planner_agent.patch_plan_draft_payload_deterministic(
+                            user_input,
+                            current_payload,
+                        )
+                        if not changed:
+                            updated_payload = planner_agent.patch_plan_draft_payload_llm(
+                                user_input,
+                                updated_payload,
+                            )
+                        suggestions_repository.update_suggestion_payload(user_id, draft_id, updated_payload)
+                        
+                        reply_msg = planner_agent.format_plan_draft_reply(updated_payload)
+                        
+                        return jsonify({
+                            "reply": reply_msg,
+                            "draft_context": {
+                                "draft_id": draft_id,
+                                "draft_type": "plan",
+                                "source_message_id": client_message_id
+                            },
+                            "draft_payload": updated_payload,
+                            "request_id": request_id
+                        })
+
                     # 1. Try deterministic edit
                     updated_payload, handled, reply_suffix = _apply_goal_draft_deterministic_edit(current_payload, user_input)
                     
@@ -5018,7 +5054,7 @@ def handle_message():
                          reply_msg += f" Draft: '{title}' ({steps_count} steps)."
 
                     response = {
-                        "reply": reply_msg,
+                        "reply": planner_agent.format_goal_draft_reply(updated_payload),
                         "draft_context": {
                             "draft_id": draft_id,
                             "draft_type": "goal",

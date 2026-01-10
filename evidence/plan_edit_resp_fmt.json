@@ -1,0 +1,27 @@
+{
+  "draft_context": {
+    "draft_id": 371,
+    "draft_type": "plan",
+    "source_message_id": null
+  },
+  "draft_payload": {
+    "checklist": [],
+    "missing_fields": [
+      "objective",
+      "tasks",
+      "timeline"
+    ],
+    "next_question": "What is the objective of the plan?",
+    "objective": "to build a play platform for my cat",
+    "resources": [],
+    "tasks": [
+      "design it",
+      "buy materials",
+      "build it",
+      "check safety"
+    ],
+    "timeline": "four weeks"
+  },
+  "reply": "**Plan Draft**\n\n**Objective:** to build a play platform for my cat\n**Timeline:** four weeks\n**Tasks:**\n- design it\n- buy materials\n- build it\n- check safety\n**Missing:** objective, tasks, timeline\n**Next:** What is the objective of the plan?",
+  "request_id": "927f84f4-1bb5-41eb-94e9-f7a7ddf9b5ad"
+}

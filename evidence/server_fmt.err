@@ -1,0 +1,32 @@
+2026-01-10 18:47:40,559 - API.Auth - INFO - AuthConfig: secret_present=True pin_hash_present=False login_key_present=True legacy_pwd_present=False auth_mode=login_key
+2026-01-10 18:47:41,346 - API - INFO - [API] Insights table check: count=1006
+2026-01-10 18:47:41,349 - API.Startup - INFO - [Startup] OPENAI_API_KEY_present=True model=gpt-4o-mini
+2026-01-10 18:47:41,350 - API.Startup - INFO - LibraryVersions: openai=1.33.0 httpx=0.27.2
+2026-01-10 18:47:41,383 - root - INFO - [CONFIG] auth_mode=none, secret_key_source=OTHELLO_SECRET_KEY, db_configured=configured, model=gpt-4o-mini, build=unknown
+2026-01-10 18:47:41,390 - werkzeug - INFO - [31m[1mWARNING: This is a development server. Do not use it in a production deployment. Use a production WSGI server instead.[0m
+ * Running on http://127.0.0.1:8000
+2026-01-10 18:47:41,390 - werkzeug - INFO - [33mPress CTRL+C to quit[0m
+2026-01-10 18:48:01,540 - API - INFO - API: request start request_id=dc46c0ee-a606-4948-97ac-9e1838781678 method=POST path=/api/auth/login
+2026-01-10 18:48:01,587 - werkzeug - INFO - 127.0.0.1 - - [10/Jan/2026 18:48:01] "POST /api/auth/login HTTP/1.1" 200 -
+2026-01-10 18:48:01,599 - API - INFO - API: request start request_id=63af3e6a-7fe2-411c-97e0-fa0f0f47d260 method=POST path=/api/message
+2026-01-10 18:48:01,600 - API - INFO - API: routing decision request_id=63af3e6a-7fe2-411c-97e0-fa0f0f47d260 incoming='companion' user_input_len=0 effective=companion
+2026-01-10 18:48:01,600 - API - INFO - API: message meta request_id=63af3e6a-7fe2-411c-97e0-fa0f0f47d260 current_view=None current_mode=companion keys=['channel', 'ui_action', 'conversation_id', 'message'] goal_id=None active_goal_id=None conversation_id=125
+2026-01-10 18:48:01,600 - API - INFO - API: handle_message start request_id=63af3e6a-7fe2-411c-97e0-fa0f0f47d260 payload_bytes=124 goal_id=None
+2026-01-10 18:48:01,600 - API - INFO - API: Received message:  request_id=63af3e6a-7fe2-411c-97e0-fa0f0f47d260
+2026-01-10 18:48:01,659 - API - INFO - API: handle_message done request_id=63af3e6a-7fe2-411c-97e0-fa0f0f47d260 elapsed_ms=62 goal_events_ok=None
+2026-01-10 18:48:01,660 - werkzeug - INFO - 127.0.0.1 - - [10/Jan/2026 18:48:01] "POST /api/message HTTP/1.1" 200 -
+2026-01-10 18:48:01,693 - API - INFO - API: request start request_id=98b85a9e-dc93-4926-8e80-32ec93a3a398 method=POST path=/api/message
+2026-01-10 18:48:01,694 - API - INFO - API: routing decision request_id=98b85a9e-dc93-4926-8e80-32ec93a3a398 incoming='' user_input_len=4 effective=planner
+2026-01-10 18:48:01,694 - API - INFO - API: message meta request_id=98b85a9e-dc93-4926-8e80-32ec93a3a398 current_view=None current_mode=companion keys=['draft_id', 'conversation_id', 'draft_type', 'message'] goal_id=None active_goal_id=None conversation_id=125
+2026-01-10 18:48:01,694 - API - INFO - API: handle_message start request_id=98b85a9e-dc93-4926-8e80-32ec93a3a398 payload_bytes=98 goal_id=None
+2026-01-10 18:48:01,694 - API - INFO - API: Received message: plan request_id=98b85a9e-dc93-4926-8e80-32ec93a3a398
+2026-01-10 18:48:01,719 - API - INFO - API: handle_message done request_id=98b85a9e-dc93-4926-8e80-32ec93a3a398 elapsed_ms=31 goal_events_ok=None
+2026-01-10 18:48:01,720 - werkzeug - INFO - 127.0.0.1 - - [10/Jan/2026 18:48:01] "POST /api/message HTTP/1.1" 200 -
+2026-01-10 18:48:01,724 - API - INFO - API: request start request_id=927f84f4-1bb5-41eb-94e9-f7a7ddf9b5ad method=POST path=/api/message
+2026-01-10 18:48:01,724 - API - INFO - API: routing decision request_id=927f84f4-1bb5-41eb-94e9-f7a7ddf9b5ad incoming='' user_input_len=142 effective=planner
+2026-01-10 18:48:01,724 - API - INFO - API: message meta request_id=927f84f4-1bb5-41eb-94e9-f7a7ddf9b5ad current_view=None current_mode=companion keys=['draft_id', 'conversation_id', 'draft_type', 'message'] goal_id=None active_goal_id=None conversation_id=125
+2026-01-10 18:48:01,724 - API - INFO - API: handle_message start request_id=927f84f4-1bb5-41eb-94e9-f7a7ddf9b5ad payload_bytes=235 goal_id=None
+2026-01-10 18:48:01,724 - API - INFO - API: Received message: Objective is to build a play platform for my cat. Main tasks are design it, buy materials, build it, request_id=927f84f4-1bb5-41eb-94e9-f7a7ddf9b5ad
+2026-01-10 18:48:01,725 - API - INFO - Draft edit lane draft_id=371
+2026-01-10 18:48:01,771 - API - INFO - API: handle_message done request_id=927f84f4-1bb5-41eb-94e9-f7a7ddf9b5ad elapsed_ms=47 goal_events_ok=None
+2026-01-10 18:48:01,772 - werkzeug - INFO - 127.0.0.1 - - [10/Jan/2026 18:48:01] "POST /api/message HTTP/1.1" 200 -

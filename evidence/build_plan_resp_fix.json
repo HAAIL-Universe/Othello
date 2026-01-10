@@ -1,0 +1,22 @@
+{
+  "draft_context": {
+    "draft_id": 368,
+    "draft_type": "plan",
+    "request_id": "70b4e334-c12c-4b14-8aa8-c5f082d29d34"
+  },
+  "draft_payload": {
+    "checklist": [],
+    "missing_fields": [
+      "objective",
+      "tasks",
+      "timeline"
+    ],
+    "next_question": "What is the objective of the plan?",
+    "objective": null,
+    "resources": [],
+    "tasks": [],
+    "timeline": null
+  },
+  "reply": "**Plan Draft**\n\nWhat is the objective of the plan?",
+  "request_id": "70b4e334-c12c-4b14-8aa8-c5f082d29d34"
+}

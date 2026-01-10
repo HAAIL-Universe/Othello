@@ -1,0 +1,43 @@
+{
+  "draft_context": {
+    "checkpoint_id": null,
+    "draft_id": 371,
+    "draft_type": "build",
+    "source_message_id": null
+  },
+  "draft_payload": {
+    "build_kind": null,
+    "missing_fields": [
+      "build_kind"
+    ],
+    "next_question": "What are we building: a plan, a goal, a routine, or a task?"
+  },
+  "meta": {
+    "suggestions": [
+      {
+        "created_at": "Sat, 10 Jan 2026 18:48:01 GMT",
+        "decided_at": null,
+        "decided_reason": null,
+        "id": 371,
+        "kind": "build",
+        "payload": {
+          "build_kind": null,
+          "missing_fields": [
+            "build_kind"
+          ],
+          "next_question": "What are we building: a plan, a goal, a routine, or a task?"
+        },
+        "provenance": {
+          "checkpoint_id": null,
+          "original_text": "",
+          "source": "api_message_enter_build_mode_gate"
+        },
+        "status": "pending",
+        "suggestion_id": 371,
+        "user_id": "1"
+      }
+    ]
+  },
+  "reply": "**Build Mode**\n\nWhat are we building: a plan, a goal, a routine, or a task?\n\n**Missing:** build_kind",
+  "request_id": "63af3e6a-7fe2-411c-97e0-fa0f0f47d260"
+}
