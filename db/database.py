@@ -213,6 +213,9 @@ def ensure_core_schema() -> None:
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );
         """,
+        "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS duet_narrator_text TEXT;",
+        "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS duet_narrator_updated_at TIMESTAMPTZ;",
+        "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS duet_narrator_msg_count INTEGER DEFAULT 0;",
         "CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);",
         """
         CREATE TABLE IF NOT EXISTS messages (
@@ -240,6 +243,22 @@ def ensure_core_schema() -> None:
         "CREATE INDEX IF NOT EXISTS idx_messages_session_id ON messages(session_id);",
         "CREATE INDEX IF NOT EXISTS idx_messages_checkpoint_id ON messages(checkpoint_id);",
         "CREATE INDEX IF NOT EXISTS idx_messages_client_message_id ON messages(client_message_id);",
+
+        """
+        CREATE TABLE IF NOT EXISTS draft_contexts (
+            id SERIAL PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            session_id INTEGER,
+            intent_kind TEXT NOT NULL,
+            start_message_id INTEGER NOT NULL,
+            status TEXT NOT NULL DEFAULT 'open',
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        );
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_draft_contexts_user_status ON draft_contexts(user_id, status);",
+        "CREATE INDEX IF NOT EXISTS idx_draft_contexts_session ON draft_contexts(session_id);",
+
         """
         CREATE TABLE IF NOT EXISTS transcripts (
             id SERIAL PRIMARY KEY,
