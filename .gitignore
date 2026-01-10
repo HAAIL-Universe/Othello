@@ -44,3 +44,11 @@ test_impatience_data.json
 
 # Build artifacts
 build_docs/
+
+# Local evidence/debug artifacts
+evidence/
+server*.log
+phase*_*.json
+build_*_resp*.json
+*_resp*.json
+cookies.txt
