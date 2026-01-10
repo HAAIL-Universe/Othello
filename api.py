@@ -1739,7 +1739,7 @@ def _should_offer_build_mode_router(
 
     # 2. Strong Triggers (Phrase Logic)
     strong_phrases = [
-        "build mode", "help me plan", "help me organize", 
+        "build mode", "help me plan", "help me make a plan", "help me organize", 
         "make a new plan", "create a new goal", "start a draft",
         "break this down",
         # Transferred from legacy hard-intercepts:
