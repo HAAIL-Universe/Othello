@@ -190,6 +190,19 @@ def patch_plan_draft_payload_deterministic(
         if match:
             timeline = f"in {_clean_fragment(match.group('value'))}"
 
+    if timeline is None and re.search(
+        r"\b(timeline|deadline|slip|push|extend)\b",
+        text,
+        flags=re.IGNORECASE,
+    ):
+        match = re.search(
+            r"\b(?:(?:about|around|maybe|approximately)\s+)?(?P<value>(?:\d+|[a-z]+)\s+weeks?)\b",
+            text,
+            flags=re.IGNORECASE,
+        )
+        if match:
+            timeline = _clean_fragment(match.group("value"))
+
     if timeline and timeline != updated_payload.get("timeline"):
         updated_payload["timeline"] = timeline
         changed = True
@@ -223,6 +236,7 @@ def patch_plan_draft_payload_deterministic(
 
     if add_tasks_text:
         task = _clean_fragment(add_tasks_text)
+        task = task.strip(" .!?")
         existing = updated_payload.get("tasks")
         existing = existing if isinstance(existing, list) else []
         merged = _dedupe_tasks(existing + ([task] if task else []))

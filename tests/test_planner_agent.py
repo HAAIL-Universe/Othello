@@ -75,6 +75,20 @@ class TestPlannerAgent(unittest.TestCase):
         self.assertEqual(updated.get("missing_fields"), [])
         self.assertIn("confirm plan", updated.get("next_question", "").lower())
 
+    def test_patch_plan_draft_payload_timeline_delta(self):
+        payload = {
+            "objective": "Build a platform",
+            "tasks": ["design it", "buy materials", "build it", "check safety"],
+            "timeline": "four weeks",
+        }
+        updated, changed = planner_agent.patch_plan_draft_payload_deterministic(
+            "Timeline might slip because of deliveries, maybe six weeks instead.",
+            payload,
+        )
+        self.assertTrue(changed)
+        self.assertIn("six week", (updated.get("timeline") or "").lower())
+        self.assertEqual(updated.get("missing_fields"), [])
+
 
 if __name__ == "__main__":
     unittest.main()
