@@ -4793,14 +4793,14 @@ def handle_message():
         is_create_draft = False
         hydration_source_msg_id = None
         
-        if user_id and user_input:
-            norm_input = user_input.strip().lower()
+        if user_id:
+            norm_input = user_input.strip().lower() if user_input else ""
             # 1. UI Action (Clicking 'Enter build mode')
             if ui_action == "enter_build_mode_from_message":
                 is_create_draft = True
             
             # 2. Explicit Power Commands (Keep narrowly scoped - "START" only)
-            elif "start a goal draft" in norm_input or "create a goal draft" in norm_input:
+            elif norm_input and ("start a goal draft" in norm_input or "create a goal draft" in norm_input):
                 is_create_draft = True
             
             # DEPRECATED: "build mode", "turn into goal" etc are now SOFT-ROUTED only.
