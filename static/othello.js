@@ -5465,6 +5465,14 @@
       if (!entry || !entry.clientMessageId || !entry.bubbleEl) return;
       const suggestions = getSecondarySuggestions(entry.clientMessageId);
       const count = suggestions.length;
+
+      // Phase 3B: Mark row so CSS can show .meta in duet mode
+      const row = entry.bubbleEl.closest(".msg-row");
+      if (row) {
+          if (count > 0) row.classList.add("has-secondary-badge");
+          else row.classList.remove("has-secondary-badge");
+      }
+
       const meta = entry.bubbleEl.querySelector(".meta");
       if (!meta) return;
       if (!count) {

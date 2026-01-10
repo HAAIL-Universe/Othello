@@ -18217,3 +18217,13 @@ body.mode-duet-user-overlay .duet-peek-tab { display: none; }
   filter: grayscale(0.8);
   transition: all 0.5s ease;
 }
+
+/* PROJECT OTHELLO PHASE 3B FIX: Show secondary suggestion meta badge in duet mode */
+.duet-mode .msg-row.has-secondary-badge .meta {
+  display: flex !important;
+}
+.duet-mode .msg-row.has-secondary-badge .meta span {
+  display: inline-flex;
+  pointer-events: auto;
+}
+
