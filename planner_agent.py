@@ -166,6 +166,8 @@ def diff_plan_fields(
 
     before_timeline = _normalize_text(before.get("timeline"))
     after_timeline = _normalize_text(after.get("timeline"))
+    before_resources = _stringify_list(before.get("resources"))
+    after_resources = _stringify_list(after.get("resources"))
 
     changed = []
     if before_objective != after_objective:
@@ -174,6 +176,8 @@ def diff_plan_fields(
         changed.append("Tasks")
     if before_timeline != after_timeline:
         changed.append("Timeline")
+    if before_resources != after_resources:
+        changed.append("Resources")
 
     return changed
 
@@ -365,6 +369,7 @@ def format_plan_draft_reply(
     objective = payload.get("objective") or "(missing)"
     timeline = payload.get("timeline") or "(missing)"
     tasks = _stringify_list(payload.get("tasks"))
+    resources = _stringify_list(payload.get("resources"))
     next_line = _format_next_line(payload)
 
     lines = []
@@ -390,6 +395,11 @@ def format_plan_draft_reply(
             lines.append(f"- {task}")
     else:
         lines.append("(missing)")
+
+    if resources:
+        lines.append("**Resources:**")
+        for resource in resources:
+            lines.append(f"- {resource}")
 
     missing_line = _format_missing_line(payload)
     if missing_line:

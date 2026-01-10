@@ -109,6 +109,22 @@ class TestPlannerAgent(unittest.TestCase):
         self.assertIn("**Next:**", reply)
         self.assertLess(reply.find("**Next:**"), reply.find("**Plan Draft**"))
 
+    def test_diff_plan_fields_resources(self):
+        before = {
+            "objective": "Build a platform",
+            "tasks": ["design it"],
+            "timeline": "four weeks",
+            "resources": ["me"],
+        }
+        after = {
+            "objective": "Build a platform",
+            "tasks": ["design it"],
+            "timeline": "four weeks",
+            "resources": ["me", "wood"],
+        }
+        changed_fields = planner_agent.diff_plan_fields(before, after)
+        self.assertIn("Resources", changed_fields)
+
 
 if __name__ == "__main__":
     unittest.main()

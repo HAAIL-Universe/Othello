@@ -1,3 +1,4 @@
+import copy
 import logging
 import os
 import re
@@ -5082,6 +5083,7 @@ def handle_message():
                 if draft and draft.get("status") == "pending":
                     # This is an edit instruction
                     current_payload = draft.get("payload", {})
+                    before_payload = copy.deepcopy(current_payload)
                     
                     # Plan Branch
                     if draft.get("kind") == "plan":
@@ -5097,7 +5099,7 @@ def handle_message():
                         suggestions_repository.update_suggestion_payload(user_id, draft_id, updated_payload)
 
                         changed_fields = planner_agent.diff_plan_fields(
-                            current_payload,
+                            before_payload,
                             updated_payload,
                         )
                         reply_msg = planner_agent.format_plan_draft_reply(
