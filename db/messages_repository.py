@@ -4,7 +4,7 @@ Repository helpers for sessions/messages/transcripts (Phase 1 transcript spine).
 """
 from typing import Optional, List, Dict, Any
 
-from db.database import execute_and_fetch_one, fetch_all, fetch_one, execute_query
+from db.database import execute_and_fetch_one, fetch_all, fetch_one, execute_query, get_connection
 
 
 def create_session(user_id: str) -> Dict[str, Any]:
@@ -343,13 +343,17 @@ def get_session_narrator_state(user_id: str, session_id: int) -> Dict[str, Any]:
     return fetch_one(query, (user_id, session_id)) or {}
 
 
-def update_session_narrator_state(user_id: str, session_id: int, text: str, msg_count: int) -> None:
+def update_session_narrator_state(user_id: str, session_id: int, text: str, msg_count: int) -> int:
     query = """
         UPDATE sessions 
         SET duet_narrator_text=%s, duet_narrator_msg_count=%s, duet_narrator_updated_at=NOW() 
         WHERE user_id=%s AND id=%s
     """
-    execute_query(query, (text, msg_count, user_id, session_id))
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(query, (text, msg_count, user_id, session_id))
+            conn.commit()
+            return cursor.rowcount
 
 
 def list_all_session_messages_for_summary(user_id: str, session_id: int) -> List[Dict[str, Any]]:

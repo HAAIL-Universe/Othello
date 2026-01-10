@@ -5972,6 +5972,8 @@ def handle_message():
 
                 # --- Duet Narrator Logic (Cycle Feature) ---
                 try:
+                    # [Instrumented] Log entry
+                    logger.info(f"[Narrator] Entering block for user={user_id} session={conversation_id}")
                     from db.messages_repository import (
                         count_session_messages,
                         get_session_narrator_state,
@@ -5983,6 +5985,7 @@ def handle_message():
                     # Only run narrator logic if we have a valid conversation_id
                     if conversation_id:
                         total_msgs = count_session_messages(user_id, conversation_id)
+                        logger.info(f"[Narrator] total_msgs={total_msgs} session={conversation_id}")
                         
                         # Rule: >=4 messages (Round 2+), update every round (even count)
                         if total_msgs >= 4 and total_msgs % 2 == 0:
@@ -5990,9 +5993,12 @@ def handle_message():
                             last_count = narrator_state.get("duet_narrator_msg_count") or 0
                             curr_text = narrator_state.get("duet_narrator_text")
                             
+                            should_update = (not curr_text) or (total_msgs > last_count)
+                            logger.info(f"[Narrator] gate check: last_count={last_count} should_update={should_update}")
+                            
                             # Update if getting new content (msg check ensures we don't re-run same state)
                             # Logic: If we haven't updated for this exact count yet.
-                            if (not curr_text) or (total_msgs > last_count):
+                            if should_update:
                                 msgs = list_all_session_messages_for_summary(user_id, conversation_id)
                                 transcript_lines = []
                                 for m in msgs:
@@ -6027,6 +6033,7 @@ def handle_message():
                                 temp_llm = LLMWrapper() # Init new wrapper for this side-task
                                 new_chunk = temp_llm.generate(prompt=prompt_text, max_tokens=150).strip()
                                 
+                                summary = None
                                 if new_chunk:
                                     # Append Logic
                                     if base_text:
@@ -6034,12 +6041,15 @@ def handle_message():
                                     else:
                                         summary = new_chunk
                                         
-                                    update_session_narrator_state(user_id, conversation_id, summary, total_msgs)
-                                
-                                if summary:
-                                    update_session_narrator_state(user_id, conversation_id, summary, total_msgs)
+                                    rc = update_session_narrator_state(user_id, conversation_id, summary, total_msgs)
+                                    if rc == 0:
+                                        logger.error(f"[Narrator] ERROR: UPDATE matched 0 rows. user={user_id} session={conversation_id}")
+                                    else:
+                                        logger.info(f"[Narrator] Updated successfully rc={rc} total_msgs={total_msgs}")
+                                else:
+                                    logger.info(f"[Narrator] No new_chunk generated; skipping update. session={conversation_id}")
                 except Exception as narr_exc:
-                    logger.warning("Duet narrator update failed: %s", narr_exc)
+                    logger.error("Duet narrator update failed", exc_info=True)
 
             except Exception as exc:
                 logger.warning(
