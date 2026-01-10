@@ -1709,12 +1709,18 @@ def should_offer_goal_intent(text: str) -> bool:
     return has_explicit
 
 
-def _should_offer_build_mode_router(user_input: str) -> bool:
+def _should_offer_build_mode_router(
+    user_input: str,
+    debug_out: Optional[Dict[str, Any]] = None,
+) -> bool:
     """
     Phase 23 Router: Deterministically decide if we should offer 'Build Mode'.
     Logic: Requires (Strong Trigger OR (Weak Verb + Weak Object)) AND No Disqualifiers.
     """
     if not user_input:
+        if debug_out is not None:
+            debug_out["router_reason"] = "empty"
+            debug_out["matched_terms"] = []
         return False
     t = user_input.lower()
     
@@ -1724,8 +1730,12 @@ def _should_offer_build_mode_router(user_input: str) -> bool:
         "list", "show", "view", "what is", "what're", "what are", 
         "do i have", "check", "display", "see my"
     ]
-    if any(k in t for k in disqualifiers):
-        return False
+    for k in disqualifiers:
+        if k in t:
+            if debug_out is not None:
+                debug_out["router_reason"] = "disqualifier"
+                debug_out["matched_terms"] = [k]
+            return False
 
     # 2. Strong Triggers (Phrase Logic)
     strong_phrases = [
@@ -1736,19 +1746,31 @@ def _should_offer_build_mode_router(user_input: str) -> bool:
         "turn this into a goal", "make this a goal", "create a goal draft",
         "start a goal draft"
     ]
-    if any(p in t for p in strong_phrases):
-        return True
+    for p in strong_phrases:
+        if p in t:
+            if debug_out is not None:
+                debug_out["router_reason"] = "strong_phrase"
+                debug_out["matched_terms"] = [p]
+            return True
 
     # 3. Weak Verb + Weak Object Logic
     verbs = ["plan", "build", "create", "make", "set", "start", "organize", "draft"]
     objects = ["goal", "routine", "schedule", "roadmap", "steps", "agenda", "objectives"]
     
-    has_verb = any(v in t for v in verbs)
-    has_object = any(o in t for o in objects)
+    matched_verbs = [v for v in verbs if v in t]
+    matched_objects = [o for o in objects if o in t]
+    has_verb = bool(matched_verbs)
+    has_object = bool(matched_objects)
     
     if has_verb and has_object:
+        if debug_out is not None:
+            debug_out["router_reason"] = "weak_verb_object"
+            debug_out["matched_terms"] = [matched_verbs[0], matched_objects[0]]
         return True
-        
+
+    if debug_out is not None:
+        debug_out["router_reason"] = "no_match"
+        debug_out["matched_terms"] = []
     return False
 
 
@@ -6254,19 +6276,38 @@ def handle_message():
             # 2. Already in a draft (frontend state passed via draft_id)
             # 3. Pending offer exists or active draft in DB
             # 4. Cooldown active
-            base_eligibility = (
-                not active_goal 
-                and not data.get("draft_id") 
-                and not is_pending_or_active
-                and not is_cooldown
-            )
+            guard_blocked = []
+            if active_goal:
+                guard_blocked.append("active_goal")
+            if data.get("draft_id"):
+                guard_blocked.append("draft_id")
+            if is_pending_or_active:
+                guard_blocked.append("pending_offer")
+            if is_cooldown:
+                guard_blocked.append("cooldown")
+
+            base_eligibility = not guard_blocked
             
             offer_type = None
             offer_payload = None
+            offer_injected = False
+            has_build_offer = False
+            target_client_message_id = None
+
+            router_says_yes = False
+            router_reason = None
+            matched_terms = []
+            router_debug = {}
+            try:
+                router_says_yes = _should_offer_build_mode_router(user_input, router_debug)
+                router_reason = router_debug.get("router_reason")
+                matched_terms = router_debug.get("matched_terms") or []
+            except Exception:
+                router_says_yes = False
 
             if base_eligibility:
                 # 1. Primary: Build Mode Router (e.g. "build mode", "help me plan")
-                if _should_offer_build_mode_router(user_input):
+                if router_says_yes:
                     offer_type = "build_mode"
                     offer_payload = {
                          "ui_action": "enter_build_mode_from_message",
@@ -6292,12 +6333,42 @@ def handle_message():
                  
                  has_build_offer = any(s.get("type") == "build_mode" for s in payload["meta"]["suggestions"])
                  if not has_build_offer:
+                     target_client_message_id = "current_bot_response"
                      payload["meta"]["suggestions"].append({
                          "type": offer_type,
                          "is_virtual": True,
-                         "client_message_id": "current_bot_response", 
+                         "client_message_id": target_client_message_id, 
                          "payload": offer_payload
                      })
+                     offer_injected = True
+
+            if offer_injected:
+                logger.info(
+                    "API: build_mode offer injected request_id=%s router_says_yes=%s guard_blocked=%s target_client_message_id=%s payload=%s",
+                    request_id,
+                    router_says_yes,
+                    guard_blocked,
+                    target_client_message_id,
+                    offer_payload,
+                )
+
+            if os.environ.get("DEBUG_BUILD_MODE_OFFER") == "1" and isinstance(payload, dict):
+                if "meta" not in payload:
+                    payload["meta"] = {}
+                payload["meta"]["build_mode_offer_debug"] = {
+                    "router_says_yes": router_says_yes,
+                    "router_reason": router_reason,
+                    "matched_terms": matched_terms,
+                    "guard_blocked": guard_blocked,
+                    "base_eligibility": base_eligibility,
+                    "offer_type": offer_type,
+                    "offer_payload": offer_payload,
+                    "offer_injected": offer_injected,
+                    "target_client_message_id": target_client_message_id,
+                    "has_build_offer_in_meta": has_build_offer,
+                    "request_id": request_id,
+                    "conversation_id": conversation_id,
+                }
 
             _persist_chat_exchange(reply_text, payload)
             if isinstance(payload, dict):
