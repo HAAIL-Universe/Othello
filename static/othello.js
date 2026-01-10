@@ -5507,7 +5507,7 @@
         othelloState.secondarySuggestionsByClientId = {};
       }
       const suggestionType = (suggestion.type || suggestion.kind || "suggestion").toLowerCase();
-      const normalizedType = suggestionType === "goal" ? "goal_intent" : suggestionType;
+      const normalizedType = (suggestionType === "goal" || suggestionType === "build_mode") ? "goal_intent" : suggestionType;
       const suggestionId = suggestion.suggestion_id || suggestion.id || null;
       const key = suggestionId != null ? `${normalizedType}:${suggestionId}` : `${normalizedType}:${clientMessageId}`;
       const list = othelloState.secondarySuggestionsByClientId[clientMessageId] || [];
@@ -5659,7 +5659,16 @@
         const applyBtn = document.createElement("button");
         applyBtn.className = "ux-goal-intent-btn primary";
         applyBtn.dataset.action = "apply";
-        applyBtn.textContent = "Apply";
+        
+        // Button Text Logic
+        if (suggestion.payload && suggestion.payload.ui_action === "enter_build_mode_from_message") {
+             applyBtn.textContent = "Enter build mode";
+        } else if (suggestion.payload && suggestion.payload.ui_action === "create_goal_from_message") {
+             applyBtn.textContent = "Create goal"; // Restore requested text (optional polish)
+        } else {
+             applyBtn.textContent = "Apply";
+        }
+
         const dismissBtn = document.createElement("button");
         dismissBtn.className = "ux-goal-intent-btn link";
         dismissBtn.dataset.action = "dismiss";
@@ -5773,8 +5782,9 @@
         
         // Use global sendMessage if available (it should be)
         if (typeof sendMessage === 'function') {
+             const actionType = (payload && payload.ui_action) ? payload.ui_action : "create_goal_from_message";
              await sendMessage("", {
-                 ui_action: "create_goal_from_message",
+                 ui_action: actionType,
                  source_message_id: clientMessageId,
                  title: trimmedTitle,
                  description: trimmedDesc,
@@ -7054,7 +7064,7 @@
                  showGoalDetail(goalId);
              }
         }
-
+        // Special handling for assistant-targeted suggestions (e.g. build mode offer) - REMOVED CORRUPTED BLOCK
         if (data.conversation_id) {
             othelloState.activeConversationId = data.conversation_id;
         }
@@ -7063,7 +7073,9 @@
         // Phase 22: Capture virtual goal intent for User message
         if (meta && meta.suggestions && Array.isArray(meta.suggestions)) {
            meta.suggestions.forEach(s => {
-               if (s.type === 'goal_intent' && s.client_message_id) {
+               // Normal user-targeted suggestions
+               const sType = (s.type || s.kind || "").toLowerCase();
+               if ((sType === 'goal_intent' || sType === 'build_mode') && s.client_message_id && s.client_message_id !== "current_bot_response") {
                    addSecondarySuggestion(s.client_message_id, s);
                }
            });
@@ -7124,6 +7136,31 @@
              intentMarkers,
              onTypewriterComplete: onBotTypingFinished
         });
+
+        // Phase 23: Capture virtual suggestions for ASSISTANT message (e.g. Build Mode Offer)
+        if (botEntry && meta && meta.suggestions && Array.isArray(meta.suggestions)) {
+           meta.suggestions.forEach(s => {
+               if (s.client_message_id === "current_bot_response") {
+                   const botId = "bot_" + Date.now() + "_" + Math.random().toString(36).slice(2, 7);
+                   s.client_message_id = botId;
+                   
+                   // Register bot message in state so suggestions can attach
+                   // Note: botEntry from addMessage might NOT involve messagesByClientId if no ID passed
+                   othelloState.messagesByClientId[botId] = {
+                       clientMessageId: botId,
+                       bubbleEl: botEntry.bubble,
+                       rowEl: botEntry.row,
+                       text: replyText,
+                       ts: Date.now(),
+                       panelEl: null
+                   };
+                   // Now attach suggestion
+                   addSecondarySuggestion(botId, s);
+               }
+           });
+        }
+
+        // 
 
         // Draft Mode Visual Cue: Apply rotating half-glow border to the draft card bubble
         if (data.draft_context && data.draft_context.draft_type === "goal") {

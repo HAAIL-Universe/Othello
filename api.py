@@ -1082,6 +1082,11 @@ def _record_suggestion_dismissal(
     user_key = str(user_id)
     dismissed = _suggestion_dismissals.setdefault(user_key, set())
     dismissed.add(key)
+
+    # Phase 23: Cooldown for Build Mode
+    if suggestion_type == "build_mode":
+        _build_mode_cooldowns[user_key] = datetime.now(timezone.utc).timestamp()
+        
     return True
 
 
@@ -1696,6 +1701,46 @@ def should_offer_goal_intent(text: str) -> bool:
 
     # Return True only when explicit goal phrasing is present AND none of the disqualifiers matched.
     return has_explicit
+
+
+def _should_offer_build_mode_router(user_input: str) -> bool:
+    """
+    Phase 23 Router: Deterministically decide if we should offer 'Build Mode'.
+    Logic: Requires (Strong Trigger OR (Weak Verb + Weak Object)) AND No Disqualifiers.
+    """
+    if not user_input:
+        return False
+    t = user_input.lower()
+    
+    # 1. Disqualifiers (Strongest)
+    # If explicitly asking to "list", "show", "view", or "what is/are", they don't want to BUILD.
+    disqualifiers = [
+        "list", "show", "view", "what is", "what're", "what are", 
+        "do i have", "check", "display", "see my"
+    ]
+    if any(k in t for k in disqualifiers):
+        return False
+
+    # 2. Strong Triggers (Phrase Logic)
+    strong_phrases = [
+        "build mode", "help me plan", "help me organize", 
+        "make a new plan", "create a new goal", "start a draft",
+        "break this down"
+    ]
+    if any(p in t for p in strong_phrases):
+        return True
+
+    # 3. Weak Verb + Weak Object Logic
+    verbs = ["plan", "build", "create", "make", "set", "start", "organize", "draft"]
+    objects = ["goal", "routine", "schedule", "roadmap", "steps", "agenda", "objectives"]
+    
+    has_verb = any(v in t for v in verbs)
+    has_object = any(o in t for o in objects)
+    
+    if has_verb and has_object:
+        return True
+        
+    return False
 
 
 def _goal_intent_prompt(active_goal_id: Optional[int]) -> str:
@@ -4723,6 +4768,8 @@ def handle_message():
                 is_create_draft = True
             elif "build mode" in norm_input: # Phase 23: Explicit Build Mode Trigger
                 is_create_draft = True
+            elif ui_action == "enter_build_mode_from_message":
+                is_create_draft = True
             elif re.search(r"\bturn\s+(this|that|it)\s+into\s+a\s+goal\b", norm_input): # Phase 23: Context Switch Trigger
                 is_create_draft = True
             elif re.search(r"\bmake\s+(this|that|it)\s+a\s+goal\b", norm_input):
@@ -5902,6 +5949,8 @@ def handle_message():
                             if s.get("is_virtual"):
                                 has_intent = True
                                 intent_source = "virtual_suggestion"
+                                if s.get("type") == "build_mode":
+                                    intent_source = "offer_build_mode"
                                 break
                         
                         # Fallback: check goal_intent_suggestion direct object (Phase 21 shim)
@@ -6169,6 +6218,61 @@ def handle_message():
 
         def _respond(payload: Dict[str, Any]):
             reply_text = payload.get("reply") if isinstance(payload, dict) else None
+
+            # Phase 23: Assistant Build Mode Offer Injection (ROUTER DRIVEN)
+            
+            # A) Check Pending Offer or Active Draft via DB
+            is_pending_or_active = False
+            try:
+                if user_id and conversation_id:
+                     from db.messages_repository import get_latest_active_draft_context
+                     latest_dc = get_latest_active_draft_context(user_id, conversation_id)
+                     if latest_dc:
+                         if latest_dc.get("intent_kind") == "offer_build_mode":
+                             is_pending_or_active = True
+                         elif latest_dc.get("status") == "active":
+                             is_pending_or_active = True
+            except Exception:
+                pass
+
+            # B) Check Cooldown (5 minutes)
+            is_cooldown = False
+            if user_id:
+                last_dismiss = _build_mode_cooldowns.get(str(user_id), 0)
+                if datetime.now(timezone.utc).timestamp() - last_dismiss < 300: 
+                    is_cooldown = True
+
+            # Guardrails: No offer if:
+            # 1. Active Goal focused
+            # 2. Already in a draft (frontend state passed via draft_id)
+            # 3. Router says NO
+            # 4. Pending offer exists or active draft in DB
+            # 5. Cooldown active
+            is_eligible = (
+                not active_goal 
+                and not data.get("draft_id") 
+                and not is_pending_or_active
+                and not is_cooldown
+                and _should_offer_build_mode_router(user_input)
+            )
+
+            if is_eligible and isinstance(payload, dict):
+                 if "meta" not in payload: payload["meta"] = {}
+                 if "suggestions" not in payload["meta"]: payload["meta"]["suggestions"] = []
+                 
+                 has_build_offer = any(s.get("type") == "build_mode" for s in payload["meta"]["suggestions"])
+                 if not has_build_offer:
+                     payload["meta"]["suggestions"].append({
+                         "type": "build_mode",
+                         "is_virtual": True,
+                         "client_message_id": "current_bot_response", 
+                         "payload": {
+                             "ui_action": "enter_build_mode_from_message",
+                             "title": "Enter Build Mode",
+                             "body": "Switching to build mode..."
+                         }
+                     })
+
             _persist_chat_exchange(reply_text, payload)
             if isinstance(payload, dict):
                 if conversation_id:
