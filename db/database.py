@@ -216,6 +216,7 @@ def ensure_core_schema() -> None:
         "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS duet_narrator_text TEXT;",
         "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS duet_narrator_updated_at TIMESTAMPTZ;",
         "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS duet_narrator_msg_count INTEGER DEFAULT 0;",
+        "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS duet_narrator_carryover_due BOOLEAN DEFAULT FALSE;",
         "CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);",
         """
         CREATE TABLE IF NOT EXISTS messages (
@@ -439,6 +440,22 @@ def ensure_core_schema() -> None:
         """,
         "CREATE INDEX IF NOT EXISTS idx_routine_steps_routine_id ON routine_steps(routine_id);",
         "CREATE INDEX IF NOT EXISTS idx_routine_steps_routine_order ON routine_steps(routine_id, order_index);",
+
+        # Narrator History Blocks
+        """
+        CREATE TABLE IF NOT EXISTS session_narrator_blocks (
+            id SERIAL PRIMARY KEY,
+            user_id TEXT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+            session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+            block_index INTEGER NOT NULL,
+            raw_text TEXT NOT NULL,
+            summary_text TEXT NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            UNIQUE(session_id, block_index)
+        );
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_sess_narr_blocks_sess_time ON session_narrator_blocks(session_id, created_at DESC);",
+        "CREATE INDEX IF NOT EXISTS idx_sess_narr_blocks_user_time ON session_narrator_blocks(user_id, session_id, created_at DESC);",
     ]
 
     with get_connection() as conn:

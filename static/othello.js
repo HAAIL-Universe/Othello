@@ -849,6 +849,7 @@
       activeConversationId: null, // New Chat support
       conversations: [], // Cache for narrator logic
       lastDuetNarratorText: null, // Persistent narrator text across sends
+      // narratorCapReached: false, // REMOVED (Phase 5b: Backend Soft-Cap)
       duetNarratorInFlight: false, // Flag prevents hide during send
       activeDraft: null, // { draft_id, draft_type, source_message_id }
       activeDraftPayload: null,
@@ -4797,7 +4798,7 @@
                // Ensure it's showing the LAST known text
                chatPlaceholder.textContent = othelloState.lastDuetNarratorText;
                // Re-apply specific clamp if needed (though usually textContent is enough for the dim background)
-               chatPlaceholder.textContent = fitNarratorTextToLines(othelloState.lastDuetNarratorText, chatPlaceholder, 15);
+               chatPlaceholder.textContent = fitNarratorTextToLines(othelloState.lastDuetNarratorText, chatPlaceholder, 12);
                
                chatPlaceholder.classList.remove("hidden");
                chatPlaceholder.classList.add("duet-narrator", "dim");
@@ -4861,8 +4862,14 @@
                chatPlaceholder.dataset.fullText = rawNewText;
                
                // Clamp (Phase 5)
-               const clampedText = fitNarratorTextToLines(rawNewText, chatPlaceholder, 15);
+               const clampedText = fitNarratorTextToLines(rawNewText, chatPlaceholder, 12);
                
+               // Trigger backend persistence if clamped
+               if (clampedText !== rawNewText) {
+                   // othelloState.narratorCapReached = true; // REMOVED (Phase 5b: Backend Soft-Cap)
+                   if (BOOT_DEBUG) console.log("[Othello UI] Narrator cap clamped (visual only)");
+               }
+
                if (chatPlaceholder.classList.contains("dim") || forceAnimate || (wasHidden && total > 0)) {
                    // Phase 4: Overwrite Animation (Bright New over Dim Old, or Fresh Typewriter)
                    // Or Append (Jan 9 2026)
@@ -6925,6 +6932,7 @@
             conversation_id: othelloState.activeConversationId,
             draft_id: draftId,
             draft_type: draftType,
+            // narrator_cap_reached: othelloState.narratorCapReached === true, // REMOVED (Phase 5b)
             ...extraData
         };
         console.debug("[Othello UI] Sending /api/message payload:", payload);
@@ -6970,6 +6978,9 @@
               }
               return;
             }
+
+            // Reset Signals (Phase 5) so we don't spam cap triggers
+            // othelloState.narratorCapReached = false; // REMOVED (Phase 5b)
 
             updateConnectivity('online');
             

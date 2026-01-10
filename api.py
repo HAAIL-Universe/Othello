@@ -4369,6 +4369,7 @@ def handle_message():
         current_view = data.get("current_view")
         raw_channel = data.get("channel")
         view_label = str(current_view or "chat")
+        # narrator_cap_reached = bool(data.get("narrator_cap_reached")) # REMOVED Phase 5b
         is_chat_view = (view_label == "chat")
 
         # Phase 6: True Auto Routing (Content-based)
@@ -5978,7 +5979,10 @@ def handle_message():
                         count_session_messages,
                         get_session_narrator_state,
                         update_session_narrator_state,
-                        list_all_session_messages_for_summary
+                        list_all_session_messages_for_summary,
+                        get_next_narrator_block_index,
+                        insert_session_narrator_block,
+                        list_session_narrator_block_summaries
                     )
                     from core.llm_wrapper import LLMWrapper
 
@@ -5987,67 +5991,165 @@ def handle_message():
                         total_msgs = count_session_messages(user_id, conversation_id)
                         logger.info(f"[Narrator] total_msgs={total_msgs} session={conversation_id}")
                         
+                        # Fetch state early to handle Cap Trigger
+                        narrator_state = get_session_narrator_state(user_id, conversation_id)
+                        curr_text = narrator_state.get("duet_narrator_text") or ""
+                        last_count = narrator_state.get("duet_narrator_msg_count") or 0
+                        carryover_due = narrator_state.get("duet_narrator_carryover_due") # Boolean from DB
+                        
+                        # --- CAP TRIGGER (Phase 5b: Backend Soft-Cap) ---
+                        # Constants
+                        NARRATOR_SOFT_CAP_CHARS = 700
+                        NARRATOR_HARD_CAP_CHARS = 900
+                        
+                        # Check limits
+                        curr_len = len(curr_text)
+                        
+                        is_cap_hit = False
+                        if curr_len >= NARRATOR_HARD_CAP_CHARS:
+                            logger.info(f"[Narrator] HIT HARD CAP ({curr_len})")
+                            is_cap_hit = True
+                        elif curr_len >= NARRATOR_SOFT_CAP_CHARS:
+                            # If soft cap, we should just do it.
+                            logger.info(f"[Narrator] HIT SOFT CAP ({curr_len})")
+                            is_cap_hit = True
+
+                        if is_cap_hit:
+                            logger.info(f"[Narrator] Persisting block due to cap.")
+                            temp_llm = LLMWrapper()
+                            summary_prompt = (
+                                "Summarize the following narrator text in 2–3 dense sentences. "
+                                "Neutral tone. No bullets. No new facts. Preserve the narrative arc.\n\n"
+                                f"\"{curr_text}\""
+                            )
+                            summary_text = temp_llm.generate(prompt=summary_prompt, max_tokens=200).strip()
+                            
+                            # Persist to history table
+                            blk_idx = get_next_narrator_block_index(user_id, conversation_id)
+                            new_blk_id = insert_session_narrator_block(user_id, conversation_id, blk_idx, curr_text, summary_text)
+                            logger.info(f"[Narrator] Persisted block session={conversation_id} block_index={blk_idx} block_id={new_blk_id}")
+                            
+                            # Reset live narrator to summary AND mark carryover due
+                            # We reset to summary immediately so the session state is valid.
+                            update_session_narrator_state(
+                                user_id, 
+                                conversation_id, 
+                                summary_text, 
+                                last_count, # Don't advance count yet, let normal flow handle or wait for next msg?
+                                            # Actually, if we just summarized, we might want to wait for next trigger to expand?
+                                            # But the requirement says "first narrator output... must be... recap".
+                                            # So we set state, mark carryover_due=True.
+                                carryover_due=True
+                            )
+                            curr_text = summary_text
+                            carryover_due = True
+                            # We Continue to normal logic? OR Stop?
+                            # If we carryover immediately in this same request, we get [Summary] -> [Recap].
+                            # Requirement: "first narrator output in the new window...".
+                            # It's cleaner to let the NEXT user message trigger the recap expansion.
+                            # So we update state and return, effectively "consuming" this turn for the summarization housekeeping?
+                            # OR we fall through and let normal logic run?
+                            # If we fall through, normal logic will see carryover_due=True and produce recap immediately.
+                            # That seems efficient. Let's fall through.
+
+                        
                         # Rule: >=4 messages (Round 2+), update every round (even count)
                         if total_msgs >= 4 and total_msgs % 2 == 0:
-                            narrator_state = get_session_narrator_state(user_id, conversation_id)
-                            last_count = narrator_state.get("duet_narrator_msg_count") or 0
-                            curr_text = narrator_state.get("duet_narrator_text")
                             
-                            should_update = (not curr_text) or (total_msgs > last_count)
-                            logger.info(f"[Narrator] gate check: last_count={last_count} should_update={should_update}")
+                            should_update = (not curr_text) or (total_msgs > last_count) or carryover_due
+                            logger.info(f"[Narrator] gate check: last_count={last_count} should_update={should_update} carryover={carryover_due}")
                             
                             # Update if getting new content (msg check ensures we don't re-run same state)
                             # Logic: If we haven't updated for this exact count yet.
                             if should_update:
-                                msgs = list_all_session_messages_for_summary(user_id, conversation_id)
-                                transcript_lines = []
-                                for m in msgs:
-                                    role = "User" if m.get("source") == "user" else "Othello"
-                                    content = str(m.get("transcript") or "").strip()
-                                    transcript_lines.append(f"{role}: {content}")
+                                temp_llm = LLMWrapper() # Ensure instance
                                 
-                                # Dynamic prompt based on depth
-                                if total_msgs <= 4:
-                                    # First time: Intro
-                                    style_instruction = "Write one short, punchy sentence to set the scene (max 20 words). Focus only on the core intent."
-                                    context_instruction = "Here is the conversation so far:"
-                                    base_text = ""
+                                # --- CARRYOVER LOGIC ---
+                                if carryover_due:
+                                    # Generate special 2-line recap
+                                    logger.info("[Narrator] Generating CARRYOVER RECAP.")
+                                    recap_prompt = (
+                                        "Write exactly 2 short sentences summarizing the previous narrator block summary below. "
+                                        "Neutral tone. No new facts. No bullets. This serves as an intro to the new story block.\n\n"
+                                        f"\"{curr_text}\"" # curr_text is the summary at this point
+                                    )
+                                    carryover_intro = temp_llm.generate(prompt=recap_prompt, max_tokens=150).strip()
+                                    
+                                    # Set session text to this intro
+                                    # Requirement: "anchor to the saved block summary".
+                                    # If we just replace with intro, we lose the summary in the live text? 
+                                    # "Set sessions.duet_narrator_text to: carryover_intro"
+                                    # The summary is separately persisted. The live text restarts with the recap.
+                                    # So simply:
+                                    final_text = carryover_intro
+                                    
+                                    update_session_narrator_state(
+                                        user_id, 
+                                        conversation_id, 
+                                        final_text, 
+                                        total_msgs, 
+                                        carryover_due=False # Clear flag
+                                    )
+                                    logger.info(f"[Narrator] Carryover complete. Text reset to: {final_text[:50]}...")
+                                    # EXIT NOW. Do not append sentence this turn.
+                                    # We want the recap to stand alone until next turn.
+                                
                                 else:
-                                    # Subsequent times: Append
-                                    style_instruction = "Write exactly one short sentence to advance the narrative (max 15 words). Be dense. Do NOT repeat details."
-                                    context_instruction = f"Here is the narrative so far:\n\"{curr_text}\"\n\nHere is the latest exchange context to add to the narrative:"
-                                    base_text = curr_text if curr_text else ""
+                                    # --- NORMAL APPEND LOGIC ---
+                                    msgs = list_all_session_messages_for_summary(user_id, conversation_id)
+                                    transcript_lines = []
+                                    for m in msgs:
+                                        role = "User" if m.get("source") == "user" else "Othello"
+                                        content = str(m.get("transcript") or "").strip()
+                                        transcript_lines.append(f"{role}: {content}")
+                                    
+                                    # Fetch prior blocks for context (Inject history)
+                                    past_blocks = list_session_narrator_block_summaries(user_id, conversation_id)
+                                    past_context = ""
+                                    if past_blocks:
+                                        summaries = [b["summary_text"] for b in past_blocks if b.get("summary_text")]
+                                        if summaries:
+                                            past_context = "Previous Narrative Blocks:\n" + "\n".join(summaries) + "\n\n"
 
-                                # If appending, we probably want only the recent messages or the full context? 
-                                # Full context is safer for the LLM to understand what happened, but we ask it to *continue*.
-                                
-                                prompt_text = (
-                                    "You are a ghost narrator for this conversation. "
-                                    f"{style_instruction} "
-                                    "Use a third-person, neutral, observational tone. "
-                                    "No bullets, no headings. "
-                                    "Focus on the evolving context of the user's situation and Othello's assistance.\n\n"
-                                    f"{context_instruction}\n" + ("\n".join(transcript_lines))
-                                )
-                                
-                                temp_llm = LLMWrapper() # Init new wrapper for this side-task
-                                new_chunk = temp_llm.generate(prompt=prompt_text, max_tokens=150).strip()
-                                
-                                summary = None
-                                if new_chunk:
-                                    # Append Logic
-                                    if base_text:
-                                        summary = f"{base_text} {new_chunk}"
+                                    # Dynamic prompt based on depth
+                                    if total_msgs <= 4:
+                                        # First time: Intro
+                                        style_instruction = "Write one short, punchy sentence to set the scene (max 20 words). Focus only on the core intent."
+                                        context_instruction = "Here is the conversation so far:"
+                                        base_text = ""
                                     else:
-                                        summary = new_chunk
-                                        
-                                    rc = update_session_narrator_state(user_id, conversation_id, summary, total_msgs)
-                                    if rc == 0:
-                                        logger.error(f"[Narrator] ERROR: UPDATE matched 0 rows. user={user_id} session={conversation_id}")
+                                        # Subsequent times: Append
+                                        style_instruction = "Write exactly one short sentence to advance the narrative (max 15 words). Be dense. Do NOT repeat details."
+                                        context_instruction = f"{past_context}Here is the narrative so far:\n\"{curr_text}\"\n\nHere is the latest exchange context to add to the narrative:"
+                                        base_text = curr_text if curr_text else ""
+
+                                    
+                                    prompt_text = (
+                                        "You are a ghost narrator for this conversation. "
+                                        f"{style_instruction} "
+                                        "Use a third-person, neutral, observational tone. "
+                                        "No bullets, no headings. "
+                                        "Focus on the evolving context of the user's situation and Othello's assistance.\n\n"
+                                        f"{context_instruction}\n" + ("\n".join(transcript_lines))
+                                    )
+                                    
+                                    new_chunk = temp_llm.generate(prompt=prompt_text, max_tokens=150).strip()
+                                    
+                                    summary = None
+                                    if new_chunk:
+                                        # Append Logic
+                                        if base_text:
+                                            summary = f"{base_text} {new_chunk}"
+                                        else:
+                                            summary = new_chunk
+                                            
+                                        rc = update_session_narrator_state(user_id, conversation_id, summary, total_msgs)
+                                        if rc == 0:
+                                            logger.error(f"[Narrator] ERROR: UPDATE matched 0 rows. user={user_id} session={conversation_id}")
+                                        else:
+                                            logger.info(f"[Narrator] Updated successfully rc={rc} total_msgs={total_msgs}")
                                     else:
-                                        logger.info(f"[Narrator] Updated successfully rc={rc} total_msgs={total_msgs}")
-                                else:
-                                    logger.info(f"[Narrator] No new_chunk generated; skipping update. session={conversation_id}")
+                                        logger.info(f"[Narrator] No new_chunk generated; skipping update. session={conversation_id}")
                 except Exception as narr_exc:
                     logger.error("Duet narrator update failed", exc_info=True)
 

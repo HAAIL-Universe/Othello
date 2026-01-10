@@ -336,22 +336,47 @@ def get_latest_active_draft_context(user_id: str, session_id: Optional[int] = No
 
 def get_session_narrator_state(user_id: str, session_id: int) -> Dict[str, Any]:
     query = """
-        SELECT duet_narrator_text, duet_narrator_msg_count, duet_narrator_updated_at 
+        SELECT duet_narrator_text, duet_narrator_msg_count, duet_narrator_updated_at, duet_narrator_carryover_due
         FROM sessions 
         WHERE user_id=%s AND id=%s
     """
     return fetch_one(query, (user_id, session_id)) or {}
 
 
-def update_session_narrator_state(user_id: str, session_id: int, text: str, msg_count: int) -> int:
-    query = """
-        UPDATE sessions 
-        SET duet_narrator_text=%s, duet_narrator_msg_count=%s, duet_narrator_updated_at=NOW() 
-        WHERE user_id=%s AND id=%s
-    """
+def update_session_narrator_state(
+    user_id: str, 
+    session_id: int, 
+    text: str, 
+    msg_count: int, 
+    carryover_due: Optional[bool] = None
+) -> int:
+    # Build query dynamically to handle optional updates (or just update all if stable)
+    # Simpler: just update all. "carryover_due" defaults to False in DB, pass it explicitly if needed.
+    # However, to avoid drift if we pass None, we should fetch-modify-write or just handle it logic side.
+    # For Minimal Diff, let's just make it explicit param.
+    
+    if carryover_due is not None:
+        query = """
+            UPDATE sessions 
+            SET duet_narrator_text=%s, duet_narrator_msg_count=%s, duet_narrator_carryover_due=%s, duet_narrator_updated_at=NOW() 
+            WHERE id=%s
+        """
+        params = (text, msg_count, carryover_due, session_id)
+    else:
+        # Compatibility override: don't touch carryover if not specified? 
+        # Actually safer to keep it consistent. Let's assume most callers won't pass it.
+        # But we need to preserve it if not passed.
+        # Minimal diff: use COALESCE? No, we need python logic.
+        query = """
+            UPDATE sessions 
+            SET duet_narrator_text=%s, duet_narrator_msg_count=%s, duet_narrator_updated_at=NOW() 
+            WHERE id=%s
+        """
+        params = (text, msg_count, session_id)
+
     with get_connection() as conn:
         with conn.cursor() as cursor:
-            cursor.execute(query, (text, msg_count, user_id, session_id))
+            cursor.execute(query, params)
             conn.commit()
             return cursor.rowcount
 
@@ -364,3 +389,39 @@ def list_all_session_messages_for_summary(user_id: str, session_id: int) -> List
         ORDER BY created_at ASC, id ASC
     """
     return fetch_all(query, (user_id, session_id))
+
+
+def get_next_narrator_block_index(user_id: str, session_id: int) -> int:
+    query = """
+        SELECT COALESCE(MAX(block_index), 0) + 1 as next_idx 
+        FROM session_narrator_blocks 
+        WHERE user_id=%s AND session_id=%s
+    """
+    res = fetch_one(query, (user_id, session_id))
+    return int(res.get("next_idx", 1)) if res else 1
+
+
+def insert_session_narrator_block(user_id: str, session_id: int, block_index: int, raw_text: str, summary_text: str) -> int:
+    query = """
+        INSERT INTO session_narrator_blocks (user_id, session_id, block_index, raw_text, summary_text, created_at)
+        VALUES (%s, %s, %s, %s, %s, NOW())
+        RETURNING id
+    """
+    res = execute_and_fetch_one(query, (user_id, session_id, block_index, raw_text, summary_text))
+    return res.get("id") if res else 0
+
+
+def list_session_narrator_block_summaries(user_id: str, session_id: int, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+    limit_clause = "LIMIT %s" if limit else ""
+    params = [user_id, session_id]
+    if limit:
+        params.append(limit)
+    
+    query = f"""
+        SELECT block_index, summary_text, created_at
+        FROM session_narrator_blocks
+        WHERE user_id=%s AND session_id=%s
+        ORDER BY block_index ASC
+        {limit_clause}
+    """
+    return fetch_all(query, tuple(params)) 

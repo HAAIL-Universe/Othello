@@ -261,3 +261,22 @@ CREATE INDEX IF NOT EXISTS idx_audit_user_time ON audit_events(user_id, occurred
 -- SELECT COUNT(*) FROM memory_entries;
 -- SELECT COUNT(*) FROM reflection_entries;
 -- ============================================================================
+ 
+-- ---------------------------------------------------------------------------- 
+-- SESSION NARRATOR BLOCKS (Narrator history persistence) 
+-- ---------------------------------------------------------------------------- 
+CREATE TABLE IF NOT EXISTS session_narrator_blocks ( 
+    id SERIAL PRIMARY KEY, 
+    user_id TEXT NOT NULL REFERENCES users(user_id) ON DELETE CASCADE, 
+    session_id INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, 
+    block_index INTEGER NOT NULL, 
+    raw_text TEXT NOT NULL, 
+    summary_text TEXT NOT NULL, 
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), 
+    UNIQUE(session_id, block_index) 
+); 
+ 
+CREATE INDEX IF NOT EXISTS idx_sess_narr_blocks_sess_time ON session_narrator_blocks(session_id, created_at DESC); 
+CREATE INDEX IF NOT EXISTS idx_sess_narr_blocks_user_time ON session_narrator_blocks(user_id, session_id, created_at DESC); 
+ 
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS duet_narrator_carryover_due BOOLEAN DEFAULT FALSE; 
