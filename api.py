@@ -100,6 +100,12 @@ CLARIFICATION_CACHE = {}
 # Simple in-memory cache for AI2 batches: { user_id: { option_a_id, option_b_id, created_at, plan_date } }
 AI2_BATCH_CACHE = {}
 
+# Suggestion dismissals and cooldowns
+_suggestion_dismissals = {}
+_build_mode_cooldowns = {}
+
+AI2_BATCH_CACHE = {}
+
 def _get_valid_clarification_cache(user_id: str, local_today: date) -> Optional[Dict]:
     """
     Retrieves clarification cache if valid (not expired, same day).
@@ -1725,7 +1731,10 @@ def _should_offer_build_mode_router(user_input: str) -> bool:
     strong_phrases = [
         "build mode", "help me plan", "help me organize", 
         "make a new plan", "create a new goal", "start a draft",
-        "break this down"
+        "break this down",
+        # Transferred from legacy hard-intercepts:
+        "turn this into a goal", "make this a goal", "create a goal draft",
+        "start a goal draft"
     ]
     if any(p in t for p in strong_phrases):
         return True
@@ -4758,25 +4767,23 @@ def handle_message():
                 })
 
         # Draft Focus: Create Draft (Voice-First)
-        # Trigger: "create a goal draft", "start a goal draft", "build mode", "turn this into a goal"
+        # Trigger: Explicit commands only. Soft intents ("turn into goal", "build mode") are handled via Router offers.
         is_create_draft = False
         hydration_source_msg_id = None
         
         if user_id and user_input:
             norm_input = user_input.strip().lower()
-            if "create a goal draft" in norm_input or "start a goal draft" in norm_input:
+            # 1. UI Action (Clicking 'Enter build mode')
+            if ui_action == "enter_build_mode_from_message":
                 is_create_draft = True
-            elif "build mode" in norm_input: # Phase 23: Explicit Build Mode Trigger
+            
+            # 2. Explicit Power Commands (Keep narrowly scoped - "START" only)
+            elif "start a goal draft" in norm_input or "create a goal draft" in norm_input:
                 is_create_draft = True
-            elif ui_action == "enter_build_mode_from_message":
-                is_create_draft = True
-            elif re.search(r"\bturn\s+(this|that|it)\s+into\s+a\s+goal\b", norm_input): # Phase 23: Context Switch Trigger
-                is_create_draft = True
-            elif re.search(r"\bmake\s+(this|that|it)\s+a\s+goal\b", norm_input):
-                 is_create_draft = True
-            elif re.search(r"\b(create|make|start)\b.*\bgoal\b.*\bdraft\b", norm_input):
-                is_create_draft = True
-        
+            
+            # DEPRECATED: "build mode", "turn into goal" etc are now SOFT-ROUTED only.
+            # They generate a 'build_mode' suggestion via _respond -> _should_offer_build_mode_router
+            
         if is_create_draft:
             # Phase 23: Context Hydration from Checkpoint
             # We must hydrate BEFORE generating the payload so the generator sees the full context (Title, Steps etc.)
@@ -6245,32 +6252,51 @@ def handle_message():
             # Guardrails: No offer if:
             # 1. Active Goal focused
             # 2. Already in a draft (frontend state passed via draft_id)
-            # 3. Router says NO
-            # 4. Pending offer exists or active draft in DB
-            # 5. Cooldown active
-            is_eligible = (
+            # 3. Pending offer exists or active draft in DB
+            # 4. Cooldown active
+            base_eligibility = (
                 not active_goal 
                 and not data.get("draft_id") 
                 and not is_pending_or_active
                 and not is_cooldown
-                and _should_offer_build_mode_router(user_input)
             )
+            
+            offer_type = None
+            offer_payload = None
 
-            if is_eligible and isinstance(payload, dict):
+            if base_eligibility:
+                # 1. Primary: Build Mode Router (e.g. "build mode", "help me plan")
+                if _should_offer_build_mode_router(user_input):
+                    offer_type = "build_mode"
+                    offer_payload = {
+                         "ui_action": "enter_build_mode_from_message",
+                         "title": "Enter Build Mode",
+                         "body": "Orchestrating a new plan..."
+                    }
+                # 2. Secondary: Legacy Goal Intent Heuristics (e.g. "i want to learn x")
+                # Unified into 'build_mode' type with bias
+                else:
+                    gs = _get_goal_intent_suggestion(user_input, client_message_id, user_id)
+                    if gs:
+                        offer_type = "build_mode"
+                        offer_payload = {
+                             "ui_action": "enter_build_mode_from_message",
+                             "title": gs.get("title_suggestion", "Build as goal"),
+                             "body": gs.get("body_suggestion", ""),
+                             "bias_type": "goal"
+                        }
+
+            if offer_type and isinstance(payload, dict):
                  if "meta" not in payload: payload["meta"] = {}
                  if "suggestions" not in payload["meta"]: payload["meta"]["suggestions"] = []
                  
                  has_build_offer = any(s.get("type") == "build_mode" for s in payload["meta"]["suggestions"])
                  if not has_build_offer:
                      payload["meta"]["suggestions"].append({
-                         "type": "build_mode",
+                         "type": offer_type,
                          "is_virtual": True,
                          "client_message_id": "current_bot_response", 
-                         "payload": {
-                             "ui_action": "enter_build_mode_from_message",
-                             "title": "Enter Build Mode",
-                             "body": "Switching to build mode..."
-                         }
+                         "payload": offer_payload
                      })
 
             _persist_chat_exchange(reply_text, payload)

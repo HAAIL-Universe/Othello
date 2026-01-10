@@ -5662,7 +5662,11 @@
         
         // Button Text Logic
         if (suggestion.payload && suggestion.payload.ui_action === "enter_build_mode_from_message") {
-             applyBtn.textContent = "Enter build mode";
+             if (suggestion.payload.bias_type === "goal") {
+                 applyBtn.textContent = "Build as goal";
+             } else {
+                 applyBtn.textContent = "Enter build mode";
+             }
         } else if (suggestion.payload && suggestion.payload.ui_action === "create_goal_from_message") {
              applyBtn.textContent = "Create goal"; // Restore requested text (optional polish)
         } else {
