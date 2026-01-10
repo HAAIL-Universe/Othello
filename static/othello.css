@@ -18219,10 +18219,14 @@ body.mode-duet-user-overlay .duet-peek-tab { display: none; }
 }
 
 /* PROJECT OTHELLO PHASE 3B FIX: Show secondary suggestion meta badge in duet mode */
-.duet-mode .msg-row.has-secondary-badge .meta {
+/* Fixed in Phase 3 verification (target ID instead of .duet-mode) */
+#duet-top .msg-row.has-secondary-badge .meta,
+#duet-bottom .msg-row.has-secondary-badge .meta {
   display: flex !important;
 }
-.duet-mode .msg-row.has-secondary-badge .meta span {
+
+#duet-top .msg-row.has-secondary-badge .meta span,
+#duet-bottom .msg-row.has-secondary-badge .meta span {
   display: inline-flex;
   pointer-events: auto;
 }
