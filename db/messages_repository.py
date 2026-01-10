@@ -381,6 +381,19 @@ def update_session_narrator_state(
             return cursor.rowcount
 
 
+def increment_session_carryover_count(session_id: int) -> int:
+    query = """
+        UPDATE sessions 
+        SET duet_narrator_carryover_count = duet_narrator_carryover_count + 1 
+        WHERE id=%s
+    """
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(query, (session_id,))
+            conn.commit()
+            return cursor.rowcount
+
+
 def list_all_session_messages_for_summary(user_id: str, session_id: int) -> List[Dict[str, Any]]:
     query = """
         SELECT source, transcript, created_at 

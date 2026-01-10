@@ -217,6 +217,7 @@ def ensure_core_schema() -> None:
         "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS duet_narrator_updated_at TIMESTAMPTZ;",
         "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS duet_narrator_msg_count INTEGER DEFAULT 0;",
         "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS duet_narrator_carryover_due BOOLEAN DEFAULT FALSE;",
+        "ALTER TABLE sessions ADD COLUMN IF NOT EXISTS duet_narrator_carryover_count INTEGER NOT NULL DEFAULT 0;",
         "CREATE INDEX IF NOT EXISTS idx_sessions_user_id ON sessions(user_id);",
         """
         CREATE TABLE IF NOT EXISTS messages (

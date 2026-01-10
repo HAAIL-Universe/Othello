@@ -5982,7 +5982,8 @@ def handle_message():
                         list_all_session_messages_for_summary,
                         get_next_narrator_block_index,
                         insert_session_narrator_block,
-                        list_session_narrator_block_summaries
+                        list_session_narrator_block_summaries,
+                        increment_session_carryover_count
                     )
                     from core.llm_wrapper import LLMWrapper
 
@@ -6029,6 +6030,10 @@ def handle_message():
                             new_blk_id = insert_session_narrator_block(user_id, conversation_id, blk_idx, curr_text, summary_text)
                             logger.info(f"[Narrator] Persisted block session={conversation_id} block_index={blk_idx} block_id={new_blk_id}")
                             
+                            # Increment carryover count (observability) - Return value is rowcount (usually 1)
+                            co_count = increment_session_carryover_count(conversation_id)
+                            logger.info(f"[Narrator] Incremented carryover count for session={conversation_id}. Updated rows={co_count}")
+
                             # Reset live narrator to summary AND mark carryover due
                             # We reset to summary immediately so the session state is valid.
                             update_session_narrator_state(

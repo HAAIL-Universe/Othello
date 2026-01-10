@@ -280,3 +280,4 @@ CREATE INDEX IF NOT EXISTS idx_sess_narr_blocks_sess_time ON session_narrator_bl
 CREATE INDEX IF NOT EXISTS idx_sess_narr_blocks_user_time ON session_narrator_blocks(user_id, session_id, created_at DESC); 
  
 ALTER TABLE sessions ADD COLUMN IF NOT EXISTS duet_narrator_carryover_due BOOLEAN DEFAULT FALSE; 
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS duet_narrator_carryover_count INTEGER NOT NULL DEFAULT 0;
