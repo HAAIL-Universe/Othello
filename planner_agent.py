@@ -146,6 +146,38 @@ def recompute_plan_missing_fields(payload: Dict[str, Any]) -> Dict[str, Any]:
     return data
 
 
+def diff_plan_fields(
+    before_payload: Dict[str, Any],
+    after_payload: Dict[str, Any],
+) -> list[str]:
+    before = _coerce_payload(before_payload)
+    after = _coerce_payload(after_payload)
+
+    def _normalize_text(value: Any) -> str:
+        if value is None:
+            return ""
+        return str(value).strip()
+
+    before_objective = _normalize_text(before.get("objective"))
+    after_objective = _normalize_text(after.get("objective"))
+
+    before_tasks = _stringify_list(before.get("tasks"))
+    after_tasks = _stringify_list(after.get("tasks"))
+
+    before_timeline = _normalize_text(before.get("timeline"))
+    after_timeline = _normalize_text(after.get("timeline"))
+
+    changed = []
+    if before_objective != after_objective:
+        changed.append("Objective")
+    if before_tasks != after_tasks:
+        changed.append("Tasks")
+    if before_timeline != after_timeline:
+        changed.append("Timeline")
+
+    return changed
+
+
 def patch_plan_draft_payload_deterministic(
     text: str, payload: Dict[str, Any]
 ) -> Tuple[Dict[str, Any], bool]:
@@ -325,7 +357,10 @@ def format_build_mode_reply(draft_payload: Dict[str, Any]) -> str:
     return "\n\n".join(lines)
 
 
-def format_plan_draft_reply(draft_payload: Dict[str, Any]) -> str:
+def format_plan_draft_reply(
+    draft_payload: Dict[str, Any],
+    changed_fields: Optional[list[str]] = None,
+) -> str:
     payload = _coerce_payload(draft_payload)
     objective = payload.get("objective") or "(missing)"
     timeline = payload.get("timeline") or "(missing)"
@@ -333,8 +368,14 @@ def format_plan_draft_reply(draft_payload: Dict[str, Any]) -> str:
     next_line = _format_next_line(payload)
 
     lines = []
+    if changed_fields:
+        cleaned = [str(item).strip() for item in changed_fields if str(item).strip()]
+        if cleaned:
+            lines.append(f"**Updated:** {', '.join(cleaned)}")
+            lines.append("")
     if next_line:
         lines.extend([next_line, ""])
+        lines.append("")
     lines.extend(
         [
             "**Plan Draft**",

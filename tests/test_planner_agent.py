@@ -72,6 +72,8 @@ class TestPlannerAgent(unittest.TestCase):
                 for task in updated.get("tasks", [])
             )
         )
+        changed_fields = planner_agent.diff_plan_fields(payload, updated)
+        self.assertIn("Tasks", changed_fields)
         self.assertEqual(updated.get("missing_fields"), [])
         self.assertIn("confirm plan", updated.get("next_question", "").lower())
 
@@ -87,7 +89,25 @@ class TestPlannerAgent(unittest.TestCase):
         )
         self.assertTrue(changed)
         self.assertIn("six week", (updated.get("timeline") or "").lower())
+        changed_fields = planner_agent.diff_plan_fields(payload, updated)
+        self.assertIn("Timeline", changed_fields)
         self.assertEqual(updated.get("missing_fields"), [])
+
+    def test_format_plan_draft_reply_order(self):
+        payload = {
+            "objective": "Build a platform",
+            "tasks": ["design it"],
+            "timeline": "four weeks",
+            "missing_fields": [],
+            "next_question": "Confirm plan?",
+        }
+        reply = planner_agent.format_plan_draft_reply(
+            payload,
+            changed_fields=["Objective", "Tasks"],
+        )
+        self.assertTrue(reply.startswith("**Updated:** Objective, Tasks"))
+        self.assertIn("**Next:**", reply)
+        self.assertLess(reply.find("**Next:**"), reply.find("**Plan Draft**"))
 
 
 if __name__ == "__main__":

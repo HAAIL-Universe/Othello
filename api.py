@@ -4632,6 +4632,34 @@ def handle_message():
         is_fuzzy_confirm = "confirm" in norm_input
         is_confirm_text_with_id = is_fuzzy_confirm and data.get("draft_id")
 
+        if user_id and norm_input == "confirm plan" and data.get("draft_type") == "plan":
+            draft_id = data.get("draft_id")
+            draft = None
+            if draft_id:
+                try:
+                    draft_id = int(draft_id)
+                    draft = suggestions_repository.get_suggestion(user_id, draft_id)
+                except (ValueError, TypeError):
+                    draft = None
+
+            if draft and draft.get("status") == "pending" and draft.get("kind") == "plan":
+                suggestions_repository.update_suggestion_status(
+                    user_id,
+                    draft_id,
+                    "accepted",
+                    decided_reason="user_confirmed_plan",
+                )
+                return jsonify({
+                    "reply": "PLAN_CONFIRMED.",
+                    "draft_cleared": True,
+                    "request_id": request_id,
+                })
+
+            return jsonify({
+                "reply": "PENDING_PLAN_DRAFT_MISSING. I couldn't find a pending plan draft to confirm.",
+                "request_id": request_id,
+            })
+
         if user_id and (is_confirm_action or is_confirm_goal_text or is_confirm_text_with_id or is_fuzzy_confirm):
             draft_id = data.get("draft_id")
             
@@ -4964,8 +4992,15 @@ def handle_message():
                                 updated_payload,
                             )
                         suggestions_repository.update_suggestion_payload(user_id, draft_id, updated_payload)
-                        
-                        reply_msg = planner_agent.format_plan_draft_reply(updated_payload)
+
+                        changed_fields = planner_agent.diff_plan_fields(
+                            current_payload,
+                            updated_payload,
+                        )
+                        reply_msg = planner_agent.format_plan_draft_reply(
+                            updated_payload,
+                            changed_fields=changed_fields,
+                        )
                         
                         return jsonify({
                             "reply": reply_msg,

@@ -119,6 +119,7 @@ class TestApiUiActions(unittest.TestCase):
             self.assertEqual(data["draft_context"]["draft_type"], "plan")
             self.assertIn("**Plan Draft**", data["reply"])
             self.assertIn("**Next:**", data["reply"])
+            self.assertTrue(data["reply"].startswith("**Next:**"))
             
             # Verify DB update
             if hasattr(api, "suggestions_repository"):
@@ -201,6 +202,7 @@ class TestApiUiActions(unittest.TestCase):
             self.assertEqual(data["draft_context"]["draft_type"], "plan")
             self.assertIn("**Plan Draft**", data["reply"])
             self.assertIn("**Next:**", data["reply"])
+            self.assertTrue(data["reply"].startswith("**Next:**"))
 
     def test_plan_edit_reply_format(self):
         with ExitStack() as stack:
@@ -248,10 +250,54 @@ class TestApiUiActions(unittest.TestCase):
             resp = self.client.post("/api/message", json=payload)
             self.assertEqual(resp.status_code, 200)
             data = resp.get_json() or {}
+            self.assertTrue(data["reply"].startswith("**Updated:**"))
+            self.assertIn("**Next:**", data["reply"])
+            self.assertLess(data["reply"].find("**Next:**"), data["reply"].find("**Plan Draft**"))
             self.assertIn("**Plan Draft**", data["reply"])
             self.assertIn("**Objective:**", data["reply"])
             self.assertIn("**Tasks:**", data["reply"])
             self.assertIn("**Timeline:**", data["reply"])
+
+    def test_confirm_plan_does_not_route_to_goal(self):
+        with ExitStack() as stack:
+            if hasattr(api, "suggestions_repository"):
+                stack.enter_context(
+                    patch.object(
+                        api.suggestions_repository,
+                        "get_suggestion",
+                        return_value={
+                            "id": 999,
+                            "status": "pending",
+                            "kind": "plan",
+                            "payload": {"objective": "Test", "tasks": ["One"], "timeline": "soon"},
+                        },
+                    )
+                )
+                mock_update_status = stack.enter_context(
+                    patch.object(
+                        api.suggestions_repository,
+                        "update_suggestion_status",
+                        return_value={"id": 999, "status": "accepted"},
+                    )
+                )
+
+            with self.client.session_transaction() as sess:
+                sess["authed"] = True
+                sess["user_id"] = "test_user"
+                sess["conversation_id"] = 123
+
+            payload = {
+                "message": "confirm plan",
+                "draft_id": 999,
+                "draft_type": "plan",
+                "conversation_id": 123,
+            }
+            resp = self.client.post("/api/message", json=payload)
+            self.assertEqual(resp.status_code, 200)
+            data = resp.get_json() or {}
+            self.assertEqual(data.get("reply"), "PLAN_CONFIRMED.")
+            if hasattr(api, "suggestions_repository"):
+                mock_update_status.assert_called()
 
     def test_goal_edit_reply_format(self):
         with ExitStack() as stack:
