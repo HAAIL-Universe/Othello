@@ -4631,8 +4631,10 @@ def handle_message():
         is_confirm_goal_text = norm_input == "confirm goal"
         is_fuzzy_confirm = "confirm" in norm_input
         is_confirm_text_with_id = is_fuzzy_confirm and data.get("draft_id")
+        clean_norm = re.sub(r"[^a-z0-9\s]", "", norm_input).strip()
+        is_confirm_plan_text = bool(re.search(r"\bconfirm\s+plan\b", clean_norm))
 
-        if user_id and norm_input == "confirm plan" and data.get("draft_type") == "plan":
+        if user_id and is_confirm_plan_text and data.get("draft_type") == "plan":
             draft_id = data.get("draft_id")
             draft = None
             if draft_id:
