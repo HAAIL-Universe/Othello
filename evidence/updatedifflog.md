@@ -1,173 +1,164 @@
 Cycle Status: COMPLETE
 
 Todo Ledger:
-- Planned: update tests to assert formatted draft replies; add plan/goal edit format tests; run focused tests; update log.
-- Completed: updated `tests/test_ui_actions.py` with build/plan/goal reply assertions; added plan/goal edit format tests; ran `python -m unittest tests.test_ui_actions tests.test_planner_agent`; prepared commit per directive.
-- Remaining: none.
+- Planned: add recompute helper for plan missing_fields/next_question; strengthen add-task parsing; update tests for recompute + add-task delta; verify via unit tests.
+- Completed: added recompute_plan_missing_fields; wired recompute into deterministic + LLM patchers; broadened add-task handling; updated planner_agent tests; ran unit tests.
+- Remaining: manual UI verification (not run in this session).
 
-Next Action:
-- None.
+File:Line Anchors:
+- Plan missing_fields recompute helper: planner_agent.py:109-146
+- Add-task regex + append logic: planner_agent.py:208-231
+- Recompute call after deterministic patch: planner_agent.py:233
+- Recompute call after LLM patch: planner_agent.py:267-271
+- Tests for recompute + add-task delta: tests/test_planner_agent.py:23-76
 
 Verification Notes:
-- Manual UI flow (evidence from prior cycle):
-  - Enter build mode (POST /api/message ui_action=enter_build_mode_from_message) -> reply includes **Build Mode**; evidence/build_gate_resp_fmt.json.
-  - Select plan (message="plan") -> reply includes **Plan Draft** and **Next:**; evidence/build_plan_resp_fmt.json.
-  - Plan edit STT input: "Objective is to build a play platform for my cat Storm. Main tasks are design it, buy materials, build it, and check safety. Timeline is four weeks. Resources are just me." -> reply includes Objective/Tasks/Timeline/Missing/Next; evidence/plan_edit_resp_fmt.json.
-- Tests: `python -m unittest tests.test_ui_actions tests.test_planner_agent` (pass).
+- Test 4 (STT blob): "Objective is to build a physical play platform for my cat Storm. Main tasks are design it, buy materials, build it, and check safety. Timeline is four weeks. Resources are just me."
+  - Expected: missing_fields [] and next_question confirm/edit prompt.
+- Test 5 (delta add-task): "Add a task to measure the space and pick dimensions."
+  - Expected: tasks appended with the phrase; missing_fields stays [].
+- Unit tests: `python -m unittest tests.test_planner_agent` (pass).
+- Manual UI flow: not run in this session.
 
 Unified diff (excluding diff log itself):
 ```diff
-diff --git a/tests/test_ui_actions.py b/tests/test_ui_actions.py
-index c6bc6e44..e0bf52f8 100644
---- a/tests/test_ui_actions.py
-+++ b/tests/test_ui_actions.py
-@@ -82,7 +82,9 @@ class TestApiUiActions(unittest.TestCase):
-             # Assert Type Gate
-             self.assertIn("draft_context", data)
-             self.assertEqual(data["draft_context"]["draft_type"], "build", "Expected draft_type='build' (pending)")
-+            self.assertIn("**Build Mode**", data["reply"])
-             self.assertIn("What are we building", data["reply"], "Reply should ask for type")
-+            self.assertIn("**Missing:**", data["reply"])
+diff --git a/planner_agent.py b/planner_agent.py
+index 9954b579..9bb21599 100644
+--- a/planner_agent.py
++++ b/planner_agent.py
+@@ -106,6 +106,46 @@ def _coerce_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+     return {}
  
-             # Verify call
-             if hasattr(api, "suggestions_repository"):
-@@ -115,6 +117,8 @@ class TestApiUiActions(unittest.TestCase):
-             
-             # Assert Transition
-             self.assertEqual(data["draft_context"]["draft_type"], "plan")
-+            self.assertIn("**Plan Draft**", data["reply"])
-+            self.assertIn("**Next:**", data["reply"])
-             
-             # Verify DB update
-             if hasattr(api, "suggestions_repository"):
-@@ -179,6 +183,7 @@ class TestApiUiActions(unittest.TestCase):
-             self.assertEqual(resp.status_code, 200)
-             data = resp.get_json() or {}
-             self.assertEqual(data["draft_context"]["draft_type"], "build")
-+            self.assertIn("**Build Mode**", data["reply"])
-             self.assertIn("What are we building", data["reply"])
  
-             draft_id = data["draft_context"]["draft_id"]
-@@ -194,7 +199,119 @@ class TestApiUiActions(unittest.TestCase):
-             self.assertEqual(resp.status_code, 200)
-             data = resp.get_json() or {}
-             self.assertEqual(data["draft_context"]["draft_type"], "plan")
--            self.assertIn("objective", data["reply"].lower())
-+            self.assertIn("**Plan Draft**", data["reply"])
-+            self.assertIn("**Next:**", data["reply"])
++def recompute_plan_missing_fields(payload: Dict[str, Any]) -> Dict[str, Any]:
++    data = _coerce_payload(payload)
++    missing = []
 +
-+    def test_plan_edit_reply_format(self):
-+        with ExitStack() as stack:
-+            if hasattr(api, "suggestions_repository"):
-+                stack.enter_context(
-+                    patch.object(
-+                        api.suggestions_repository,
-+                        "get_suggestion",
-+                        return_value={
-+                            "status": "pending",
-+                            "kind": "plan",
-+                            "payload": {
-+                                "objective": None,
-+                                "tasks": [],
-+                                "timeline": None,
-+                                "missing_fields": ["objective", "tasks", "timeline"],
-+                                "next_question": "What is the objective of the plan?",
-+                            },
-+                        },
-+                    )
-+                )
-+                stack.enter_context(
-+                    patch.object(
-+                        api.suggestions_repository,
-+                        "update_suggestion_payload",
-+                        return_value={},
-+                    )
-+                )
++    objective = data.get("objective")
++    if not isinstance(objective, str) or not objective.strip():
++        missing.append("objective")
 +
-+            with self.client.session_transaction() as sess:
-+                sess["authed"] = True
-+                sess["user_id"] = "test_user"
-+                sess["conversation_id"] = 123
++    tasks_value = data.get("tasks")
++    tasks_list = tasks_value if isinstance(tasks_value, list) else []
++    cleaned_tasks = [str(task).strip() for task in tasks_list if str(task).strip()]
++    if cleaned_tasks:
++        data["tasks"] = cleaned_tasks
++    else:
++        missing.append("tasks")
 +
-+            payload = {
-+                "message": (
-+                    "Objective is to build a play platform. "
-+                    "Main tasks are design it, buy materials. "
-+                    "Timeline is four weeks."
-+                ),
-+                "draft_id": 999,
-+                "draft_type": "plan",
-+                "conversation_id": 123,
-+            }
-+            resp = self.client.post("/api/message", json=payload)
-+            self.assertEqual(resp.status_code, 200)
-+            data = resp.get_json() or {}
-+            self.assertIn("**Plan Draft**", data["reply"])
-+            self.assertIn("**Objective:**", data["reply"])
-+            self.assertIn("**Tasks:**", data["reply"])
-+            self.assertIn("**Timeline:**", data["reply"])
++    timeline = data.get("timeline")
++    if not isinstance(timeline, str) or not timeline.strip():
++        missing.append("timeline")
 +
-+    def test_goal_edit_reply_format(self):
-+        with ExitStack() as stack:
-+            if hasattr(api, "suggestions_repository"):
-+                stack.enter_context(
-+                    patch.object(
-+                        api.suggestions_repository,
-+                        "get_suggestion",
-+                        return_value={
-+                            "status": "pending",
-+                            "kind": "goal",
-+                            "payload": {
-+                                "title": "Test Goal",
-+                                "steps": ["Step one"],
-+                                "missing_fields": ["timeline"],
-+                                "next_question": "What is the timeline?",
-+                            },
-+                        },
-+                    )
-+                )
-+                stack.enter_context(
-+                    patch.object(
-+                        api.suggestions_repository,
-+                        "update_suggestion_payload",
-+                        return_value={},
-+                    )
-+                )
++    data["missing_fields"] = missing
 +
-+            updated_payload = {
-+                "title": "Test Goal",
-+                "steps": ["Step one", "Step two"],
-+                "missing_fields": ["timeline"],
-+                "next_question": "What is the timeline?",
-+            }
++    if missing:
++        prompt_map = {
++            "objective": "What is the objective of the plan?",
++            "tasks": "What are the tasks?",
++            "timeline": "What is the timeline?",
++        }
++        data["next_question"] = prompt_map.get(
++            missing[0], "What is the objective of the plan?"
++        )
++    else:
++        data["next_question"] = (
++            "If that looks right, say 'confirm plan'. "
++            "Or tell me what to change (add/remove tasks, change timeline, tweak objective)."
++        )
 +
-+            stack.enter_context(
-+                patch.object(
-+                    api,
-+                    "_apply_goal_draft_deterministic_edit",
-+                    return_value=(updated_payload, True, "Updated the draft."),
-+                )
++    return data
++
++
+ def patch_plan_draft_payload_deterministic(
+     text: str, payload: Dict[str, Any]
+ ) -> Tuple[Dict[str, Any], bool]:
+@@ -166,7 +206,11 @@ def patch_plan_draft_payload_deterministic(
+             break
+ 
+     add_tasks_text = None
+-    match = re.search(r"\badd\s+task\s+(?P<value>[^.]+)", text, flags=re.IGNORECASE)
++    match = re.search(
++        r"\b(?:can\s+you\s+)?add\s+(?:another\s+|a\s+|an\s+|new\s+)?task(?:\s+to)?\s+(?P<value>[^.]+)",
++        text,
++        flags=re.IGNORECASE,
++    )
+     if match:
+         add_tasks_text = _trim_at_keywords(match.group("value"))
+ 
+@@ -178,13 +222,15 @@ def patch_plan_draft_payload_deterministic(
+             changed = True
+ 
+     if add_tasks_text:
+-        parsed = _split_tasks(add_tasks_text)
+-        existing = updated_payload.get("tasks") or []
+-        merged = _dedupe_tasks(existing + parsed)
++        task = _clean_fragment(add_tasks_text)
++        existing = updated_payload.get("tasks")
++        existing = existing if isinstance(existing, list) else []
++        merged = _dedupe_tasks(existing + ([task] if task else []))
+         if merged != existing:
+             updated_payload["tasks"] = merged
+             changed = True
+ 
++    updated_payload = recompute_plan_missing_fields(updated_payload)
+     return updated_payload, changed
+ 
+ 
+@@ -218,10 +264,11 @@ def patch_plan_draft_payload_llm(
+             response_format={"type": "json_object"},
+         )
+         content = response.choices[0].message.content
+-        return json.loads(content)
++        updated_payload = json.loads(content)
++        return recompute_plan_missing_fields(updated_payload)
+     except Exception as exc:
+         logging.error("Failed to patch plan draft payload: %s", exc)
+-        return payload
++        return recompute_plan_missing_fields(payload)
+ 
+ 
+ def _stringify_list(value: Any) -> list[str]:
+diff --git a/tests/test_planner_agent.py b/tests/test_planner_agent.py
+index 671ec0b8..3d2475cf 100644
+--- a/tests/test_planner_agent.py
++++ b/tests/test_planner_agent.py
+@@ -38,6 +38,8 @@ class TestPlannerAgent(unittest.TestCase):
+             ["design it", "buy materials", "build it", "check safety"],
+         )
+         self.assertEqual(updated.get("timeline"), "four weeks")
++        self.assertEqual(updated.get("missing_fields"), [])
++        self.assertIn("confirm plan", updated.get("next_question", "").lower())
+ 
+     def test_patch_plan_draft_payload_add_task(self):
+         payload = {
+@@ -52,6 +54,27 @@ class TestPlannerAgent(unittest.TestCase):
+         self.assertTrue(changed)
+         self.assertEqual(updated.get("tasks"), ["outline steps", "write tests"])
+ 
++    def test_patch_plan_draft_payload_add_task_phrase(self):
++        payload = {
++            "objective": "Build a platform",
++            "tasks": ["design it", "buy materials", "build it", "check safety"],
++            "timeline": "four weeks",
++        }
++        updated, changed = planner_agent.patch_plan_draft_payload_deterministic(
++            "Add a task to measure the space and pick dimensions.",
++            payload,
++        )
++        self.assertTrue(changed)
++        self.assertEqual(len(updated.get("tasks") or []), 5)
++        self.assertTrue(
++            any(
++                "measure the space and pick dimensions" in task.lower()
++                for task in updated.get("tasks", [])
 +            )
++        )
++        self.assertEqual(updated.get("missing_fields"), [])
++        self.assertIn("confirm plan", updated.get("next_question", "").lower())
 +
-+            with self.client.session_transaction() as sess:
-+                sess["authed"] = True
-+                sess["user_id"] = "test_user"
-+                sess["conversation_id"] = 123
-+
-+            payload = {
-+                "message": "add step",
-+                "draft_id": 999,
-+                "draft_type": "goal",
-+                "conversation_id": 123,
-+            }
-+            resp = self.client.post("/api/message", json=payload)
-+            self.assertEqual(resp.status_code, 200)
-+            data = resp.get_json() or {}
-+            self.assertIn("**Goal Draft**", data["reply"])
-+            self.assertIn("**Title:**", data["reply"])
-+            self.assertIn("**Steps:**", data["reply"])
- 
  
  if __name__ == "__main__":
+     unittest.main()
 
 ```

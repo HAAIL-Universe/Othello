@@ -38,6 +38,8 @@ class TestPlannerAgent(unittest.TestCase):
             ["design it", "buy materials", "build it", "check safety"],
         )
         self.assertEqual(updated.get("timeline"), "four weeks")
+        self.assertEqual(updated.get("missing_fields"), [])
+        self.assertIn("confirm plan", updated.get("next_question", "").lower())
 
     def test_patch_plan_draft_payload_add_task(self):
         payload = {
@@ -51,6 +53,27 @@ class TestPlannerAgent(unittest.TestCase):
         )
         self.assertTrue(changed)
         self.assertEqual(updated.get("tasks"), ["outline steps", "write tests"])
+
+    def test_patch_plan_draft_payload_add_task_phrase(self):
+        payload = {
+            "objective": "Build a platform",
+            "tasks": ["design it", "buy materials", "build it", "check safety"],
+            "timeline": "four weeks",
+        }
+        updated, changed = planner_agent.patch_plan_draft_payload_deterministic(
+            "Add a task to measure the space and pick dimensions.",
+            payload,
+        )
+        self.assertTrue(changed)
+        self.assertEqual(len(updated.get("tasks") or []), 5)
+        self.assertTrue(
+            any(
+                "measure the space and pick dimensions" in task.lower()
+                for task in updated.get("tasks", [])
+            )
+        )
+        self.assertEqual(updated.get("missing_fields"), [])
+        self.assertIn("confirm plan", updated.get("next_question", "").lower())
 
 
 if __name__ == "__main__":

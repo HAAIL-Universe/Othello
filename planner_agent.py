@@ -106,6 +106,46 @@ def _coerce_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     return {}
 
 
+def recompute_plan_missing_fields(payload: Dict[str, Any]) -> Dict[str, Any]:
+    data = _coerce_payload(payload)
+    missing = []
+
+    objective = data.get("objective")
+    if not isinstance(objective, str) or not objective.strip():
+        missing.append("objective")
+
+    tasks_value = data.get("tasks")
+    tasks_list = tasks_value if isinstance(tasks_value, list) else []
+    cleaned_tasks = [str(task).strip() for task in tasks_list if str(task).strip()]
+    if cleaned_tasks:
+        data["tasks"] = cleaned_tasks
+    else:
+        missing.append("tasks")
+
+    timeline = data.get("timeline")
+    if not isinstance(timeline, str) or not timeline.strip():
+        missing.append("timeline")
+
+    data["missing_fields"] = missing
+
+    if missing:
+        prompt_map = {
+            "objective": "What is the objective of the plan?",
+            "tasks": "What are the tasks?",
+            "timeline": "What is the timeline?",
+        }
+        data["next_question"] = prompt_map.get(
+            missing[0], "What is the objective of the plan?"
+        )
+    else:
+        data["next_question"] = (
+            "If that looks right, say 'confirm plan'. "
+            "Or tell me what to change (add/remove tasks, change timeline, tweak objective)."
+        )
+
+    return data
+
+
 def patch_plan_draft_payload_deterministic(
     text: str, payload: Dict[str, Any]
 ) -> Tuple[Dict[str, Any], bool]:
@@ -166,7 +206,11 @@ def patch_plan_draft_payload_deterministic(
             break
 
     add_tasks_text = None
-    match = re.search(r"\badd\s+task\s+(?P<value>[^.]+)", text, flags=re.IGNORECASE)
+    match = re.search(
+        r"\b(?:can\s+you\s+)?add\s+(?:another\s+|a\s+|an\s+|new\s+)?task(?:\s+to)?\s+(?P<value>[^.]+)",
+        text,
+        flags=re.IGNORECASE,
+    )
     if match:
         add_tasks_text = _trim_at_keywords(match.group("value"))
 
@@ -178,13 +222,15 @@ def patch_plan_draft_payload_deterministic(
             changed = True
 
     if add_tasks_text:
-        parsed = _split_tasks(add_tasks_text)
-        existing = updated_payload.get("tasks") or []
-        merged = _dedupe_tasks(existing + parsed)
+        task = _clean_fragment(add_tasks_text)
+        existing = updated_payload.get("tasks")
+        existing = existing if isinstance(existing, list) else []
+        merged = _dedupe_tasks(existing + ([task] if task else []))
         if merged != existing:
             updated_payload["tasks"] = merged
             changed = True
 
+    updated_payload = recompute_plan_missing_fields(updated_payload)
     return updated_payload, changed
 
 
@@ -218,10 +264,11 @@ def patch_plan_draft_payload_llm(
             response_format={"type": "json_object"},
         )
         content = response.choices[0].message.content
-        return json.loads(content)
+        updated_payload = json.loads(content)
+        return recompute_plan_missing_fields(updated_payload)
     except Exception as exc:
         logging.error("Failed to patch plan draft payload: %s", exc)
-        return payload
+        return recompute_plan_missing_fields(payload)
 
 
 def _stringify_list(value: Any) -> list[str]:
