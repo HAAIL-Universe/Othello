@@ -6000,7 +6000,7 @@ def handle_message():
                         
                         # --- CAP TRIGGER (Phase 5b: Backend Soft-Cap) ---
                         # Constants
-                        NARRATOR_SOFT_CAP_CHARS = 650
+                        NARRATOR_SOFT_CAP_CHARS = 520
                         NARRATOR_HARD_CAP_CHARS = 900
                         
                         # Check limits
@@ -6055,11 +6055,12 @@ def handle_message():
                             # So we update state and return, effectively "consuming" this turn for the summarization housekeeping?
                             # OR we fall through and let normal logic run?
                             # If we fall through, normal logic will see carryover_due=True and produce recap immediately.
-                            # That seems efficient. Let's fall through.
+                            # Copilot Directive: STOP to prevent UI truncation. Let next turn handle recap.
+                            pass
 
                         
                         # Rule: >=4 messages (Round 2+), update every round (even count)
-                        if total_msgs >= 4 and total_msgs % 2 == 0:
+                        if (not is_cap_hit) and total_msgs >= 4 and total_msgs % 2 == 0:
                             
                             should_update = (not curr_text) or (total_msgs > last_count) or carryover_due
                             logger.info(f"[Narrator] gate check: last_count={last_count} should_update={should_update} carryover={carryover_due}")
