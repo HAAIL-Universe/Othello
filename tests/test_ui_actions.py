@@ -280,6 +280,30 @@ class TestApiUiActions(unittest.TestCase):
                         return_value={"id": 999, "status": "accepted"},
                     )
                 )
+            stack.enter_context(
+                patch(
+                    "db.plan_repository.upsert_plan_header",
+                    return_value={"id": 321},
+                )
+            )
+            stack.enter_context(
+                patch(
+                    "db.plan_repository.get_user_timezone",
+                    return_value="UTC",
+                )
+            )
+            stack.enter_context(
+                patch(
+                    "db.plan_repository.upsert_plan",
+                    return_value={"id": 321},
+                )
+            )
+            mock_replace_items = stack.enter_context(
+                patch(
+                    "db.plan_repository.replace_plan_items",
+                    return_value=[],
+                )
+            )
 
             with self.client.session_transaction() as sess:
                 sess["authed"] = True
@@ -298,6 +322,7 @@ class TestApiUiActions(unittest.TestCase):
             self.assertEqual(data.get("reply"), "PLAN_CONFIRMED.")
             if hasattr(api, "suggestions_repository"):
                 mock_update_status.assert_called()
+            mock_replace_items.assert_called()
 
     def test_confirm_plan_with_punctuation(self):
         with ExitStack() as stack:
@@ -321,6 +346,30 @@ class TestApiUiActions(unittest.TestCase):
                         return_value={"id": 999, "status": "accepted"},
                     )
                 )
+            stack.enter_context(
+                patch(
+                    "db.plan_repository.upsert_plan_header",
+                    return_value={"id": 321},
+                )
+            )
+            stack.enter_context(
+                patch(
+                    "db.plan_repository.get_user_timezone",
+                    return_value="UTC",
+                )
+            )
+            stack.enter_context(
+                patch(
+                    "db.plan_repository.upsert_plan",
+                    return_value={"id": 321},
+                )
+            )
+            mock_replace_items = stack.enter_context(
+                patch(
+                    "db.plan_repository.replace_plan_items",
+                    return_value=[],
+                )
+            )
 
             with self.client.session_transaction() as sess:
                 sess["authed"] = True
@@ -339,6 +388,7 @@ class TestApiUiActions(unittest.TestCase):
             self.assertEqual(data.get("reply"), "PLAN_CONFIRMED.")
             if hasattr(api, "suggestions_repository"):
                 mock_update_status.assert_called()
+            mock_replace_items.assert_called()
 
     def test_goal_edit_reply_format(self):
         with ExitStack() as stack:

@@ -4632,12 +4632,18 @@ def handle_message():
         is_fuzzy_confirm = "confirm" in norm_input
         is_confirm_text_with_id = is_fuzzy_confirm and data.get("draft_id")
         clean_norm = re.sub(r"[^a-z0-9\s]", "", norm_input).strip()
-        is_confirm_plan_text = bool(re.search(r"\bconfirm\s+plan\b", clean_norm))
+        is_confirm_plan_text = bool(
+            re.search(
+                r"^\s*(?:ok(?:ay)?\s+)?(?:yes\s+)?confirm\s+plan\b",
+                clean_norm,
+            )
+        )
 
         if user_id and is_confirm_plan_text and data.get("draft_type") == "plan":
             draft_id = data.get("draft_id")
             draft = None
             if draft_id:
+                plan_row = None
                 try:
                     draft_id = int(draft_id)
                     draft = suggestions_repository.get_suggestion(user_id, draft_id)
@@ -4645,6 +4651,99 @@ def handle_message():
                     draft = None
 
             if draft and draft.get("status") == "pending" and draft.get("kind") == "plan":
+                draft_payload = draft.get("payload") or {}
+                date_local_input = (
+                    data.get("plan_date_local")
+                    or data.get("plan_date")
+                    or draft_payload.get("plan_date_local")
+                    or draft_payload.get("plan_date")
+                )
+                timezone_input = data.get("timezone") or draft_payload.get("timezone")
+                plan_date_local, timezone_name = _resolve_plan_date_and_timezone(
+                    user_id=user_id,
+                    date_local=date_local_input,
+                    timezone_name=timezone_input,
+                    logger=logger,
+                )
+                confirmed_at_utc = datetime.now(timezone.utc)
+
+                try:
+                    from db import plan_repository
+
+                    plan_row = plan_repository.upsert_plan_header(
+                        user_id=user_id,
+                        plan_date_local=plan_date_local,
+                        timezone=timezone_name,
+                        status="confirmed",
+                        confirmed_at_utc=confirmed_at_utc,
+                    )
+                    if not plan_row:
+                        raise RuntimeError("plan_upsert_failed")
+
+                    raw_tasks = draft_payload.get("tasks")
+                    tasks = (
+                        [str(t).strip() for t in raw_tasks if str(t).strip()]
+                        if isinstance(raw_tasks, list)
+                        else []
+                    )
+                    raw_resources = draft_payload.get("resources")
+                    resources = (
+                        [str(r).strip() for r in raw_resources if str(r).strip()]
+                        if isinstance(raw_resources, list)
+                        else []
+                    )
+                    generation_context = {
+                        "objective": draft_payload.get("objective"),
+                        "timeline": draft_payload.get("timeline"),
+                        "resources": resources,
+                        "tasks": tasks,
+                        "provenance": {
+                            "suggestion_id": draft_id,
+                            "draft_id": draft_id,
+                            "conversation_id": data.get("conversation_id"),
+                        },
+                    }
+                    plan_repository.upsert_plan(
+                        user_id=user_id,
+                        plan_date=plan_date_local,
+                        generation_context=generation_context,
+                        behavior_snapshot={},
+                    )
+
+                    if tasks:
+                        items = []
+                        for idx, task in enumerate(tasks, start=1):
+                            items.append(
+                                {
+                                    "item_id": f"draft:{draft_id}:{idx}",
+                                    "type": "plan_item",
+                                    "status": "planned",
+                                    "title": task,
+                                    "order_index": idx,
+                                    "source_kind": "plan_draft",
+                                    "source_id": str(draft_id),
+                                    "metadata": {
+                                        "label": task,
+                                        "draft_id": draft_id,
+                                    },
+                                }
+                            )
+                        plan_repository.replace_plan_items(
+                            plan_row.get("id"),
+                            items,
+                            user_id=user_id,
+                        )
+                except Exception as exc:
+                    logger.error(
+                        "Plan confirm persistence failed: %s",
+                        exc,
+                        exc_info=True,
+                    )
+                    return jsonify({
+                        "reply": "PLAN_CONFIRM_FAILED. I couldn't save the plan right now.",
+                        "request_id": request_id,
+                    })
+
                 suggestions_repository.update_suggestion_status(
                     user_id,
                     draft_id,
@@ -4654,6 +4753,8 @@ def handle_message():
                 return jsonify({
                     "reply": "PLAN_CONFIRMED.",
                     "draft_cleared": True,
+                    "plan_id": plan_row.get("id") if plan_row else None,
+                    "plan_date": plan_date_local.isoformat(),
                     "request_id": request_id,
                 })
 
