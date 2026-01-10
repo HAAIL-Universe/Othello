@@ -6000,7 +6000,7 @@ def handle_message():
                         
                         # --- CAP TRIGGER (Phase 5b: Backend Soft-Cap) ---
                         # Constants
-                        NARRATOR_SOFT_CAP_CHARS = 700
+                        NARRATOR_SOFT_CAP_CHARS = 650
                         NARRATOR_HARD_CAP_CHARS = 900
                         
                         # Check limits
