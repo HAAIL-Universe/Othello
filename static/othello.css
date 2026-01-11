@@ -17997,6 +17997,16 @@ body.mode-duet-user-overlay .duet-peek-tab { display: none; }
 
 }
 
+/* Keep new bot responses visible while parked */
+#chat-view.parked .msg-row.parked-exempt .bubble {
+  transform: none !important;
+}
+
+/* Prevent horizontal scrollbars on parked duet panes */
+#chat-view.parked .duet-pane--bottom {
+  overflow-x: hidden;
+}
+
 /* PingPong: push parked bubbles slightly farther offscreen during play */
 #chat-view.pp-parked-boost.parked .msg-row.user .bubble {
   transform: translateX(110%);

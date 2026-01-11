@@ -5396,6 +5396,10 @@
       if (container) {
          container.appendChild(row);
       }
+
+      if (role === "bot" && window.isChatViewParked && window.isChatViewParked()) {
+        row.classList.add("parked-exempt");
+      }
       
       updateDuetView(row, role);
 
@@ -10335,11 +10339,9 @@
             isChatParked = true;
             if (explicit) isExplicitlyParked = true;
 
-            // Auto-collapse bubbles on Park: Scan ONLY User bubbles
-            // User requested Othello messages remain expanded by default (even in park)
-            // and only collapse via manual user interaction.
-            const userRows = document.querySelectorAll('.msg-row.user');
-            userRows.forEach(row => {
+            // Auto-collapse bubbles on Park: scan all bubbles
+            const allRows = document.querySelectorAll('.msg-row');
+            allRows.forEach(row => {
                let fullText = row.dataset.fullText;
                if (!fullText) {
                    const bubble = row.querySelector('.bubble');
@@ -10373,6 +10375,10 @@
             isChatParked = false;
             // Reset explicit flag on any restore (simplification)
             if (explicit || !isChatParked) isExplicitlyParked = false;
+
+            if (typeof updateFocusPeekBehavior === 'function') {
+                requestAnimationFrame(updateFocusPeekBehavior);
+            }
         }
     };
 
