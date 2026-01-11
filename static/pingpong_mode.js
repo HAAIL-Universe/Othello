@@ -443,12 +443,19 @@
       this.aiPaddleX = this.aiPaddleX + (targetAiX - this.aiPaddleX) * this.cfg.aiSmoothing;
 
       // Clamp paddles within viewport
-      const paddleW = userRect.width;
-      const minX = paddleW / 2 + 8;
-      const maxX = w - paddleW / 2 - 8;
+      const userW = userRect.width;
+      const aiW = aiRect.width;
+      const userLeftPad = -4;
+      const userRightPad = 16;
+      const aiLeftPad = 16;
+      const aiRightPad = -4;
+      const userMinX = userW / 2 + userLeftPad;
+      const userMaxX = w - userW / 2 - userRightPad;
+      const aiMinX = aiW / 2 + aiLeftPad;
+      const aiMaxX = w - aiW / 2 - aiRightPad;
 
-      this.userPaddleX = clamp(this.userPaddleX, minX, maxX);
-      this.aiPaddleX = clamp(this.aiPaddleX, minX, maxX);
+      this.userPaddleX = clamp(this.userPaddleX, userMinX, userMaxX);
+      this.aiPaddleX = clamp(this.aiPaddleX, aiMinX, aiMaxX);
 
       // Apply paddle positions
       this.aiPaddleWrap.style.left = this.aiPaddleX + "px";
