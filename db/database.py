@@ -253,7 +253,7 @@ def ensure_core_schema() -> None:
             session_id INTEGER,
             intent_kind TEXT NOT NULL,
             start_message_id INTEGER NOT NULL,
-            status TEXT NOT NULL DEFAULT 'open',
+            status TEXT NOT NULL DEFAULT 'active',
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
         );

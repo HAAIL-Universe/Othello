@@ -256,7 +256,7 @@ def patch_plan_draft_payload_deterministic(
 
     add_tasks_text = None
     match = re.search(
-        r"\b(?:can\s+you\s+)?add\s+(?:another\s+|a\s+|an\s+|new\s+)?task(?:\s+to)?\s+(?P<value>[^.]+)",
+        r"\b(?:can\s+you\s+)?add\s+(?:another\s+|a\s+|an\s+|new\s+)?task(?:\s+to\s+|\s*:\s*|\s+)(?P<value>[^.]+)",
         text,
         flags=re.IGNORECASE,
     )

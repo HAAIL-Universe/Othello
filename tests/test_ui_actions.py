@@ -304,6 +304,12 @@ class TestApiUiActions(unittest.TestCase):
                     return_value=[],
                 )
             )
+            stack.enter_context(
+                patch(
+                    "db.messages_repository.resolve_active_draft_context",
+                    return_value=None,
+                )
+            )
 
             with self.client.session_transaction() as sess:
                 sess["authed"] = True
@@ -368,6 +374,12 @@ class TestApiUiActions(unittest.TestCase):
                 patch(
                     "db.plan_repository.replace_plan_items",
                     return_value=[],
+                )
+            )
+            stack.enter_context(
+                patch(
+                    "db.messages_repository.resolve_active_draft_context",
+                    return_value=None,
                 )
             )
 

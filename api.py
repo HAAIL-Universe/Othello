@@ -4400,6 +4400,7 @@ def handle_message():
     phase1_skipped: List[str] = []
     if _PHASE1_ENABLED:
         phase1_skipped = ["postprocess", "insights"]
+    active_goal = None
 
     def _log_request_start(goal_value: Optional[Any]) -> None:
         nonlocal log_started
@@ -4752,6 +4753,12 @@ def handle_message():
                     "accepted",
                     decided_reason="user_confirmed_plan",
                 )
+                try:
+                    from db.messages_repository import resolve_active_draft_context
+
+                    resolve_active_draft_context(user_id, session_id=conversation_id)
+                except Exception as resolve_err:
+                    logger.warning("Failed to resolve draft context: %s", resolve_err)
                 return jsonify({
                     "reply": "PLAN_CONFIRMED.",
                     "draft_cleared": True,
@@ -4853,6 +4860,13 @@ def handle_message():
                     if not steps:
                         meta["steps_empty"] = True
 
+                    try:
+                        from db.messages_repository import resolve_active_draft_context
+
+                        resolve_active_draft_context(user_id, session_id=conversation_id)
+                    except Exception as resolve_err:
+                        logger.warning("Failed to resolve draft context: %s", resolve_err)
+
                     return jsonify({
                         "reply": f"Goal confirmed! I've saved '{saved_goal.get('title')}' and set it as your active focus.",
                         "saved_goal": {
@@ -4944,32 +4958,54 @@ def handle_message():
             # Phase 23: Context Hydration from Checkpoint
             # We must hydrate BEFORE generating the payload so the generator sees the full context (Title, Steps etc.)
             hydration_source_msg_id = None
-            generation_text = user_input
-            
-            from db.messages_repository import get_latest_active_draft_context, get_linked_messages_from_checkpoint
+            base_request = user_input or ""
+            generation_text = base_request
+
+            from db.messages_repository import (
+                get_latest_active_draft_context,
+                get_linked_messages_from_checkpoint,
+                get_message,
+                get_message_by_client_id,
+            )
             try:
-                latest_dc = None
-                # Try session-scoped context first
-                if conversation_id:
+                source_message_id = data.get("source_message_id")
+                hydration_checkpoint_id = None
+
+                if source_message_id:
+                    clicked_message = None
+                    try:
+                        message_id = int(source_message_id)
+                        clicked_message = get_message(user_id, message_id)
+                    except (ValueError, TypeError):
+                        clicked_message = None
+                    if not clicked_message:
+                        clicked_message = get_message_by_client_id(user_id, str(source_message_id))
+                    if clicked_message:
+                        hydration_checkpoint_id = (
+                            clicked_message.get("checkpoint_id") or clicked_message.get("id")
+                        )
+
+                if not hydration_checkpoint_id and conversation_id:
                     latest_dc = get_latest_active_draft_context(user_id, conversation_id)
-                
-                # If no session provided or found, maybe try global active? 
-                # (For now stick to session integrity)
-                
-                if latest_dc:
-                     start_msg_id = latest_dc["start_message_id"]
-                     linked = get_linked_messages_from_checkpoint(user_id, start_msg_id)
-                     if linked:
-                         lines = []
-                         for m in linked:
-                             role = "User" if m.get("source") == "user" else "Othello"
-                             lines.append(f"{role}: {m.get('transcript')}")
-                         full_transcript = "\n".join(lines)
-                         
-                         # Prepend context to generation text so the LLM/Heuristic sees it
-                         generation_text = f"User Request: {user_input}\n\n[CONTEXT]:\n{full_transcript}"
-                         hydration_source_msg_id = start_msg_id
-                         logger.info("API: Hydrated draft generation with %d chars of context", len(full_transcript))
+                    if latest_dc:
+                        hydration_checkpoint_id = latest_dc.get("start_message_id")
+
+                if hydration_checkpoint_id:
+                    linked = get_linked_messages_from_checkpoint(user_id, hydration_checkpoint_id)
+                    if linked:
+                        lines = []
+                        for m in linked:
+                            role = "User" if m.get("source") == "user" else "Othello"
+                            lines.append(f"{role}: {m.get('transcript')}")
+                        full_transcript = "\n".join(lines)
+
+                        # Prepend context to generation text so the LLM/Heuristic sees it
+                        generation_text = f"User Request: {base_request}\n\n[CONTEXT]:\n{full_transcript}"
+                        hydration_source_msg_id = hydration_checkpoint_id
+                        logger.info(
+                            "API: Hydrated draft generation with %d chars of context",
+                            len(full_transcript),
+                        )
             except Exception as e:
                 logger.warning("Failed to hydrate draft context: %s", e)
 
@@ -6127,7 +6163,13 @@ def handle_message():
                 return
             try:
                 logger.info("API: Persisting chat exchange... (convo=%s)", conversation_id)
-                from db.messages_repository import create_message, create_session, get_active_checkpoint, update_message
+                from db.messages_repository import (
+                    create_message,
+                    create_session,
+                    get_active_checkpoint,
+                    get_latest_active_draft_context,
+                    update_message,
+                )
 
                 if conversation_id is None:
                     # Fix for empty sessions (Phase 1/2 Persistence Regression)
@@ -6137,7 +6179,16 @@ def handle_message():
                     logger.info("API: Created new session %s for chat exchange (latching fix)", conversation_id)
 
                 # Phase 23: Context Linkage
-                active_cp = get_active_checkpoint(user_id)
+                active_cp = None
+                if conversation_id:
+                    try:
+                        latest_dc = get_latest_active_draft_context(user_id, conversation_id)
+                        if latest_dc and latest_dc.get("status") == "active":
+                            active_cp = latest_dc.get("start_message_id")
+                    except Exception as dc_err:
+                        logger.warning("API: Failed to load draft context: %s", dc_err)
+                else:
+                    active_cp = get_active_checkpoint(user_id)
                 logger.info("API: Active Checkpoint: %s", active_cp)
                 
                 # Check for Intent (Blue ?)
@@ -6200,13 +6251,19 @@ def handle_message():
 
                     # Phase 23: Populate draft_contexts for visibility
                     try:
-                        from db.messages_repository import create_draft_context
+                        from db.messages_repository import abandon_active_draft_contexts, create_draft_context
+                        if conversation_id:
+                            abandon_active_draft_contexts(
+                                user_id,
+                                conversation_id,
+                                keep_start_message_id=new_cp,
+                            )
                         create_draft_context(
-                            user_id=user_id, 
-                            session_id=conversation_id, 
-                            start_message_id=new_cp, 
-                            intent_kind=intent_source or "unknown", 
-                            status="active"
+                            user_id=user_id,
+                            session_id=conversation_id,
+                            start_message_id=new_cp,
+                            intent_kind=intent_source or "unknown",
+                            status="active",
                         )
                         logger.info("API: [Checkpoint] Persisted draft_context for message %s", new_cp)
                     except Exception as dc_err:
@@ -6429,20 +6486,25 @@ def handle_message():
             
             # A) Check Pending Offer or Active Draft via DB
             is_pending_or_active = False
+            latest_dc_status = None
+            latest_dc_intent_kind = None
             try:
                 if user_id and conversation_id:
                      from db.messages_repository import get_latest_active_draft_context
                      latest_dc = get_latest_active_draft_context(user_id, conversation_id)
                      if latest_dc:
-                         if latest_dc.get("intent_kind") == "offer_build_mode":
+                         latest_dc_status = latest_dc.get("status")
+                         latest_dc_intent_kind = latest_dc.get("intent_kind")
+                         if latest_dc_intent_kind == "offer_build_mode":
                              is_pending_or_active = True
-                         elif latest_dc.get("status") == "active":
+                         elif latest_dc_status == "active":
                              is_pending_or_active = True
             except Exception:
                 pass
 
             # B) Check Cooldown (5 minutes)
             is_cooldown = False
+            last_dismiss = 0
             if user_id:
                 last_dismiss = _build_mode_cooldowns.get(str(user_id), 0)
                 if datetime.now(timezone.utc).timestamp() - last_dismiss < 300: 
@@ -6463,8 +6525,6 @@ def handle_message():
             if is_cooldown:
                 guard_blocked.append("cooldown")
 
-            base_eligibility = not guard_blocked
-            
             offer_type = None
             offer_payload = None
             offer_injected = False
@@ -6481,6 +6541,11 @@ def handle_message():
                 matched_terms = router_debug.get("matched_terms") or []
             except Exception:
                 router_says_yes = False
+            explicit_build_request = bool(router_says_yes)
+            if explicit_build_request and "pending_offer" in guard_blocked:
+                guard_blocked = [g for g in guard_blocked if g != "pending_offer"]
+
+            base_eligibility = not guard_blocked
 
             if base_eligibility:
                 # 1. Primary: Build Mode Router (e.g. "build mode", "help me plan")
@@ -6536,8 +6601,13 @@ def handle_message():
                     "router_says_yes": router_says_yes,
                     "router_reason": router_reason,
                     "matched_terms": matched_terms,
+                    "explicit_build_request": explicit_build_request,
+                    "latest_dc_status": latest_dc_status,
+                    "latest_dc_intent_kind": latest_dc_intent_kind,
                     "guard_blocked": guard_blocked,
                     "base_eligibility": base_eligibility,
+                    "is_cooldown": is_cooldown,
+                    "cooldown_last_dismiss": last_dismiss,
                     "offer_type": offer_type,
                     "offer_payload": offer_payload,
                     "offer_injected": offer_injected,

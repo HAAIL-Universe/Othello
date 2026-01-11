@@ -310,6 +310,46 @@ def create_draft_context(user_id: str, session_id: int, start_message_id: int, i
     return execute_and_fetch_one(query, (user_id, session_id, start_message_id, intent_kind, status)) or {}
 
 
+def abandon_active_draft_contexts(
+    user_id: str,
+    session_id: int,
+    *,
+    keep_start_message_id: Optional[int] = None,
+) -> None:
+    # Demote previous active intent windows to pending (still recallable), so only one remains active.
+    query = """
+        UPDATE draft_contexts
+        SET status = 'pending', updated_at = NOW()
+        WHERE user_id = %s AND session_id = %s AND status = 'active'
+    """
+    params: List[Any] = [user_id, session_id]
+    if keep_start_message_id is not None:
+        query += " AND start_message_id <> %s"
+        params.append(keep_start_message_id)
+    execute_query(query, tuple(params))
+
+
+def resolve_active_draft_context(
+    user_id: str,
+    *,
+    session_id: Optional[int] = None,
+    start_message_id: Optional[int] = None,
+) -> None:
+    query = """
+        UPDATE draft_contexts
+        SET status = 'resolved', updated_at = NOW()
+        WHERE user_id = %s AND status = 'active'
+    """
+    params: List[Any] = [user_id]
+    if session_id is not None:
+        query += " AND session_id = %s"
+        params.append(session_id)
+    if start_message_id is not None:
+        query += " AND start_message_id = %s"
+        params.append(start_message_id)
+    execute_query(query, tuple(params))
+
+
 def get_latest_active_draft_context(user_id: str, session_id: Optional[int] = None) -> Optional[Dict[str, Any]]:
     """
     Retrieve the most recent active draft context for a session (or user).

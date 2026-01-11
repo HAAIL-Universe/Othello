@@ -116,6 +116,24 @@ CREATE INDEX IF NOT EXISTS idx_suggestions_user_status ON suggestions(user_id, s
 CREATE INDEX IF NOT EXISTS idx_suggestions_user_kind ON suggestions(user_id, kind);
 
 -- ----------------------------------------------------------------------------
+-- DRAFT CONTEXTS (intent window checkpoints)
+-- ----------------------------------------------------------------------------
+-- Status lifecycle: active (current checkpoint), pending (older window), resolved (confirmed).
+CREATE TABLE IF NOT EXISTS draft_contexts (
+    id SERIAL PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    session_id INTEGER,
+    intent_kind TEXT NOT NULL,
+    start_message_id INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_draft_contexts_user_status ON draft_contexts(user_id, status);
+CREATE INDEX IF NOT EXISTS idx_draft_contexts_session ON draft_contexts(session_id);
+
+-- ----------------------------------------------------------------------------
 -- DAILY PLANS (present in your schema; not required for Phase 1 but supported)
 -- ----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS plans (
