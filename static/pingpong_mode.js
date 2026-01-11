@@ -37,6 +37,9 @@
       this.overlay = null;
       this.loading = null;
       this.exitHint = null;
+      this.historyToggleBtn = null;
+      this.historyToggleDisplay = null;
+      this.historyExitLabel = null;
 
       this.userPaddleWrap = null;
       this.aiPaddleWrap = null;
@@ -45,6 +48,12 @@
       this.raf = null;
 
       this.lastFrame = 0;
+
+      this.kitSheet = null;
+      this.kitWasThinking = false;
+      this.countdownEl = null;
+      this.countdownTimeouts = [];
+      this.spawnTimeout = null;
 
       this.ballX = 0;
       this.ballY = 0;
@@ -163,6 +172,12 @@
       const chatView = this.cfg.getDuetBackgroundEl && this.cfg.getDuetBackgroundEl();
       if (chatView) chatView.classList.add("pp-parked-boost");
 
+      this.kitSheet = document.querySelector(".chat-sheet");
+      if (this.kitSheet) {
+        this.kitWasThinking = this.kitSheet.classList.contains("is-thinking");
+        this.kitSheet.classList.add("is-thinking");
+      }
+
       // Freeze controls (optional hooks from integration).
       try { this.cfg.disableControls && this.cfg.disableControls(); } catch (_) {}
 
@@ -175,16 +190,23 @@
       this.overlay.addEventListener("pointerup", () => this.onOverlayPointerUp(), { passive: true });
       this.overlay.addEventListener("pointercancel", () => this.onOverlayPointerUp(), { passive: true });
 
-      // Add a faint hint (optional, no interaction)
-      this.exitHint = document.createElement("div");
-      this.exitHint.className = "pp-exit-hint";
-      this.exitHint.textContent = "Triple tap to exit";
-      this.overlay.appendChild(this.exitHint);
-
-      // Loading bar at center (stops once paddles placed + ball launched)
-      this.loading = document.createElement("div");
-      this.loading.className = "pp-loading";
-      this.overlay.appendChild(this.loading);
+      // Replace Full Chat button with exit hint text if available.
+      const historyBar = document.getElementById("history-bar");
+      this.historyToggleBtn = document.getElementById("history-toggle-btn");
+      if (historyBar && this.historyToggleBtn) {
+        this.historyToggleDisplay = this.historyToggleBtn.style.display;
+        this.historyToggleBtn.style.display = "none";
+        this.historyExitLabel = document.createElement("div");
+        this.historyExitLabel.className = "pp-history-exit";
+        this.historyExitLabel.textContent = "Triple tap to exit";
+        historyBar.appendChild(this.historyExitLabel);
+      } else {
+        // Fallback hint on overlay
+        this.exitHint = document.createElement("div");
+        this.exitHint.className = "pp-exit-hint";
+        this.exitHint.textContent = "Triple tap to exit";
+        this.overlay.appendChild(this.exitHint);
+      }
 
       // Clone paddles
       this.aiPaddleWrap = this.clonePaddle(aiRow, true);
@@ -198,20 +220,27 @@
       // Ball
       this.ball = document.createElement("div");
       this.ball.className = "pp-ball";
+      this.ball.style.opacity = "0";
       this.overlay.appendChild(this.ball);
 
       document.body.appendChild(this.overlay);
 
-      // Align paddles vertically with their source message rows.
+      // Start paddles at bubble locations, then animate to their play positions.
       const aiRowRect = aiRow.getBoundingClientRect();
       const userRowRect = userRow.getBoundingClientRect();
+      const aiBubble = aiRow.querySelector && aiRow.querySelector(".bubble");
+      const userBubble = userRow.querySelector && userRow.querySelector(".bubble");
+      const aiBubbleRect = aiBubble ? aiBubble.getBoundingClientRect() : aiRowRect;
+      const userBubbleRect = userBubble ? userBubble.getBoundingClientRect() : userRowRect;
+      const userOffset = 6;
+      const paddleH = this.userPaddleWrap ? (this.userPaddleWrap.getBoundingClientRect().height || 22) : 22;
+      const aiTargetTop = Math.round(aiRowRect.top);
+      const userTargetTop = Math.round(userRowRect.bottom - paddleH + userOffset);
       if (this.aiPaddleWrap) {
-        this.aiPaddleWrap.style.top = Math.round(aiRowRect.top) + "px";
+        this.aiPaddleWrap.style.top = Math.round(aiBubbleRect.top) + "px";
       }
       if (this.userPaddleWrap) {
-        const paddleH = this.userPaddleWrap.getBoundingClientRect().height || 22;
-        const userOffset = 6;
-        this.userPaddleWrap.style.top = Math.round(userRowRect.bottom - paddleH + userOffset) + "px";
+        this.userPaddleWrap.style.top = Math.round(userBubbleRect.top) + "px";
         this.userPaddleWrap.style.bottom = "auto";
       }
 
@@ -222,23 +251,76 @@
       this.userPaddleX = w / 2;
       this.aiPaddleX = w / 2;
 
-      this.ballX = w / 2;
-      this.ballY = h / 2;
+      // Countdown just above user paddle.
+      this.countdownEl = document.createElement("div");
+      this.countdownEl.className = "pp-countdown";
+      this.countdownEl.textContent = "3";
+      this.countdownEl.style.left = (w / 2) + "px";
+      this.countdownEl.style.top = Math.max(0, userTargetTop - 44) + "px";
+      this.overlay.appendChild(this.countdownEl);
 
-      // Initial velocity: toward user (down)
-      const speed = this.cfg.ballSpeedPxPerSec;
-      this.ballVX = speed * 0.35;
-      this.ballVY = speed * 0.94;
+      const slideMs = 1000;
+      const countdownMs = 3000;
+      if (this.aiPaddleWrap) {
+        this.aiPaddleWrap.style.transition = `left ${slideMs}ms ease, top ${slideMs}ms ease`;
+        this.aiPaddleWrap.style.left = (aiBubbleRect.left + aiBubbleRect.width / 2) + "px";
+      }
+      if (this.userPaddleWrap) {
+        this.userPaddleWrap.style.transition = `left ${slideMs}ms ease, top ${slideMs}ms ease`;
+        this.userPaddleWrap.style.left = (userBubbleRect.left + userBubbleRect.width / 2) + "px";
+      }
 
-      // Small delay to let transform “feel” like it completes, then stop loading and start loop
-      setTimeout(() => {
+      requestAnimationFrame(() => {
+        if (this.aiPaddleWrap) {
+          this.aiPaddleWrap.style.left = (w / 2) + "px";
+          this.aiPaddleWrap.style.top = aiTargetTop + "px";
+        }
+        if (this.userPaddleWrap) {
+          this.userPaddleWrap.style.left = (w / 2) + "px";
+          this.userPaddleWrap.style.top = userTargetTop + "px";
+        }
+      });
+
+      // After slide-in, spawn ball from kit light and start loop
+      this.countdownTimeouts.push(setTimeout(() => {
+        if (this.countdownEl) this.countdownEl.textContent = "2";
+      }, 1000));
+      this.countdownTimeouts.push(setTimeout(() => {
+        if (this.countdownEl) this.countdownEl.textContent = "1";
+      }, 2000));
+
+      this.spawnTimeout = setTimeout(() => {
         if (!this.active) return;
-        if (this.loading && this.loading.parentNode) this.loading.parentNode.removeChild(this.loading);
-        this.loading = null;
+        if (this.aiPaddleWrap) this.aiPaddleWrap.style.transition = "";
+        if (this.userPaddleWrap) this.userPaddleWrap.style.transition = "";
+
+        const spawn = this.getKitLightPoint(w, h);
+        this.ballX = spawn.x;
+        this.ballY = spawn.y;
+        this.ball.style.opacity = "1";
+        this.ball.style.left = (this.ballX - 6) + "px";
+        this.ball.style.top = (this.ballY - 6) + "px";
+        if (this.countdownEl) this.countdownEl.textContent = "GO";
+
+        if (this.kitSheet && !this.kitWasThinking) {
+          this.kitSheet.classList.remove("is-thinking");
+        }
+
+        // Initial velocity: toward user (down)
+        const speed = this.cfg.ballSpeedPxPerSec;
+        this.ballVX = speed * 0.35;
+        this.ballVY = speed * 0.94;
 
         this.lastFrame = nowMs();
         this.raf = requestAnimationFrame(() => this.tick());
-      }, 420);
+      }, countdownMs);
+
+      this.countdownTimeouts.push(setTimeout(() => {
+        if (this.countdownEl && this.countdownEl.parentNode) {
+          this.countdownEl.parentNode.removeChild(this.countdownEl);
+        }
+        this.countdownEl = null;
+      }, countdownMs + 500));
     }
 
     stop() {
@@ -259,6 +341,15 @@
       this.overlay = null;
       this.loading = null;
       this.exitHint = null;
+      if (this.historyExitLabel && this.historyExitLabel.parentNode) {
+        this.historyExitLabel.parentNode.removeChild(this.historyExitLabel);
+      }
+      this.historyExitLabel = null;
+      if (this.historyToggleBtn) {
+        this.historyToggleBtn.style.display = this.historyToggleDisplay || "";
+      }
+      this.historyToggleBtn = null;
+      this.historyToggleDisplay = null;
 
       this.userPaddleWrap = null;
       this.aiPaddleWrap = null;
@@ -266,6 +357,23 @@
 
       const chatView = this.cfg.getDuetBackgroundEl && this.cfg.getDuetBackgroundEl();
       if (chatView) chatView.classList.remove("pp-parked-boost");
+
+      if (this.spawnTimeout) clearTimeout(this.spawnTimeout);
+      this.spawnTimeout = null;
+      if (this.countdownTimeouts.length) {
+        this.countdownTimeouts.forEach(t => clearTimeout(t));
+      }
+      this.countdownTimeouts = [];
+      if (this.countdownEl && this.countdownEl.parentNode) {
+        this.countdownEl.parentNode.removeChild(this.countdownEl);
+      }
+      this.countdownEl = null;
+
+      if (this.kitSheet && !this.kitWasThinking) {
+        this.kitSheet.classList.remove("is-thinking");
+      }
+      this.kitSheet = null;
+      this.kitWasThinking = false;
 
       try { this.cfg.enableControls && this.cfg.enableControls(); } catch (_) {}
     }
@@ -406,6 +514,30 @@
       const half = (rect.right - rect.left) / 2;
       if (half <= 1) return 0;
       return clamp((this.ballX - mid) / half, -1, 1);
+    }
+
+    getKitLightPoint(fallbackW, fallbackH) {
+      const scanner = document.querySelector(".kitt-scanner");
+      if (!scanner || !window.getComputedStyle) {
+        return { x: fallbackW / 2, y: fallbackH / 2 };
+      }
+
+      const rect = scanner.getBoundingClientRect();
+      const before = window.getComputedStyle(scanner, "::before");
+      const leftRaw = before.left || "50%";
+      const widthRaw = before.width || "0";
+
+      let left = parseFloat(leftRaw);
+      if (leftRaw.includes("%")) left = rect.width * (left / 100);
+      if (!Number.isFinite(left)) left = rect.width / 2;
+
+      let dotW = parseFloat(widthRaw);
+      if (!Number.isFinite(dotW)) dotW = 0;
+
+      return {
+        x: rect.left + left + dotW / 2,
+        y: rect.top + rect.height / 2
+      };
     }
   }
 

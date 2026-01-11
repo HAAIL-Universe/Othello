@@ -103,3 +103,31 @@
   opacity: 0.35;
   pointer-events: none;
 }
+
+.pp-history-exit {
+  font-size: 12px;
+  opacity: 0.6;
+  letter-spacing: 0.06em;
+  text-align: center;
+  pointer-events: none;
+}
+
+.pp-countdown {
+  position: absolute;
+  transform: translateX(-50%);
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: transparent;
+  background: linear-gradient(135deg,
+    #a855f7, #6366f1, #3b82f6, #14b8a6, #d946ef, #a855f7,
+    #6366f1, #3b82f6, #14b8a6, #d946ef, #a855f7
+  );
+  background-size: 200% 100%;
+  animation: typing-gradient-move 3s linear infinite;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  text-shadow: 0 0 12px rgba(99, 102, 241, 0.35);
+  pointer-events: none;
+}
