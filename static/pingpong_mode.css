@@ -1,0 +1,105 @@
+/* static/pingpong_mode.css */
+
+:root {
+  --pp-z: 99999;
+}
+
+.pp-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--pp-z);
+  background: transparent;
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.pp-overlay * {
+  box-sizing: border-box;
+}
+
+.pp-loading {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: min(240px, 60vw);
+  height: 6px;
+  border-radius: 999px;
+  overflow: hidden;
+  opacity: 0.9;
+}
+
+.pp-loading::before {
+  content: "";
+  display: block;
+  height: 100%;
+  width: 40%;
+  border-radius: 999px;
+  background: rgba(220, 40, 40, 0.95);
+  animation: pp-loading-move 900ms linear infinite;
+}
+
+@keyframes pp-loading-move {
+  0% { transform: translateX(-120%); }
+  100% { transform: translateX(280%); }
+}
+
+.pp-ball {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: rgba(220, 40, 40, 0.95);
+  box-shadow: 0 0 10px rgba(220, 40, 40, 0.45);
+}
+
+.pp-paddle-row {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(260px, 35vw);
+  max-width: 35vw;
+  pointer-events: none;
+}
+
+.pp-paddle-row.pp-top {
+  top: 40px;
+}
+
+.pp-paddle-row.pp-bottom {
+  bottom: 96px; /* keeps clear of input area */
+}
+
+.pp-paddle-row .bubble {
+  width: 100%;
+  height: 22px;
+  min-height: 22px;
+  padding: 0 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+}
+
+.pp-paddle-row .bubble,
+.pp-paddle-row .bubble * {
+  user-select: none;
+}
+
+.pp-paddle-row .bubble .meta {
+  display: none !important;
+}
+
+.pp-hidden-text {
+  visibility: hidden !important;
+  opacity: 0 !important;
+}
+
+.pp-exit-hint {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  font-size: 12px;
+  opacity: 0.35;
+  pointer-events: none;
+}

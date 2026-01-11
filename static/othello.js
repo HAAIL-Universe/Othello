@@ -10378,6 +10378,72 @@
 
     window.isChatViewParked = function() { return isChatParked; };
 
+    function initPingPongEasterEgg() {
+        if (!window.OthelloPingPong || !window.OthelloPingPong.init) return;
+
+        const bg = document.getElementById("chat-view");
+        if (!bg) return;
+
+        function isDuetPopupVisible() {
+            const top = document.getElementById("duet-top");
+            const bottom = document.getElementById("duet-bottom");
+            if (!top || !bottom) return false;
+            return (top.getClientRects && top.getClientRects().length > 0) &&
+                (bottom.getClientRects && bottom.getClientRects().length > 0);
+        }
+
+        let composerInput = null;
+
+        function disableControls() {
+            window.__pingpong_active = true;
+            if (document.activeElement && document.activeElement.blur) {
+                document.activeElement.blur();
+            }
+
+            if (!window.__pp_keyblock) {
+                window.__pp_keyblock = (ev) => {
+                    if (window.OthelloPingPong && window.OthelloPingPong.isActive && window.OthelloPingPong.isActive()) {
+                        ev.preventDefault();
+                        ev.stopPropagation();
+                    }
+                };
+            }
+            document.addEventListener("keydown", window.__pp_keyblock, true);
+
+            composerInput = document.querySelector("textarea, input[type='text']");
+            if (composerInput) {
+                composerInput.__pp_prev_disabled = composerInput.disabled;
+                composerInput.disabled = true;
+            }
+        }
+
+        function enableControls() {
+            window.__pingpong_active = false;
+            if (window.__pp_keyblock) {
+                document.removeEventListener("keydown", window.__pp_keyblock, true);
+            }
+
+            const input = composerInput || document.querySelector("textarea, input[type='text']");
+            if (input && typeof input.__pp_prev_disabled !== "undefined") {
+                input.disabled = input.__pp_prev_disabled;
+                delete input.__pp_prev_disabled;
+            }
+            composerInput = null;
+        }
+
+        window.OthelloPingPong.init({
+            getDuetBackgroundEl: () => document.getElementById("chat-view"),
+            isParked: () => (window.isChatViewParked && window.isChatViewParked()) && isDuetPopupVisible(),
+            getUserRow: () => document.querySelector("#duet-bottom .msg-row.user"),
+            getAssistantRow: () => document.querySelector("#duet-top .msg-row.bot, #duet-top .msg-row.assistant"),
+            excludeClosestSelectors: [".bubble", "input", "textarea", "button", "a"],
+            disableControls: disableControls,
+            enableControls: enableControls
+        });
+    }
+
+    document.addEventListener("DOMContentLoaded", initPingPongEasterEgg);
+
     // Attach listeners to chat-view to capture events from chat-log AND duet panes
     const parkingTarget = document.getElementById('chat-view') || document.getElementById('chat-log');
     if (parkingTarget) {

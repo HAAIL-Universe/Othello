@@ -17983,7 +17983,7 @@ body.mode-duet-user-overlay .duet-peek-tab { display: none; }
 
 #chat-view.parked .msg-row.user .bubble { 
 
-  transform: translateX(99%); 
+  transform: translateX(100%); 
 
 }
 
@@ -17993,8 +17993,17 @@ body.mode-duet-user-overlay .duet-peek-tab { display: none; }
 
 #chat-view.parked .msg-row:not(.user) .bubble { 
 
-  transform: translateX(-99%); 
+  transform: translateX(-100%); 
 
+}
+
+/* PingPong: push parked bubbles slightly farther offscreen during play */
+#chat-view.pp-parked-boost.parked .msg-row.user .bubble {
+  transform: translateX(110%);
+}
+
+#chat-view.pp-parked-boost.parked .msg-row:not(.user) .bubble {
+  transform: translateX(-110%);
 }
 
 
